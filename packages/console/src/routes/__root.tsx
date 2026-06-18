@@ -139,6 +139,14 @@ function RootDocument({ children }: { children: React.ReactNode }) {
     <html lang="en" suppressHydrationWarning {...stylex.props(styles.html)}>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        {/* Privacy-friendly analytics by Plausible */}
+        <script async src="https://plausible.io/js/pa-RGZxFs9DuADEgNjdbqduF.js" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};plausible.init()",
+          }}
+        />
         <HeadContent />
       </head>
       <body {...stylex.props(fontTheme, radiusTheme, primaryColorTheme, uiColorTheme, styles.body)}>

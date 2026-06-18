@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/goober.png" alt="cocore" width="300">
+</p>
+
 # cocore
 
 **Compute, but shared.** A small, federated compute co-op built on the
