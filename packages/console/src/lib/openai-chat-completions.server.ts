@@ -43,6 +43,37 @@ const MAX_MESSAGES = 256;
 const MAX_PROMPT_BYTES = 1024 * 1024; // 1 MiB of total message content
 const MAX_OUTPUT_TOKENS = 32_768;
 
+/** Normalize OpenAI `message.content` into plain text. Accepts the
+ *  string form (simple clients) and the array-of-parts form that
+ *  Cursor and the modern OpenAI SDK emit:
+ *    [{ "type": "text", "text": "…" }]
+ *  Image / file parts are rejected — cocore providers are text-only
+ *  today. */
+export function normalizeMessageContent(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  if (content === null || content === undefined) return "";
+  if (!Array.isArray(content)) return null;
+
+  const textParts: string[] = [];
+  let sawNonText = false;
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const p = part as { type?: unknown; text?: unknown };
+    if (p.type === "text" && typeof p.text === "string") {
+      textParts.push(p.text);
+      continue;
+    }
+    if (typeof p.type === "string" && p.type !== "text") {
+      sawNonText = true;
+    }
+  }
+  if (textParts.length > 0) return textParts.join("\n");
+  if (sawNonText) {
+    return null;
+  }
+  return "";
+}
+
 export function parseRequest(raw: OpenAiChatRequest): ParsedRequest | string {
   if (typeof raw.model !== "string" || raw.model.length === 0) return "model required";
   if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
@@ -54,14 +85,18 @@ export function parseRequest(raw: OpenAiChatRequest): ParsedRequest | string {
   const messages: ChatMessage[] = [];
   let promptBytes = 0;
   for (const m of raw.messages as Array<{ role?: unknown; content?: unknown }>) {
-    if (typeof m.role !== "string" || typeof m.content !== "string") {
-      return "each message must be { role: string, content: string }";
+    if (typeof m.role !== "string") {
+      return "each message must include a string role";
     }
-    promptBytes += Buffer.byteLength(m.content, "utf-8");
+    const content = normalizeMessageContent(m.content);
+    if (content === null) {
+      return 'message content must be a string or an array of { type: "text", text: string } parts (image/file parts are not supported)';
+    }
+    promptBytes += Buffer.byteLength(content, "utf-8");
     if (promptBytes > MAX_PROMPT_BYTES) {
       return `prompt too large (max ${MAX_PROMPT_BYTES} bytes)`;
     }
-    messages.push({ role: m.role, content: m.content });
+    messages.push({ role: m.role, content });
   }
   let maxTokens = DEFAULT_MAX_TOKENS;
   if (raw.max_tokens !== undefined) {

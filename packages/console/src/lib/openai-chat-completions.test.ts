@@ -7,7 +7,49 @@ import assert from "node:assert/strict";
 import { describe, test } from "vitest";
 
 import type { DispatchErrorCode, DispatchEvent } from "./inference-dispatch.server.ts";
-import { bufferedResponse, dispatchErrorToHttpResponse } from "./openai-chat-completions.server.ts";
+import {
+  bufferedResponse,
+  dispatchErrorToHttpResponse,
+  normalizeMessageContent,
+  parseRequest,
+} from "./openai-chat-completions.server.ts";
+
+describe("normalizeMessageContent", () => {
+  test("passes through plain strings", () => {
+    assert.equal(normalizeMessageContent("hello"), "hello");
+  });
+
+  test("extracts text from OpenAI-style content parts", () => {
+    assert.equal(
+      normalizeMessageContent([
+        { type: "text", text: "line one" },
+        { type: "text", text: "line two" },
+      ]),
+      "line one\nline two",
+    );
+  });
+
+  test("treats null/undefined as empty", () => {
+    assert.equal(normalizeMessageContent(null), "");
+    assert.equal(normalizeMessageContent(undefined), "");
+  });
+
+  test("rejects non-text parts when no text is present", () => {
+    assert.equal(normalizeMessageContent([{ type: "image_url", image_url: { url: "x" } }]), null);
+  });
+});
+
+describe("parseRequest", () => {
+  test("accepts Cursor/OpenAI array message content", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: [{ type: "text", text: "hello from cursor" }] }],
+    });
+    assert.notEqual(typeof parsed, "string");
+    if (typeof parsed === "string") return;
+    assert.equal(parsed.messages[0]!.content, "hello from cursor");
+  });
+});
 
 describe("dispatchErrorToHttpResponse", () => {
   test("no-providers-for-model becomes 404 model_not_found", () => {
