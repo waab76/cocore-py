@@ -72,7 +72,7 @@ async function proxyCreate(
   collection: string,
   record: Record<string, unknown>,
 ): Promise<PublishedRecord> {
-  const r = await fetch(`${apiBase.replace(/\/$/, "")}/api/xrpc/dev.cocore.proxy.createRecord`, {
+  const r = await fetch(`${apiBase.replace(/\/$/, "")}/api/pds/createRecord`, {
     method: "POST",
     headers: {
       "content-type": "application/json",

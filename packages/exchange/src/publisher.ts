@@ -89,7 +89,7 @@ export class PdsSettlementTransport implements SettlementTransport {
 /** Production transport for the cocore-hosted exchange.
  *
  *  POSTs records to the cocore console's proxy endpoint
- *  (`/api/xrpc/dev.cocore.proxy.createRecord`) using a Bearer API
+ *  (`/api/pds/createRecord`) using a Bearer API
  *  key bound to the exchange's DID. The console handles DPoP
  *  signing internally using the OAuth session for that DID — same
  *  surface the provider agent uses for its own records. The
@@ -113,7 +113,7 @@ export class ConsoleProxySettlementTransport implements SettlementTransport {
   async publish(_exchangeDid: string, record: SettlementRecord): Promise<PublishedRecord> {
     // The proxy resolves the API key → DID and writes to that DID's
     // PDS, so we don't need to send `repo` separately.
-    const res = await fetch(`${this.base}/api/xrpc/dev.cocore.proxy.createRecord`, {
+    const res = await fetch(`${this.base}/api/pds/createRecord`, {
       method: "POST",
       headers: {
         "content-type": "application/json",

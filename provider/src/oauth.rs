@@ -12,7 +12,7 @@
 //!      and confirms the pairing.
 //!   4. Console mints an API key bound to the user's DID. The agent
 //!      uses that key to call the console's PDS proxy
-//!      (`POST /api/xrpc/dev.cocore.proxy.createRecord`) for every
+//!      (`POST /api/pds/createRecord`) for every
 //!      record it wants to publish; the console signs each call with
 //!      its DPoP-aware OAuth session.
 //!   5. Agent polls `dev.cocore.devicePair.poll(device_id)` until it
@@ -39,7 +39,7 @@ pub struct PairStartResponse {
 /// - `api_key` — `cocore-...` Bearer token the agent presents to the
 ///   console proxy. Bound to `did` server-side.
 /// - `api_base` — console URL the agent appends
-///   `/api/xrpc/dev.cocore.proxy.createRecord` to. e.g.,
+///   `/api/pds/createRecord` to. e.g.,
 ///   `https://console.cocore.dev`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

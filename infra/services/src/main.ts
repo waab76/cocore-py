@@ -882,7 +882,7 @@ async function emitTokenGrantRecord(
     createdAt: new Date().toISOString(),
   };
   const r = await fetch(
-    `${EXCHANGE_API_BASE.replace(/\/$/, "")}/api/xrpc/dev.cocore.proxy.createRecord`,
+    `${EXCHANGE_API_BASE.replace(/\/$/, "")}/api/pds/createRecord`,
     {
       method: "POST",
       headers: {
@@ -924,7 +924,7 @@ async function emitPatronageRecords(
       policy: { uri: policyRef.uri, cid: policyRef.cid },
       createdAt: new Date().toISOString(),
     };
-    await fetch(`${apiBase.replace(/\/$/, "")}/api/xrpc/dev.cocore.proxy.createRecord`, {
+    await fetch(`${apiBase.replace(/\/$/, "")}/api/pds/createRecord`, {
       method: "POST",
       headers: {
         "content-type": "application/json",

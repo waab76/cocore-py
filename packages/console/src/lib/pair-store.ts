@@ -33,7 +33,7 @@ export interface ProviderSession {
   apiKey: string;
   /** Console base URL the agent should POST records to. e.g.
    *  `https://console.cocore.dev`. The agent appends
-   *  `/api/xrpc/dev.cocore.proxy.createRecord`. */
+   *  `/api/pds/createRecord`. */
   apiBase: string;
 }
 

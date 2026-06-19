@@ -61,6 +61,9 @@ import { Route as ApiXrpcDevDotcocoreDotaccountDotlistApiKeysRouteImport } from 
 import { Route as ApiXrpcDevDotcocoreDotaccountDotdeleteApiKeyRouteImport } from './routes/api/xrpc/dev[.]cocore[.]account[.]deleteApiKey'
 import { Route as ApiXrpcDevDotcocoreDotaccountDotcreateApiKeyRouteImport } from './routes/api/xrpc/dev[.]cocore[.]account[.]createApiKey'
 import { Route as ApiV1ModelsRouteImport } from './routes/api/v1/models'
+import { Route as ApiPdsPutRecordRouteImport } from './routes/api/pds/putRecord'
+import { Route as ApiPdsDeleteRecordRouteImport } from './routes/api/pds/deleteRecord'
+import { Route as ApiPdsCreateRecordRouteImport } from './routes/api/pds/createRecord'
 import { Route as ApiInternalWipeEverythingRouteImport } from './routes/api/internal/wipe-everything'
 import { Route as ApiInternalWipeRouteImport } from './routes/api/internal/wipe'
 import { Route as ApiAgentWhoamiRouteImport } from './routes/api/agent.whoami'
@@ -366,6 +369,21 @@ const ApiV1ModelsRoute = ApiV1ModelsRouteImport.update({
   path: '/api/v1/models',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPdsPutRecordRoute = ApiPdsPutRecordRouteImport.update({
+  id: '/api/pds/putRecord',
+  path: '/api/pds/putRecord',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPdsDeleteRecordRoute = ApiPdsDeleteRecordRouteImport.update({
+  id: '/api/pds/deleteRecord',
+  path: '/api/pds/deleteRecord',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPdsCreateRecordRoute = ApiPdsCreateRecordRouteImport.update({
+  id: '/api/pds/createRecord',
+  path: '/api/pds/createRecord',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiInternalWipeEverythingRoute =
   ApiInternalWipeEverythingRouteImport.update({
     id: '/api/internal/wipe-everything',
@@ -564,6 +582,9 @@ export interface FileRoutesByFullPath {
   '/api/agent/whoami': typeof ApiAgentWhoamiRoute
   '/api/internal/wipe': typeof ApiInternalWipeRoute
   '/api/internal/wipe-everything': typeof ApiInternalWipeEverythingRoute
+  '/api/pds/createRecord': typeof ApiPdsCreateRecordRoute
+  '/api/pds/deleteRecord': typeof ApiPdsDeleteRecordRoute
+  '/api/pds/putRecord': typeof ApiPdsPutRecordRoute
   '/api/v1/models': typeof ApiV1ModelsRoute
   '/api/xrpc/dev.cocore.account.createApiKey': typeof ApiXrpcDevDotcocoreDotaccountDotcreateApiKeyRoute
   '/api/xrpc/dev.cocore.account.deleteApiKey': typeof ApiXrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute
@@ -642,6 +663,9 @@ export interface FileRoutesByTo {
   '/api/agent/whoami': typeof ApiAgentWhoamiRoute
   '/api/internal/wipe': typeof ApiInternalWipeRoute
   '/api/internal/wipe-everything': typeof ApiInternalWipeEverythingRoute
+  '/api/pds/createRecord': typeof ApiPdsCreateRecordRoute
+  '/api/pds/deleteRecord': typeof ApiPdsDeleteRecordRoute
+  '/api/pds/putRecord': typeof ApiPdsPutRecordRoute
   '/api/v1/models': typeof ApiV1ModelsRoute
   '/api/xrpc/dev.cocore.account.createApiKey': typeof ApiXrpcDevDotcocoreDotaccountDotcreateApiKeyRoute
   '/api/xrpc/dev.cocore.account.deleteApiKey': typeof ApiXrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute
@@ -724,6 +748,9 @@ export interface FileRoutesById {
   '/api/agent/whoami': typeof ApiAgentWhoamiRoute
   '/api/internal/wipe': typeof ApiInternalWipeRoute
   '/api/internal/wipe-everything': typeof ApiInternalWipeEverythingRoute
+  '/api/pds/createRecord': typeof ApiPdsCreateRecordRoute
+  '/api/pds/deleteRecord': typeof ApiPdsDeleteRecordRoute
+  '/api/pds/putRecord': typeof ApiPdsPutRecordRoute
   '/api/v1/models': typeof ApiV1ModelsRoute
   '/api/xrpc/dev.cocore.account.createApiKey': typeof ApiXrpcDevDotcocoreDotaccountDotcreateApiKeyRoute
   '/api/xrpc/dev.cocore.account.deleteApiKey': typeof ApiXrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute
@@ -805,6 +832,9 @@ export interface FileRouteTypes {
     | '/api/agent/whoami'
     | '/api/internal/wipe'
     | '/api/internal/wipe-everything'
+    | '/api/pds/createRecord'
+    | '/api/pds/deleteRecord'
+    | '/api/pds/putRecord'
     | '/api/v1/models'
     | '/api/xrpc/dev.cocore.account.createApiKey'
     | '/api/xrpc/dev.cocore.account.deleteApiKey'
@@ -883,6 +913,9 @@ export interface FileRouteTypes {
     | '/api/agent/whoami'
     | '/api/internal/wipe'
     | '/api/internal/wipe-everything'
+    | '/api/pds/createRecord'
+    | '/api/pds/deleteRecord'
+    | '/api/pds/putRecord'
     | '/api/v1/models'
     | '/api/xrpc/dev.cocore.account.createApiKey'
     | '/api/xrpc/dev.cocore.account.deleteApiKey'
@@ -964,6 +997,9 @@ export interface FileRouteTypes {
     | '/api/agent/whoami'
     | '/api/internal/wipe'
     | '/api/internal/wipe-everything'
+    | '/api/pds/createRecord'
+    | '/api/pds/deleteRecord'
+    | '/api/pds/putRecord'
     | '/api/v1/models'
     | '/api/xrpc/dev.cocore.account.createApiKey'
     | '/api/xrpc/dev.cocore.account.deleteApiKey'
@@ -1017,6 +1053,9 @@ export interface RootRouteChildren {
   ApiAgentWhoamiRoute: typeof ApiAgentWhoamiRoute
   ApiInternalWipeRoute: typeof ApiInternalWipeRoute
   ApiInternalWipeEverythingRoute: typeof ApiInternalWipeEverythingRoute
+  ApiPdsCreateRecordRoute: typeof ApiPdsCreateRecordRoute
+  ApiPdsDeleteRecordRoute: typeof ApiPdsDeleteRecordRoute
+  ApiPdsPutRecordRoute: typeof ApiPdsPutRecordRoute
   ApiV1ModelsRoute: typeof ApiV1ModelsRoute
   ApiXrpcDevDotcocoreDotaccountDotcreateApiKeyRoute: typeof ApiXrpcDevDotcocoreDotaccountDotcreateApiKeyRoute
   ApiXrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute: typeof ApiXrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute
@@ -1409,6 +1448,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1ModelsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/pds/putRecord': {
+      id: '/api/pds/putRecord'
+      path: '/api/pds/putRecord'
+      fullPath: '/api/pds/putRecord'
+      preLoaderRoute: typeof ApiPdsPutRecordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/pds/deleteRecord': {
+      id: '/api/pds/deleteRecord'
+      path: '/api/pds/deleteRecord'
+      fullPath: '/api/pds/deleteRecord'
+      preLoaderRoute: typeof ApiPdsDeleteRecordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/pds/createRecord': {
+      id: '/api/pds/createRecord'
+      path: '/api/pds/createRecord'
+      fullPath: '/api/pds/createRecord'
+      preLoaderRoute: typeof ApiPdsCreateRecordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/internal/wipe-everything': {
       id: '/api/internal/wipe-everything'
       path: '/api/internal/wipe-everything'
@@ -1740,6 +1800,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAgentWhoamiRoute: ApiAgentWhoamiRoute,
   ApiInternalWipeRoute: ApiInternalWipeRoute,
   ApiInternalWipeEverythingRoute: ApiInternalWipeEverythingRoute,
+  ApiPdsCreateRecordRoute: ApiPdsCreateRecordRoute,
+  ApiPdsDeleteRecordRoute: ApiPdsDeleteRecordRoute,
+  ApiPdsPutRecordRoute: ApiPdsPutRecordRoute,
   ApiV1ModelsRoute: ApiV1ModelsRoute,
   ApiXrpcDevDotcocoreDotaccountDotcreateApiKeyRoute:
     ApiXrpcDevDotcocoreDotaccountDotcreateApiKeyRoute,

@@ -8,7 +8,7 @@
 //!
 //! v0.3.0 swapped the architecture: the agent **does not** call bsky
 //! directly. It POSTs each record to the cocore console's proxy
-//! (`POST /api/xrpc/dev.cocore.proxy.createRecord`) using the API
+//! (`POST /api/pds/createRecord`) using the API
 //! key from its paired session. The console resolves the key to a
 //! DID, restores the user's DPoP-aware OAuth session, and forwards
 //! the create to bsky on the agent's behalf.
@@ -191,7 +191,7 @@ struct ListRecordsResponse {
     cursor: Option<String>,
 }
 
-/// HTTP client over the console's `dev.cocore.proxy.createRecord`
+/// HTTP client over the console's `/api/pds/createRecord`
 /// endpoint. One instance per agent lifetime; the API key is
 /// captured at construction and never rotated.
 pub struct PdsClient {
@@ -247,7 +247,7 @@ impl PdsClient {
         swap_record: Option<&str>,
     ) -> Result<PublishedRecord> {
         let url = format!(
-            "{}/api/xrpc/dev.cocore.proxy.putRecord",
+            "{}/api/pds/putRecord",
             self.api_base.trim_end_matches('/')
         );
         let body = match swap_record {
@@ -299,7 +299,7 @@ impl PdsClient {
         swap_record: Option<&str>,
     ) -> Result<()> {
         let url = format!(
-            "{}/api/xrpc/dev.cocore.proxy.deleteRecord",
+            "{}/api/pds/deleteRecord",
             self.api_base.trim_end_matches('/')
         );
         let body = match swap_record {
@@ -498,7 +498,7 @@ impl PdsClient {
         record: &R,
     ) -> Result<PublishedRecord> {
         let url = format!(
-            "{}/api/xrpc/dev.cocore.proxy.createRecord",
+            "{}/api/pds/createRecord",
             self.api_base.trim_end_matches('/')
         );
         let body = serde_json::json!({
@@ -591,7 +591,7 @@ mod tests {
     async fn publish_returns_uri_and_cid_on_success() {
         let port = run_stub(move |req: String| {
             let path = req.lines().next().unwrap_or("");
-            if !path.contains("dev.cocore.proxy.createRecord") {
+            if !path.contains("/api/pds/createRecord") {
                 return Some((404, "{}".into()));
             }
             // Bearer auth header should carry the API key.
