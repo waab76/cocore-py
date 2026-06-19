@@ -27,6 +27,7 @@ import { Firehose, type IndexedRecord } from "@cocore/sdk";
 import { Indexer, RelayFirehose } from "@cocore/appview/indexer";
 import { Store } from "@cocore/appview/store";
 import { buildServer as buildAppviewApi } from "@cocore/appview/api";
+import { AccountStore } from "@cocore/appview/account-store";
 import { Exchange } from "@cocore/exchange";
 import { bootstrapExchangeRecords } from "@cocore/exchange/bootstrap";
 import { ConsoleProxySettlementTransport, SettlementPublisher } from "@cocore/exchange/publisher";
@@ -38,6 +39,12 @@ import { createReceiptPipeline } from "./receipt-pipeline.ts";
 const PORT = Number(process.env["COCORE_BRIDGE_PORT"] ?? 8080);
 const APPVIEW_PORT = Number(process.env["COCORE_APPVIEW_PORT"] ?? 8081);
 const DB_PATH = process.env["COCORE_DB"] ?? ":memory:";
+// Operational account state (API keys, OAuth sessions) lives in its own
+// DB so it survives a receipt-cache rebuild. The dev.cocore.account.*
+// methods only register when COCORE_APPVIEW_DID (the service-auth
+// audience) is also set.
+const APPVIEW_DID = process.env["COCORE_APPVIEW_DID"];
+const ACCOUNT_DB = process.env["COCORE_ACCOUNT_DB"] ?? ":memory:";
 const EXCHANGE_DID = process.env["COCORE_EXCHANGE_DID"] ?? "did:web:exchange.local";
 const AUTORESPOND = (process.env["COCORE_AUTORESPOND"] ?? "1") !== "0";
 const AUTORESPOND_PROVIDER_DID =
@@ -406,9 +413,19 @@ async function main() {
     });
   }
 
-  const appviewServer = buildAppviewApi(store);
+  const accountStore = APPVIEW_DID ? new AccountStore(ACCOUNT_DB) : undefined;
+  const appviewServer = buildAppviewApi(store, {
+    accountStore,
+    appviewDid: APPVIEW_DID,
+    // The bridge runs in this same process; mirror PDS writes to it.
+    bridgeUrl: process.env["COCORE_BRIDGE_URL"] ?? `http://127.0.0.1:${PORT}`,
+    internalSecret: process.env["COCORE_INTERNAL_SECRET"],
+  });
   await new Promise<void>((r) => appviewServer.listen(APPVIEW_PORT, r));
-  console.error(`appview-api: listening on :${APPVIEW_PORT} db=${DB_PATH}`);
+  console.error(
+    `appview-api: listening on :${APPVIEW_PORT} db=${DB_PATH}` +
+      (APPVIEW_DID ? ` account=on(aud=${APPVIEW_DID} db=${ACCOUNT_DB})` : ""),
+  );
 
   // 4. Bridge HTTP.
   const bridge = createServer(async (req, res) => {
@@ -881,17 +898,14 @@ async function emitTokenGrantRecord(
     policy: { uri: policyRef.uri, cid: policyRef.cid },
     createdAt: new Date().toISOString(),
   };
-  const r = await fetch(
-    `${EXCHANGE_API_BASE.replace(/\/$/, "")}/api/pds/createRecord`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${EXCHANGE_API_KEY}`,
-      },
-      body: JSON.stringify({ collection: "dev.cocore.account.tokenGrant", record }),
+  const r = await fetch(`${EXCHANGE_API_BASE.replace(/\/$/, "")}/api/pds/createRecord`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${EXCHANGE_API_KEY}`,
     },
-  );
+    body: JSON.stringify({ collection: "dev.cocore.account.tokenGrant", record }),
+  });
   if (!r.ok) {
     const body = await r.text().catch(() => "");
     throw new Error(`createRecord tokenGrant ${r.status}: ${body.slice(0, 300)}`);

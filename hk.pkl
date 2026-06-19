@@ -10,7 +10,12 @@ exclude = List(
   "**/.next",
   "**/.output",
   "**/.tanstack",
-  "provider/target"
+  "provider/target",
+  // Generated sources (e.g. TanStack's routeTree.gen.ts, codegen'd
+  // types). oxfmt/oxlint ignore these internally, which makes hk's
+  // per-batch invocation fail with "no target file" when a batch
+  // contains only generated files. Exclude them from hooks outright.
+  "**/*.gen.ts"
 )
 
 local js_ts_globs = List(

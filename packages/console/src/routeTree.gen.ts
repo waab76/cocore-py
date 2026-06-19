@@ -50,8 +50,6 @@ import { Route as V1ChatCompletionsRouteImport } from './routes/v1.chat.completi
 import { Route as ApiXrpcDevDotcocoreDotproxyDotputRecordRouteImport } from './routes/api/xrpc/dev[.]cocore[.]proxy[.]putRecord'
 import { Route as ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRouteImport } from './routes/api/xrpc/dev[.]cocore[.]proxy[.]deleteRecord'
 import { Route as ApiXrpcDevDotcocoreDotproxyDotcreateRecordRouteImport } from './routes/api/xrpc/dev[.]cocore[.]proxy[.]createRecord'
-import { Route as ApiXrpcDevDotcocoreDotinferenceDotsubmitRouteImport } from './routes/api/xrpc/dev[.]cocore[.]inference[.]submit'
-import { Route as ApiXrpcDevDotcocoreDotinferenceDotstatusRouteImport } from './routes/api/xrpc/dev[.]cocore[.]inference[.]status'
 import { Route as ApiXrpcDevDotcocoreDotinferenceDotdispatchRouteImport } from './routes/api/xrpc/dev[.]cocore[.]inference[.]dispatch'
 import { Route as ApiXrpcDevDotcocoreDotdevicePairDotstartRouteImport } from './routes/api/xrpc/dev[.]cocore[.]devicePair[.]start'
 import { Route as ApiXrpcDevDotcocoreDotdevicePairDotpollRouteImport } from './routes/api/xrpc/dev[.]cocore[.]devicePair[.]poll'
@@ -302,18 +300,6 @@ const ApiXrpcDevDotcocoreDotproxyDotcreateRecordRoute =
   ApiXrpcDevDotcocoreDotproxyDotcreateRecordRouteImport.update({
     id: '/api/xrpc/dev.cocore.proxy.createRecord',
     path: '/api/xrpc/dev.cocore.proxy.createRecord',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiXrpcDevDotcocoreDotinferenceDotsubmitRoute =
-  ApiXrpcDevDotcocoreDotinferenceDotsubmitRouteImport.update({
-    id: '/api/xrpc/dev.cocore.inference.submit',
-    path: '/api/xrpc/dev.cocore.inference.submit',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiXrpcDevDotcocoreDotinferenceDotstatusRoute =
-  ApiXrpcDevDotcocoreDotinferenceDotstatusRouteImport.update({
-    id: '/api/xrpc/dev.cocore.inference.status',
-    path: '/api/xrpc/dev.cocore.inference.status',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiXrpcDevDotcocoreDotinferenceDotdispatchRoute =
@@ -594,8 +580,6 @@ export interface FileRoutesByFullPath {
   '/api/xrpc/dev.cocore.devicePair.poll': typeof ApiXrpcDevDotcocoreDotdevicePairDotpollRoute
   '/api/xrpc/dev.cocore.devicePair.start': typeof ApiXrpcDevDotcocoreDotdevicePairDotstartRoute
   '/api/xrpc/dev.cocore.inference.dispatch': typeof ApiXrpcDevDotcocoreDotinferenceDotdispatchRoute
-  '/api/xrpc/dev.cocore.inference.status': typeof ApiXrpcDevDotcocoreDotinferenceDotstatusRoute
-  '/api/xrpc/dev.cocore.inference.submit': typeof ApiXrpcDevDotcocoreDotinferenceDotsubmitRoute
   '/api/xrpc/dev.cocore.proxy.createRecord': typeof ApiXrpcDevDotcocoreDotproxyDotcreateRecordRoute
   '/api/xrpc/dev.cocore.proxy.deleteRecord': typeof ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute
   '/api/xrpc/dev.cocore.proxy.putRecord': typeof ApiXrpcDevDotcocoreDotproxyDotputRecordRoute
@@ -675,8 +659,6 @@ export interface FileRoutesByTo {
   '/api/xrpc/dev.cocore.devicePair.poll': typeof ApiXrpcDevDotcocoreDotdevicePairDotpollRoute
   '/api/xrpc/dev.cocore.devicePair.start': typeof ApiXrpcDevDotcocoreDotdevicePairDotstartRoute
   '/api/xrpc/dev.cocore.inference.dispatch': typeof ApiXrpcDevDotcocoreDotinferenceDotdispatchRoute
-  '/api/xrpc/dev.cocore.inference.status': typeof ApiXrpcDevDotcocoreDotinferenceDotstatusRoute
-  '/api/xrpc/dev.cocore.inference.submit': typeof ApiXrpcDevDotcocoreDotinferenceDotsubmitRoute
   '/api/xrpc/dev.cocore.proxy.createRecord': typeof ApiXrpcDevDotcocoreDotproxyDotcreateRecordRoute
   '/api/xrpc/dev.cocore.proxy.deleteRecord': typeof ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute
   '/api/xrpc/dev.cocore.proxy.putRecord': typeof ApiXrpcDevDotcocoreDotproxyDotputRecordRoute
@@ -760,8 +742,6 @@ export interface FileRoutesById {
   '/api/xrpc/dev.cocore.devicePair.poll': typeof ApiXrpcDevDotcocoreDotdevicePairDotpollRoute
   '/api/xrpc/dev.cocore.devicePair.start': typeof ApiXrpcDevDotcocoreDotdevicePairDotstartRoute
   '/api/xrpc/dev.cocore.inference.dispatch': typeof ApiXrpcDevDotcocoreDotinferenceDotdispatchRoute
-  '/api/xrpc/dev.cocore.inference.status': typeof ApiXrpcDevDotcocoreDotinferenceDotstatusRoute
-  '/api/xrpc/dev.cocore.inference.submit': typeof ApiXrpcDevDotcocoreDotinferenceDotsubmitRoute
   '/api/xrpc/dev.cocore.proxy.createRecord': typeof ApiXrpcDevDotcocoreDotproxyDotcreateRecordRoute
   '/api/xrpc/dev.cocore.proxy.deleteRecord': typeof ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute
   '/api/xrpc/dev.cocore.proxy.putRecord': typeof ApiXrpcDevDotcocoreDotproxyDotputRecordRoute
@@ -844,8 +824,6 @@ export interface FileRouteTypes {
     | '/api/xrpc/dev.cocore.devicePair.poll'
     | '/api/xrpc/dev.cocore.devicePair.start'
     | '/api/xrpc/dev.cocore.inference.dispatch'
-    | '/api/xrpc/dev.cocore.inference.status'
-    | '/api/xrpc/dev.cocore.inference.submit'
     | '/api/xrpc/dev.cocore.proxy.createRecord'
     | '/api/xrpc/dev.cocore.proxy.deleteRecord'
     | '/api/xrpc/dev.cocore.proxy.putRecord'
@@ -925,8 +903,6 @@ export interface FileRouteTypes {
     | '/api/xrpc/dev.cocore.devicePair.poll'
     | '/api/xrpc/dev.cocore.devicePair.start'
     | '/api/xrpc/dev.cocore.inference.dispatch'
-    | '/api/xrpc/dev.cocore.inference.status'
-    | '/api/xrpc/dev.cocore.inference.submit'
     | '/api/xrpc/dev.cocore.proxy.createRecord'
     | '/api/xrpc/dev.cocore.proxy.deleteRecord'
     | '/api/xrpc/dev.cocore.proxy.putRecord'
@@ -1009,8 +985,6 @@ export interface FileRouteTypes {
     | '/api/xrpc/dev.cocore.devicePair.poll'
     | '/api/xrpc/dev.cocore.devicePair.start'
     | '/api/xrpc/dev.cocore.inference.dispatch'
-    | '/api/xrpc/dev.cocore.inference.status'
-    | '/api/xrpc/dev.cocore.inference.submit'
     | '/api/xrpc/dev.cocore.proxy.createRecord'
     | '/api/xrpc/dev.cocore.proxy.deleteRecord'
     | '/api/xrpc/dev.cocore.proxy.putRecord'
@@ -1065,8 +1039,6 @@ export interface RootRouteChildren {
   ApiXrpcDevDotcocoreDotdevicePairDotpollRoute: typeof ApiXrpcDevDotcocoreDotdevicePairDotpollRoute
   ApiXrpcDevDotcocoreDotdevicePairDotstartRoute: typeof ApiXrpcDevDotcocoreDotdevicePairDotstartRoute
   ApiXrpcDevDotcocoreDotinferenceDotdispatchRoute: typeof ApiXrpcDevDotcocoreDotinferenceDotdispatchRoute
-  ApiXrpcDevDotcocoreDotinferenceDotstatusRoute: typeof ApiXrpcDevDotcocoreDotinferenceDotstatusRoute
-  ApiXrpcDevDotcocoreDotinferenceDotsubmitRoute: typeof ApiXrpcDevDotcocoreDotinferenceDotsubmitRoute
   ApiXrpcDevDotcocoreDotproxyDotcreateRecordRoute: typeof ApiXrpcDevDotcocoreDotproxyDotcreateRecordRoute
   ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute: typeof ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute
   ApiXrpcDevDotcocoreDotproxyDotputRecordRoute: typeof ApiXrpcDevDotcocoreDotproxyDotputRecordRoute
@@ -1369,20 +1341,6 @@ declare module '@tanstack/react-router' {
       path: '/api/xrpc/dev.cocore.proxy.createRecord'
       fullPath: '/api/xrpc/dev.cocore.proxy.createRecord'
       preLoaderRoute: typeof ApiXrpcDevDotcocoreDotproxyDotcreateRecordRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/xrpc/dev.cocore.inference.submit': {
-      id: '/api/xrpc/dev.cocore.inference.submit'
-      path: '/api/xrpc/dev.cocore.inference.submit'
-      fullPath: '/api/xrpc/dev.cocore.inference.submit'
-      preLoaderRoute: typeof ApiXrpcDevDotcocoreDotinferenceDotsubmitRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/xrpc/dev.cocore.inference.status': {
-      id: '/api/xrpc/dev.cocore.inference.status'
-      path: '/api/xrpc/dev.cocore.inference.status'
-      fullPath: '/api/xrpc/dev.cocore.inference.status'
-      preLoaderRoute: typeof ApiXrpcDevDotcocoreDotinferenceDotstatusRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/xrpc/dev.cocore.inference.dispatch': {
@@ -1820,10 +1778,6 @@ const rootRouteChildren: RootRouteChildren = {
     ApiXrpcDevDotcocoreDotdevicePairDotstartRoute,
   ApiXrpcDevDotcocoreDotinferenceDotdispatchRoute:
     ApiXrpcDevDotcocoreDotinferenceDotdispatchRoute,
-  ApiXrpcDevDotcocoreDotinferenceDotstatusRoute:
-    ApiXrpcDevDotcocoreDotinferenceDotstatusRoute,
-  ApiXrpcDevDotcocoreDotinferenceDotsubmitRoute:
-    ApiXrpcDevDotcocoreDotinferenceDotsubmitRoute,
   ApiXrpcDevDotcocoreDotproxyDotcreateRecordRoute:
     ApiXrpcDevDotcocoreDotproxyDotcreateRecordRoute,
   ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute:

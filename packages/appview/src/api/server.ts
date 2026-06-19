@@ -12,7 +12,12 @@ import { Store } from "../store.ts";
 import { verifyReceipt, verifySettlementChain } from "@cocore/sdk/validate";
 import { verifyReceiptSignature } from "@cocore/sdk/p256";
 import { MdaError, verifyChain } from "@cocore/sdk/mda";
+import { timingSafeEqual } from "node:crypto";
 import { ids, lexicons } from "@cocore/sdk/lex";
+import { accountRoutes } from "./account-routes.ts";
+import { AccountStore } from "../operational/account-store.ts";
+import { isOAuthConfigured, makeAppviewOAuth } from "../auth/oauth-client.ts";
+import { pdsRoutes } from "../pds/write.ts";
 import type {
   AttestationRecord,
   JobRecord,
@@ -25,7 +30,31 @@ interface Routes {
   [path: string]: (req: IncomingMessage, res: ServerResponse, url: URL) => void | Promise<void>;
 }
 
-export function buildServer(store: Store) {
+export interface BuildServerOptions {
+  /** Operational store for API keys + OAuth sessions. When provided
+   *  together with `appviewDid`, the dev.cocore.account.* methods are
+   *  registered. */
+  accountStore?: AccountStore;
+  /** This AppView's service DID — the `aud` that account.* service-auth
+   *  JWTs must target. Required to enable the account methods. */
+  appviewDid?: string;
+  /** Bridge base URL for the best-effort cache mirror on PDS writes. */
+  bridgeUrl?: string;
+  /** Shared secret the console presents to hand off a freshly minted
+   *  OAuth session (`POST /internal/oauth-session`). When unset, the
+   *  handoff endpoint is not registered. */
+  internalSecret?: string;
+}
+
+/** Constant-time string compare that tolerates length differences. */
+function secretEquals(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+export function buildServer(store: Store, opts: BuildServerOptions = {}) {
   const routes: Routes = {
     "/xrpc/dev.cocore.appview.listProviders": (_req, res) => {
       const items = store.listByCollection("dev.cocore.compute.provider", 100);
@@ -441,6 +470,67 @@ export function buildServer(store: Store) {
     },
   };
 
+  // Operational write methods (API-key management). Registered only when
+  // the AppView is configured with a service identity + account store —
+  // additive, so a deploy without them serves exactly the read API it
+  // did before.
+  if (opts.accountStore && opts.appviewDid) {
+    Object.assign(routes, accountRoutes(opts.accountStore, opts.appviewDid));
+  }
+
+  // PDS-write executor: /pds/{create,put,delete}Record. Registered only
+  // when an account store exists (for bearer-key resolution) and the
+  // OAuth client is configured (private key / localhost) so it can
+  // restore DPoP-bound sessions. Additive: absent otherwise.
+  if (opts.accountStore && isOAuthConfigured()) {
+    const oauth = makeAppviewOAuth(opts.accountStore);
+    Object.assign(
+      routes,
+      pdsRoutes({ accounts: opts.accountStore, oauth, bridgeUrl: opts.bridgeUrl }),
+    );
+  }
+
+  // OAuth session handoff: the console pushes a freshly minted session
+  // here after login so the AppView becomes its sole owner (single-writer
+  // refresh). Gated on a shared secret + an account store to persist to.
+  if (opts.accountStore && opts.internalSecret) {
+    const accountStore = opts.accountStore;
+    const secret = opts.internalSecret;
+    routes["/internal/oauth-session"] = async (req, res) => {
+      if (req.method !== "POST") {
+        json(res, 405, { error: "MethodNotAllowed" });
+        return;
+      }
+      const presented = req.headers["x-cocore-internal-secret"];
+      if (typeof presented !== "string" || !secretEquals(presented, secret)) {
+        json(res, 403, { error: "Forbidden" });
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      let body: { did?: unknown; data?: unknown };
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as typeof body;
+      } catch {
+        json(res, 400, { error: "InvalidRequest", message: "body must be JSON" });
+        return;
+      }
+      if (typeof body.did !== "string" || !body.did.startsWith("did:")) {
+        json(res, 400, { error: "InvalidRequest", message: "did required" });
+        return;
+      }
+      if (body.data === undefined || body.data === null) {
+        json(res, 400, { error: "InvalidRequest", message: "data (StoredSession) required" });
+        return;
+      }
+      // `data` is the StoredSession blob; accept it as an object or an
+      // already-serialized string and store the canonical JSON string.
+      const data = typeof body.data === "string" ? body.data : JSON.stringify(body.data);
+      accountStore.putOAuthSession(body.did, data);
+      json(res, 200, { ok: true });
+    };
+  }
+
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -510,7 +600,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env["COCORE_API_PORT"] ?? 8080);
   const dbPath = process.env["COCORE_DB"] ?? "./appview.db";
   const store = new Store(dbPath);
-  buildServer(store).listen(port, () => {
-    console.error(`appview api: listening on :${port} db=${dbPath}`);
+  // Enable dev.cocore.account.* only when a service DID is configured.
+  const appviewDid = process.env["COCORE_APPVIEW_DID"];
+  const accountStore = appviewDid
+    ? new AccountStore(process.env["COCORE_ACCOUNT_DB"] ?? "./appview-account.db")
+    : undefined;
+  buildServer(store, {
+    accountStore,
+    appviewDid,
+    bridgeUrl: process.env["COCORE_BRIDGE_URL"],
+    internalSecret: process.env["COCORE_INTERNAL_SECRET"],
+  }).listen(port, () => {
+    console.error(
+      `appview api: listening on :${port} db=${dbPath}` +
+        (appviewDid ? ` account=on(aud=${appviewDid})` : ""),
+    );
   });
 }

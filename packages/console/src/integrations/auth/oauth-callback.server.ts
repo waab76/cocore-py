@@ -1,6 +1,7 @@
 import { Effect, Either } from "effect";
 
 import { ensureMyProfile } from "@/lib/account-profile.server.ts";
+import { handOffSessionToAppview } from "@/lib/appview-session-handoff.server.ts";
 import { issueAppSession } from "@/integrations/auth/app-session-store.server.ts";
 import { atprotoOAuthCallbackEffect } from "@/integrations/auth/atproto.server.ts";
 import { AUTH_SESSION_TOKEN_COOKIE } from "@/integrations/auth/constants.ts";
@@ -46,6 +47,10 @@ function oauthCallbackResponseEffect(request: Request): Effect.Effect<Response, 
         ),
       ),
     );
+    // Hand the just-minted session off to the AppView so it can own the
+    // PDS-write path. Best-effort + gated on config; never blocks login.
+    yield* Effect.either(Effect.tryPromise(() => handOffSessionToAppview(did)));
+
     const sessionToken = issueAppSession(did);
     const isSecure = request.url.startsWith("https://");
     const cookieDomain = authCookieDomain(new URL(request.url).host);
