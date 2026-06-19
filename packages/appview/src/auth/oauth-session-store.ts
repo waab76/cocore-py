@@ -20,7 +20,15 @@ import type { Store, StoredSession } from "@atcute/oauth-node-client";
 import type { AccountStore } from "../operational/account-store.ts";
 
 export class AccountOauthSessionStore implements Store<Did, StoredSession> {
-  constructor(private readonly accounts: AccountStore) {}
+  // Plain field + explicit assignment, not a TS parameter property: the
+  // services container runs under `node --experimental-strip-types`,
+  // which rejects parameter properties (strip-only can't synthesize the
+  // assignment).
+  private readonly accounts: AccountStore;
+
+  constructor(accounts: AccountStore) {
+    this.accounts = accounts;
+  }
 
   get(key: Did): StoredSession | undefined {
     const data = this.accounts.getOAuthSession(key);
