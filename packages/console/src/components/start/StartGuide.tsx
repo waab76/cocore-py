@@ -325,7 +325,7 @@ export function StartGuide() {
                 </Flex>
                 <Flex direction="row" gap="md" style={styles.bodySpaced} wrap>
                   <CreateApiKeyButton size="sm" label="Create API key" />
-                  <ButtonLink to="/api-docs" variant="tertiary" size="sm">
+                  <ButtonLink to="/docs/inference" variant="tertiary" size="sm">
                     Full API reference
                   </ButtonLink>
                 </Flex>

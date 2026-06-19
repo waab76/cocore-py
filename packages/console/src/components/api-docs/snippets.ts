@@ -2,7 +2,7 @@
 //
 // Used in two places: the "Show usage example" dialog on /account
 // (a quick-access affordance for a signed-in user staring at their
-// API key), and the standalone /api-docs page (a public, deeply-
+// API key), and the standalone /docs/inference page (a public, deeply-
 // linkable reference). Keeping the strings in one module avoids
 // drift between those two surfaces.
 
@@ -20,7 +20,7 @@ export const SNIPPET_LANG_LABELS: Record<SnippetLang, string> = {
 };
 
 /** Stable order so the SegmentedControl renders the same way across
- *  browsers. TypeScript first — it's the default selection on /api-docs
+ *  browsers. TypeScript first — it's the default selection on /docs/inference
  *  and the closest match to the console's own stack; curl + the rest
  *  follow in roughly popularity-of-OpenAI-SDK order. */
 export const SNIPPET_LANGS: ReadonlyArray<SnippetLang> = [

@@ -13,6 +13,7 @@ import { Route as OgDotpngRouteImport } from './routes/og[.]png'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AgentRouteImport } from './routes/agent'
 import { Route as HeaderLayoutRouteImport } from './routes/_header-layout'
+import { Route as DocsHeaderLayoutRouteImport } from './routes/_docs-header-layout'
 import { Route as LexiconsIndexRouteImport } from './routes/lexicons.index'
 import { Route as HeaderLayoutIndexRouteImport } from './routes/_header-layout.index'
 import { Route as V1ModelsRouteImport } from './routes/v1.models'
@@ -35,11 +36,11 @@ import { Route as HeaderLayoutFriendsRouteImport } from './routes/_header-layout
 import { Route as HeaderLayoutExploreRouteImport } from './routes/_header-layout.explore'
 import { Route as HeaderLayoutChatPreviewRouteImport } from './routes/_header-layout.chat-preview'
 import { Route as HeaderLayoutChatRouteImport } from './routes/_header-layout.chat'
-import { Route as HeaderLayoutApiDocsRouteImport } from './routes/_header-layout.api-docs'
 import { Route as HeaderLayoutAccountRouteImport } from './routes/_header-layout.account'
 import { Route as HeaderLayoutAcceptTermsRouteImport } from './routes/_header-layout.accept-terms'
 import { Route as HeaderLayoutMachinesIndexRouteImport } from './routes/_header-layout.machines.index'
 import { Route as HeaderLayoutBlogIndexRouteImport } from './routes/_header-layout.blog.index'
+import { Route as DocsHeaderLayoutDocsIndexRouteImport } from './routes/_docs-header-layout.docs.index'
 import { Route as V1ChatCompletionsRouteImport } from './routes/v1.chat.completions'
 import { Route as ApiXrpcDevDotcocoreDotproxyDotputRecordRouteImport } from './routes/api/xrpc/dev[.]cocore[.]proxy[.]putRecord'
 import { Route as ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRouteImport } from './routes/api/xrpc/dev[.]cocore[.]proxy[.]deleteRecord'
@@ -62,6 +63,10 @@ import { Route as HeaderLayoutMachinesRkeyRouteImport } from './routes/_header-l
 import { Route as HeaderLayoutDevicesNewRouteImport } from './routes/_header-layout.devices.new'
 import { Route as HeaderLayoutBlogSlugRouteImport } from './routes/_header-layout.blog.$slug'
 import { Route as HeaderLayoutAdminDisputesRouteImport } from './routes/_header-layout.admin.disputes'
+import { Route as DocsHeaderLayoutDocsLexiconsRouteImport } from './routes/_docs-header-layout.docs.lexicons'
+import { Route as DocsHeaderLayoutDocsInferenceRouteImport } from './routes/_docs-header-layout.docs.inference'
+import { Route as DocsHeaderLayoutDocsApiRouteImport } from './routes/_docs-header-layout.docs.api'
+import { Route as DocsHeaderLayoutDocsInferenceIndexRouteImport } from './routes/_docs-header-layout.docs.inference.index'
 import { Route as V1PrivateChatCompletionsRouteImport } from './routes/v1.private.chat.completions'
 import { Route as ApiV1ChatCompletionsRouteImport } from './routes/api.v1.chat.completions'
 import { Route as ApiInternalDisputesResolveRouteImport } from './routes/api/internal/disputes.resolve'
@@ -70,6 +75,8 @@ import { Route as ApiAuthAtprotoMetadataDotjsonRouteImport } from './routes/api.
 import { Route as ApiAuthAtprotoJwksDotjsonRouteImport } from './routes/api.auth.atproto.jwks[.]json'
 import { Route as ApiAuthAtprotoCallbackRouteImport } from './routes/api.auth.atproto.callback'
 import { Route as ApiAuthAtprotoAuthorizeRouteImport } from './routes/api.auth.atproto.authorize'
+import { Route as DocsHeaderLayoutDocsInferenceAuthenticationRouteImport } from './routes/_docs-header-layout.docs.inference.authentication'
+import { Route as DocsHeaderLayoutDocsInferenceSlugRouteImport } from './routes/_docs-header-layout.docs.inference.$slug'
 import { Route as ApiV1PrivateChatCompletionsRouteImport } from './routes/api.v1.private.chat.completions'
 
 const OgDotpngRoute = OgDotpngRouteImport.update({
@@ -89,6 +96,10 @@ const AgentRoute = AgentRouteImport.update({
 } as any)
 const HeaderLayoutRoute = HeaderLayoutRouteImport.update({
   id: '/_header-layout',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsHeaderLayoutRoute = DocsHeaderLayoutRouteImport.update({
+  id: '/_docs-header-layout',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LexiconsIndexRoute = LexiconsIndexRouteImport.update({
@@ -201,11 +212,6 @@ const HeaderLayoutChatRoute = HeaderLayoutChatRouteImport.update({
   path: '/chat',
   getParentRoute: () => HeaderLayoutRoute,
 } as any)
-const HeaderLayoutApiDocsRoute = HeaderLayoutApiDocsRouteImport.update({
-  id: '/api-docs',
-  path: '/api-docs',
-  getParentRoute: () => HeaderLayoutRoute,
-} as any)
 const HeaderLayoutAccountRoute = HeaderLayoutAccountRouteImport.update({
   id: '/account',
   path: '/account',
@@ -227,6 +233,12 @@ const HeaderLayoutBlogIndexRoute = HeaderLayoutBlogIndexRouteImport.update({
   path: '/blog/',
   getParentRoute: () => HeaderLayoutRoute,
 } as any)
+const DocsHeaderLayoutDocsIndexRoute =
+  DocsHeaderLayoutDocsIndexRouteImport.update({
+    id: '/docs/',
+    path: '/docs/',
+    getParentRoute: () => DocsHeaderLayoutRoute,
+  } as any)
 const V1ChatCompletionsRoute = V1ChatCompletionsRouteImport.update({
   id: '/v1/chat/completions',
   path: '/v1/chat/completions',
@@ -349,6 +361,29 @@ const HeaderLayoutAdminDisputesRoute =
     path: '/admin/disputes',
     getParentRoute: () => HeaderLayoutRoute,
   } as any)
+const DocsHeaderLayoutDocsLexiconsRoute =
+  DocsHeaderLayoutDocsLexiconsRouteImport.update({
+    id: '/docs/lexicons',
+    path: '/docs/lexicons',
+    getParentRoute: () => DocsHeaderLayoutRoute,
+  } as any)
+const DocsHeaderLayoutDocsInferenceRoute =
+  DocsHeaderLayoutDocsInferenceRouteImport.update({
+    id: '/docs/inference',
+    path: '/docs/inference',
+    getParentRoute: () => DocsHeaderLayoutRoute,
+  } as any)
+const DocsHeaderLayoutDocsApiRoute = DocsHeaderLayoutDocsApiRouteImport.update({
+  id: '/docs/api',
+  path: '/docs/api',
+  getParentRoute: () => DocsHeaderLayoutRoute,
+} as any)
+const DocsHeaderLayoutDocsInferenceIndexRoute =
+  DocsHeaderLayoutDocsInferenceIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => DocsHeaderLayoutDocsInferenceRoute,
+  } as any)
 const V1PrivateChatCompletionsRoute =
   V1PrivateChatCompletionsRouteImport.update({
     id: '/v1/private/chat/completions',
@@ -393,6 +428,18 @@ const ApiAuthAtprotoAuthorizeRoute = ApiAuthAtprotoAuthorizeRouteImport.update({
   path: '/api/auth/atproto/authorize',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsHeaderLayoutDocsInferenceAuthenticationRoute =
+  DocsHeaderLayoutDocsInferenceAuthenticationRouteImport.update({
+    id: '/authentication',
+    path: '/authentication',
+    getParentRoute: () => DocsHeaderLayoutDocsInferenceRoute,
+  } as any)
+const DocsHeaderLayoutDocsInferenceSlugRoute =
+  DocsHeaderLayoutDocsInferenceSlugRouteImport.update({
+    id: '/$slug',
+    path: '/$slug',
+    getParentRoute: () => DocsHeaderLayoutDocsInferenceRoute,
+  } as any)
 const ApiV1PrivateChatCompletionsRoute =
   ApiV1PrivateChatCompletionsRouteImport.update({
     id: '/api/v1/private/chat/completions',
@@ -407,7 +454,6 @@ export interface FileRoutesByFullPath {
   '/og.png': typeof OgDotpngRoute
   '/accept-terms': typeof HeaderLayoutAcceptTermsRoute
   '/account': typeof HeaderLayoutAccountRoute
-  '/api-docs': typeof HeaderLayoutApiDocsRoute
   '/chat': typeof HeaderLayoutChatRoute
   '/chat-preview': typeof HeaderLayoutChatPreviewRoute
   '/explore': typeof HeaderLayoutExploreRoute
@@ -429,6 +475,9 @@ export interface FileRoutesByFullPath {
   '/lexicons/$nsid': typeof LexiconsNsidRoute
   '/v1/models': typeof V1ModelsRoute
   '/lexicons/': typeof LexiconsIndexRoute
+  '/docs/api': typeof DocsHeaderLayoutDocsApiRoute
+  '/docs/inference': typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
+  '/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
   '/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
   '/blog/$slug': typeof HeaderLayoutBlogSlugRoute
   '/devices/new': typeof HeaderLayoutDevicesNewRoute
@@ -451,8 +500,11 @@ export interface FileRoutesByFullPath {
   '/api/xrpc/dev.cocore.proxy.deleteRecord': typeof ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute
   '/api/xrpc/dev.cocore.proxy.putRecord': typeof ApiXrpcDevDotcocoreDotproxyDotputRecordRoute
   '/v1/chat/completions': typeof V1ChatCompletionsRoute
+  '/docs/': typeof DocsHeaderLayoutDocsIndexRoute
   '/blog/': typeof HeaderLayoutBlogIndexRoute
   '/machines/': typeof HeaderLayoutMachinesIndexRoute
+  '/docs/inference/$slug': typeof DocsHeaderLayoutDocsInferenceSlugRoute
+  '/docs/inference/authentication': typeof DocsHeaderLayoutDocsInferenceAuthenticationRoute
   '/api/auth/atproto/authorize': typeof ApiAuthAtprotoAuthorizeRoute
   '/api/auth/atproto/callback': typeof ApiAuthAtprotoCallbackRoute
   '/api/auth/atproto/jwks.json': typeof ApiAuthAtprotoJwksDotjsonRoute
@@ -461,15 +513,16 @@ export interface FileRoutesByFullPath {
   '/api/internal/disputes/resolve': typeof ApiInternalDisputesResolveRoute
   '/api/v1/chat/completions': typeof ApiV1ChatCompletionsRoute
   '/v1/private/chat/completions': typeof V1PrivateChatCompletionsRoute
+  '/docs/inference/': typeof DocsHeaderLayoutDocsInferenceIndexRoute
   '/api/v1/private/chat/completions': typeof ApiV1PrivateChatCompletionsRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof HeaderLayoutIndexRoute
   '/agent': typeof AgentRouteWithChildren
   '/login': typeof LoginRoute
   '/og.png': typeof OgDotpngRoute
   '/accept-terms': typeof HeaderLayoutAcceptTermsRoute
   '/account': typeof HeaderLayoutAccountRoute
-  '/api-docs': typeof HeaderLayoutApiDocsRoute
   '/chat': typeof HeaderLayoutChatRoute
   '/chat-preview': typeof HeaderLayoutChatPreviewRoute
   '/explore': typeof HeaderLayoutExploreRoute
@@ -490,8 +543,9 @@ export interface FileRoutesByTo {
   '/exchange/did.json': typeof ExchangeDidDotjsonRoute
   '/lexicons/$nsid': typeof LexiconsNsidRoute
   '/v1/models': typeof V1ModelsRoute
-  '/': typeof HeaderLayoutIndexRoute
   '/lexicons': typeof LexiconsIndexRoute
+  '/docs/api': typeof DocsHeaderLayoutDocsApiRoute
+  '/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
   '/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
   '/blog/$slug': typeof HeaderLayoutBlogSlugRoute
   '/devices/new': typeof HeaderLayoutDevicesNewRoute
@@ -514,8 +568,11 @@ export interface FileRoutesByTo {
   '/api/xrpc/dev.cocore.proxy.deleteRecord': typeof ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute
   '/api/xrpc/dev.cocore.proxy.putRecord': typeof ApiXrpcDevDotcocoreDotproxyDotputRecordRoute
   '/v1/chat/completions': typeof V1ChatCompletionsRoute
+  '/docs': typeof DocsHeaderLayoutDocsIndexRoute
   '/blog': typeof HeaderLayoutBlogIndexRoute
   '/machines': typeof HeaderLayoutMachinesIndexRoute
+  '/docs/inference/$slug': typeof DocsHeaderLayoutDocsInferenceSlugRoute
+  '/docs/inference/authentication': typeof DocsHeaderLayoutDocsInferenceAuthenticationRoute
   '/api/auth/atproto/authorize': typeof ApiAuthAtprotoAuthorizeRoute
   '/api/auth/atproto/callback': typeof ApiAuthAtprotoCallbackRoute
   '/api/auth/atproto/jwks.json': typeof ApiAuthAtprotoJwksDotjsonRoute
@@ -524,17 +581,18 @@ export interface FileRoutesByTo {
   '/api/internal/disputes/resolve': typeof ApiInternalDisputesResolveRoute
   '/api/v1/chat/completions': typeof ApiV1ChatCompletionsRoute
   '/v1/private/chat/completions': typeof V1PrivateChatCompletionsRoute
+  '/docs/inference': typeof DocsHeaderLayoutDocsInferenceIndexRoute
   '/api/v1/private/chat/completions': typeof ApiV1PrivateChatCompletionsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/_docs-header-layout': typeof DocsHeaderLayoutRouteWithChildren
   '/_header-layout': typeof HeaderLayoutRouteWithChildren
   '/agent': typeof AgentRouteWithChildren
   '/login': typeof LoginRoute
   '/og.png': typeof OgDotpngRoute
   '/_header-layout/accept-terms': typeof HeaderLayoutAcceptTermsRoute
   '/_header-layout/account': typeof HeaderLayoutAccountRoute
-  '/_header-layout/api-docs': typeof HeaderLayoutApiDocsRoute
   '/_header-layout/chat': typeof HeaderLayoutChatRoute
   '/_header-layout/chat-preview': typeof HeaderLayoutChatPreviewRoute
   '/_header-layout/explore': typeof HeaderLayoutExploreRoute
@@ -557,6 +615,9 @@ export interface FileRoutesById {
   '/v1/models': typeof V1ModelsRoute
   '/_header-layout/': typeof HeaderLayoutIndexRoute
   '/lexicons/': typeof LexiconsIndexRoute
+  '/_docs-header-layout/docs/api': typeof DocsHeaderLayoutDocsApiRoute
+  '/_docs-header-layout/docs/inference': typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
+  '/_docs-header-layout/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
   '/_header-layout/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
   '/_header-layout/blog/$slug': typeof HeaderLayoutBlogSlugRoute
   '/_header-layout/devices/new': typeof HeaderLayoutDevicesNewRoute
@@ -579,8 +640,11 @@ export interface FileRoutesById {
   '/api/xrpc/dev.cocore.proxy.deleteRecord': typeof ApiXrpcDevDotcocoreDotproxyDotdeleteRecordRoute
   '/api/xrpc/dev.cocore.proxy.putRecord': typeof ApiXrpcDevDotcocoreDotproxyDotputRecordRoute
   '/v1/chat/completions': typeof V1ChatCompletionsRoute
+  '/_docs-header-layout/docs/': typeof DocsHeaderLayoutDocsIndexRoute
   '/_header-layout/blog/': typeof HeaderLayoutBlogIndexRoute
   '/_header-layout/machines/': typeof HeaderLayoutMachinesIndexRoute
+  '/_docs-header-layout/docs/inference/$slug': typeof DocsHeaderLayoutDocsInferenceSlugRoute
+  '/_docs-header-layout/docs/inference/authentication': typeof DocsHeaderLayoutDocsInferenceAuthenticationRoute
   '/api/auth/atproto/authorize': typeof ApiAuthAtprotoAuthorizeRoute
   '/api/auth/atproto/callback': typeof ApiAuthAtprotoCallbackRoute
   '/api/auth/atproto/jwks.json': typeof ApiAuthAtprotoJwksDotjsonRoute
@@ -589,6 +653,7 @@ export interface FileRoutesById {
   '/api/internal/disputes/resolve': typeof ApiInternalDisputesResolveRoute
   '/api/v1/chat/completions': typeof ApiV1ChatCompletionsRoute
   '/v1/private/chat/completions': typeof V1PrivateChatCompletionsRoute
+  '/_docs-header-layout/docs/inference/': typeof DocsHeaderLayoutDocsInferenceIndexRoute
   '/api/v1/private/chat/completions': typeof ApiV1PrivateChatCompletionsRoute
 }
 export interface FileRouteTypes {
@@ -600,7 +665,6 @@ export interface FileRouteTypes {
     | '/og.png'
     | '/accept-terms'
     | '/account'
-    | '/api-docs'
     | '/chat'
     | '/chat-preview'
     | '/explore'
@@ -622,6 +686,9 @@ export interface FileRouteTypes {
     | '/lexicons/$nsid'
     | '/v1/models'
     | '/lexicons/'
+    | '/docs/api'
+    | '/docs/inference'
+    | '/docs/lexicons'
     | '/admin/disputes'
     | '/blog/$slug'
     | '/devices/new'
@@ -644,8 +711,11 @@ export interface FileRouteTypes {
     | '/api/xrpc/dev.cocore.proxy.deleteRecord'
     | '/api/xrpc/dev.cocore.proxy.putRecord'
     | '/v1/chat/completions'
+    | '/docs/'
     | '/blog/'
     | '/machines/'
+    | '/docs/inference/$slug'
+    | '/docs/inference/authentication'
     | '/api/auth/atproto/authorize'
     | '/api/auth/atproto/callback'
     | '/api/auth/atproto/jwks.json'
@@ -654,15 +724,16 @@ export interface FileRouteTypes {
     | '/api/internal/disputes/resolve'
     | '/api/v1/chat/completions'
     | '/v1/private/chat/completions'
+    | '/docs/inference/'
     | '/api/v1/private/chat/completions'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/agent'
     | '/login'
     | '/og.png'
     | '/accept-terms'
     | '/account'
-    | '/api-docs'
     | '/chat'
     | '/chat-preview'
     | '/explore'
@@ -683,8 +754,9 @@ export interface FileRouteTypes {
     | '/exchange/did.json'
     | '/lexicons/$nsid'
     | '/v1/models'
-    | '/'
     | '/lexicons'
+    | '/docs/api'
+    | '/docs/lexicons'
     | '/admin/disputes'
     | '/blog/$slug'
     | '/devices/new'
@@ -707,8 +779,11 @@ export interface FileRouteTypes {
     | '/api/xrpc/dev.cocore.proxy.deleteRecord'
     | '/api/xrpc/dev.cocore.proxy.putRecord'
     | '/v1/chat/completions'
+    | '/docs'
     | '/blog'
     | '/machines'
+    | '/docs/inference/$slug'
+    | '/docs/inference/authentication'
     | '/api/auth/atproto/authorize'
     | '/api/auth/atproto/callback'
     | '/api/auth/atproto/jwks.json'
@@ -717,16 +792,17 @@ export interface FileRouteTypes {
     | '/api/internal/disputes/resolve'
     | '/api/v1/chat/completions'
     | '/v1/private/chat/completions'
+    | '/docs/inference'
     | '/api/v1/private/chat/completions'
   id:
     | '__root__'
+    | '/_docs-header-layout'
     | '/_header-layout'
     | '/agent'
     | '/login'
     | '/og.png'
     | '/_header-layout/accept-terms'
     | '/_header-layout/account'
-    | '/_header-layout/api-docs'
     | '/_header-layout/chat'
     | '/_header-layout/chat-preview'
     | '/_header-layout/explore'
@@ -749,6 +825,9 @@ export interface FileRouteTypes {
     | '/v1/models'
     | '/_header-layout/'
     | '/lexicons/'
+    | '/_docs-header-layout/docs/api'
+    | '/_docs-header-layout/docs/inference'
+    | '/_docs-header-layout/docs/lexicons'
     | '/_header-layout/admin/disputes'
     | '/_header-layout/blog/$slug'
     | '/_header-layout/devices/new'
@@ -771,8 +850,11 @@ export interface FileRouteTypes {
     | '/api/xrpc/dev.cocore.proxy.deleteRecord'
     | '/api/xrpc/dev.cocore.proxy.putRecord'
     | '/v1/chat/completions'
+    | '/_docs-header-layout/docs/'
     | '/_header-layout/blog/'
     | '/_header-layout/machines/'
+    | '/_docs-header-layout/docs/inference/$slug'
+    | '/_docs-header-layout/docs/inference/authentication'
     | '/api/auth/atproto/authorize'
     | '/api/auth/atproto/callback'
     | '/api/auth/atproto/jwks.json'
@@ -781,10 +863,12 @@ export interface FileRouteTypes {
     | '/api/internal/disputes/resolve'
     | '/api/v1/chat/completions'
     | '/v1/private/chat/completions'
+    | '/_docs-header-layout/docs/inference/'
     | '/api/v1/private/chat/completions'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  DocsHeaderLayoutRoute: typeof DocsHeaderLayoutRouteWithChildren
   HeaderLayoutRoute: typeof HeaderLayoutRouteWithChildren
   AgentRoute: typeof AgentRouteWithChildren
   LoginRoute: typeof LoginRoute
@@ -849,6 +933,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof HeaderLayoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_docs-header-layout': {
+      id: '/_docs-header-layout'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof DocsHeaderLayoutRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/lexicons/': {
@@ -1005,13 +1096,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HeaderLayoutChatRouteImport
       parentRoute: typeof HeaderLayoutRoute
     }
-    '/_header-layout/api-docs': {
-      id: '/_header-layout/api-docs'
-      path: '/api-docs'
-      fullPath: '/api-docs'
-      preLoaderRoute: typeof HeaderLayoutApiDocsRouteImport
-      parentRoute: typeof HeaderLayoutRoute
-    }
     '/_header-layout/account': {
       id: '/_header-layout/account'
       path: '/account'
@@ -1039,6 +1123,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/blog/'
       preLoaderRoute: typeof HeaderLayoutBlogIndexRouteImport
       parentRoute: typeof HeaderLayoutRoute
+    }
+    '/_docs-header-layout/docs/': {
+      id: '/_docs-header-layout/docs/'
+      path: '/docs'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsIndexRouteImport
+      parentRoute: typeof DocsHeaderLayoutRoute
     }
     '/v1/chat/completions': {
       id: '/v1/chat/completions'
@@ -1194,6 +1285,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HeaderLayoutAdminDisputesRouteImport
       parentRoute: typeof HeaderLayoutRoute
     }
+    '/_docs-header-layout/docs/lexicons': {
+      id: '/_docs-header-layout/docs/lexicons'
+      path: '/docs/lexicons'
+      fullPath: '/docs/lexicons'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsLexiconsRouteImport
+      parentRoute: typeof DocsHeaderLayoutRoute
+    }
+    '/_docs-header-layout/docs/inference': {
+      id: '/_docs-header-layout/docs/inference'
+      path: '/docs/inference'
+      fullPath: '/docs/inference'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsInferenceRouteImport
+      parentRoute: typeof DocsHeaderLayoutRoute
+    }
+    '/_docs-header-layout/docs/api': {
+      id: '/_docs-header-layout/docs/api'
+      path: '/docs/api'
+      fullPath: '/docs/api'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsApiRouteImport
+      parentRoute: typeof DocsHeaderLayoutRoute
+    }
+    '/_docs-header-layout/docs/inference/': {
+      id: '/_docs-header-layout/docs/inference/'
+      path: '/'
+      fullPath: '/docs/inference/'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsInferenceIndexRouteImport
+      parentRoute: typeof DocsHeaderLayoutDocsInferenceRoute
+    }
     '/v1/private/chat/completions': {
       id: '/v1/private/chat/completions'
       path: '/v1/private/chat/completions'
@@ -1250,6 +1369,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthAtprotoAuthorizeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_docs-header-layout/docs/inference/authentication': {
+      id: '/_docs-header-layout/docs/inference/authentication'
+      path: '/authentication'
+      fullPath: '/docs/inference/authentication'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsInferenceAuthenticationRouteImport
+      parentRoute: typeof DocsHeaderLayoutDocsInferenceRoute
+    }
+    '/_docs-header-layout/docs/inference/$slug': {
+      id: '/_docs-header-layout/docs/inference/$slug'
+      path: '/$slug'
+      fullPath: '/docs/inference/$slug'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsInferenceSlugRouteImport
+      parentRoute: typeof DocsHeaderLayoutDocsInferenceRoute
+    }
     '/api/v1/private/chat/completions': {
       id: '/api/v1/private/chat/completions'
       path: '/api/v1/private/chat/completions'
@@ -1260,10 +1393,48 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface DocsHeaderLayoutDocsInferenceRouteChildren {
+  DocsHeaderLayoutDocsInferenceSlugRoute: typeof DocsHeaderLayoutDocsInferenceSlugRoute
+  DocsHeaderLayoutDocsInferenceAuthenticationRoute: typeof DocsHeaderLayoutDocsInferenceAuthenticationRoute
+  DocsHeaderLayoutDocsInferenceIndexRoute: typeof DocsHeaderLayoutDocsInferenceIndexRoute
+}
+
+const DocsHeaderLayoutDocsInferenceRouteChildren: DocsHeaderLayoutDocsInferenceRouteChildren =
+  {
+    DocsHeaderLayoutDocsInferenceSlugRoute:
+      DocsHeaderLayoutDocsInferenceSlugRoute,
+    DocsHeaderLayoutDocsInferenceAuthenticationRoute:
+      DocsHeaderLayoutDocsInferenceAuthenticationRoute,
+    DocsHeaderLayoutDocsInferenceIndexRoute:
+      DocsHeaderLayoutDocsInferenceIndexRoute,
+  }
+
+const DocsHeaderLayoutDocsInferenceRouteWithChildren =
+  DocsHeaderLayoutDocsInferenceRoute._addFileChildren(
+    DocsHeaderLayoutDocsInferenceRouteChildren,
+  )
+
+interface DocsHeaderLayoutRouteChildren {
+  DocsHeaderLayoutDocsApiRoute: typeof DocsHeaderLayoutDocsApiRoute
+  DocsHeaderLayoutDocsInferenceRoute: typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
+  DocsHeaderLayoutDocsLexiconsRoute: typeof DocsHeaderLayoutDocsLexiconsRoute
+  DocsHeaderLayoutDocsIndexRoute: typeof DocsHeaderLayoutDocsIndexRoute
+}
+
+const DocsHeaderLayoutRouteChildren: DocsHeaderLayoutRouteChildren = {
+  DocsHeaderLayoutDocsApiRoute: DocsHeaderLayoutDocsApiRoute,
+  DocsHeaderLayoutDocsInferenceRoute:
+    DocsHeaderLayoutDocsInferenceRouteWithChildren,
+  DocsHeaderLayoutDocsLexiconsRoute: DocsHeaderLayoutDocsLexiconsRoute,
+  DocsHeaderLayoutDocsIndexRoute: DocsHeaderLayoutDocsIndexRoute,
+}
+
+const DocsHeaderLayoutRouteWithChildren =
+  DocsHeaderLayoutRoute._addFileChildren(DocsHeaderLayoutRouteChildren)
+
 interface HeaderLayoutRouteChildren {
   HeaderLayoutAcceptTermsRoute: typeof HeaderLayoutAcceptTermsRoute
   HeaderLayoutAccountRoute: typeof HeaderLayoutAccountRoute
-  HeaderLayoutApiDocsRoute: typeof HeaderLayoutApiDocsRoute
   HeaderLayoutChatRoute: typeof HeaderLayoutChatRoute
   HeaderLayoutChatPreviewRoute: typeof HeaderLayoutChatPreviewRoute
   HeaderLayoutExploreRoute: typeof HeaderLayoutExploreRoute
@@ -1287,7 +1458,6 @@ interface HeaderLayoutRouteChildren {
 const HeaderLayoutRouteChildren: HeaderLayoutRouteChildren = {
   HeaderLayoutAcceptTermsRoute: HeaderLayoutAcceptTermsRoute,
   HeaderLayoutAccountRoute: HeaderLayoutAccountRoute,
-  HeaderLayoutApiDocsRoute: HeaderLayoutApiDocsRoute,
   HeaderLayoutChatRoute: HeaderLayoutChatRoute,
   HeaderLayoutChatPreviewRoute: HeaderLayoutChatPreviewRoute,
   HeaderLayoutExploreRoute: HeaderLayoutExploreRoute,
@@ -1335,6 +1505,7 @@ const AgentRouteChildren: AgentRouteChildren = {
 const AgentRouteWithChildren = AgentRoute._addFileChildren(AgentRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
+  DocsHeaderLayoutRoute: DocsHeaderLayoutRouteWithChildren,
   HeaderLayoutRoute: HeaderLayoutRouteWithChildren,
   AgentRoute: AgentRouteWithChildren,
   LoginRoute: LoginRoute,

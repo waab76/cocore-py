@@ -392,7 +392,7 @@ export function AccountSettings() {
                       <DialogDescription>
                         Drop-in replacement for the OpenAI API: any OpenAI SDK works by changing the
                         base URL to <InlineCode>{baseUrl}</InlineCode>. Full reference at{" "}
-                        <Link to="/api-docs">/api-docs</Link>.
+                        <Link to="/docs/inference">/docs/inference</Link>.
                       </DialogDescription>
                       <Flex direction="column" gap="4xl" style={styles.usageContainer}>
                         <SegmentedControl

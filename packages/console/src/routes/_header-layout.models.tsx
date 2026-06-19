@@ -805,7 +805,7 @@ function ModelsPage() {
             <SmallBody style={styles.metaRowDim}>Loading the live model directory…</SmallBody>
           </Flex>
           <Page.Actions>
-            <ButtonLink to="/api-docs" preload="intent" variant="outline" size="sm">
+            <ButtonLink to="/docs/inference" preload="intent" variant="outline" size="sm">
               API docs
             </ButtonLink>
           </Page.Actions>
@@ -824,7 +824,7 @@ function ModelsPage() {
             </Heading1>
           </Flex>
           <Page.Actions>
-            <ButtonLink to="/api-docs" preload="intent" variant="outline" size="sm">
+            <ButtonLink to="/docs/inference" preload="intent" variant="outline" size="sm">
               API docs
             </ButtonLink>
           </Page.Actions>
@@ -847,7 +847,7 @@ function ModelsPage() {
             </Heading1>
           </Flex>
           <Page.Actions>
-            <ButtonLink to="/api-docs" preload="intent" variant="outline" size="sm">
+            <ButtonLink to="/docs/inference" preload="intent" variant="outline" size="sm">
               API docs
             </ButtonLink>
           </Page.Actions>
@@ -883,7 +883,7 @@ function ModelsPage() {
           </div>
         </Flex>
         <Page.Actions>
-          <ButtonLink to="/api-docs" preload="intent" variant="outline" size="sm">
+          <ButtonLink to="/docs/inference" preload="intent" variant="outline" size="sm">
             API docs
           </ButtonLink>
         </Page.Actions>
@@ -1129,7 +1129,7 @@ function ModelsPage() {
                 <Heading4 style={styles.headingMono}>example usage</Heading4>
                 <SmallBody style={styles.sectionMeta}>
                   OpenAI SDK (and curl) — same snippets as{" "}
-                  <Link to="/api-docs" preload="intent">
+                  <Link to="/docs/inference" preload="intent">
                     API docs
                   </Link>
                   .

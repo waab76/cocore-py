@@ -1451,7 +1451,7 @@ function MarketingPage() {
             <ButtonLink to="/login" search={{ redirect: "/start" }} variant="primary" size="lg">
               Get started — it's free →
             </ButtonLink>
-            <ButtonLink to="/api-docs" variant="secondary" size="lg">
+            <ButtonLink to="/docs/inference" variant="secondary" size="lg">
               See how it works
             </ButtonLink>
           </Flex>
@@ -2143,7 +2143,7 @@ function MarketingPage() {
               <ButtonLink to="/login" search={{ redirect: "/start" }} variant="primary" size="md">
                 Pair a machine →
               </ButtonLink>
-              <ButtonLink to="/api-docs" variant="secondary" size="md">
+              <ButtonLink to="/docs/inference" variant="secondary" size="md">
                 Read the docs
               </ButtonLink>
             </Flex>

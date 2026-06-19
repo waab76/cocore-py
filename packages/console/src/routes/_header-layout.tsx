@@ -190,7 +190,7 @@ function HeaderLayoutChrome() {
                 <NavbarRouterLink to="/explore">explore</NavbarRouterLink>
                 <NavbarRouterLink to="/leaderboard">leaderboard</NavbarRouterLink>
                 <NavbarRouterLink to="/blog">blog</NavbarRouterLink>
-                <NavbarRouterLink to="/api-docs">API</NavbarRouterLink>
+                <NavbarRouterLink to="/docs">API</NavbarRouterLink>
               </>
             )}
           </NavbarNavigation>
@@ -228,8 +228,14 @@ function HeaderLayoutChrome() {
             </Footer.Logo>
             <Footer.NavSection>
               <Footer.NavGroup title="Resources">
-                <FooterRouterLink to="/api-docs" preload="intent">
-                  API
+                <FooterRouterLink to="/docs/lexicons" preload="intent">
+                  Lexicons
+                </FooterRouterLink>
+                <FooterRouterLink to="/docs/api" preload="intent">
+                  AppView
+                </FooterRouterLink>
+                <FooterRouterLink to="/docs" preload="intent">
+                  Inference
                 </FooterRouterLink>
                 <FooterRouterLink to="/models" preload="intent">
                   Models
