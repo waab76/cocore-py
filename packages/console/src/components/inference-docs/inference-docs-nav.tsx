@@ -13,6 +13,7 @@ import { INFERENCE_API_INTRO_ID } from "@/lib/inference-docs/navigation-api.ts";
 import {
   INFERENCE_DOCS_CATALOG,
   INFERENCE_DOCS_SECTIONS,
+  isCommunityToolsPath,
   type InferenceDocsSlug,
 } from "@/lib/inference-docs/navigation.ts";
 
@@ -138,7 +139,18 @@ export function InferenceDocsNav() {
               <span {...stylex.props(docsStyles.refNavHeadingCount)}>{entries.length}</span>
             </div>
             {entries.map((entry) =>
-              entry.slug == null ? (
+              entry.href != null ? (
+                <Link
+                  key={entry.label}
+                  to={entry.href}
+                  {...stylex.props(
+                    docsStyles.refNavLink,
+                    isCommunityToolsPath(pathname) && docsStyles.refNavLinkActive,
+                  )}
+                >
+                  {entry.label}
+                </Link>
+              ) : entry.slug == null ? (
                 <Link
                   key={entry.label}
                   to="/docs/inference"

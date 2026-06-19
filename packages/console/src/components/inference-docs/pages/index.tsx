@@ -51,7 +51,11 @@ export function InferenceDocsOverviewPage({ baseUrl }: { baseUrl: string }) {
       <p {...stylex.props(docsStyles.prose)}>
         OpenCode, Cursor, and Claude Code each need slightly different setup. See the{" "}
         <InferenceDocLink slug="opencode">tool setup</InferenceDocLink> pages for step-by-step
-        configuration.
+        configuration. Community-maintained extensions are listed on the{" "}
+        <Link to="/docs/community-tools" {...stylex.props(docsStyles.proseLink)}>
+          community tools
+        </Link>{" "}
+        page.
       </p>
     </InferenceDocsOverview>
   );

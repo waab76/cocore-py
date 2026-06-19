@@ -74,6 +74,7 @@ import { Route as HeaderLayoutBlogSlugRouteImport } from './routes/_header-layou
 import { Route as HeaderLayoutAdminDisputesRouteImport } from './routes/_header-layout.admin.disputes'
 import { Route as DocsHeaderLayoutDocsLexiconsRouteImport } from './routes/_docs-header-layout.docs.lexicons'
 import { Route as DocsHeaderLayoutDocsInferenceRouteImport } from './routes/_docs-header-layout.docs.inference'
+import { Route as DocsHeaderLayoutDocsCommunityToolsRouteImport } from './routes/_docs-header-layout.docs.community-tools'
 import { Route as DocsHeaderLayoutDocsApiRouteImport } from './routes/_docs-header-layout.docs.api'
 import { Route as DocsHeaderLayoutDocsInferenceIndexRouteImport } from './routes/_docs-header-layout.docs.inference.index'
 import { Route as V1PrivateChatCompletionsRouteImport } from './routes/v1.private.chat.completions'
@@ -435,6 +436,12 @@ const DocsHeaderLayoutDocsInferenceRoute =
     path: '/docs/inference',
     getParentRoute: () => DocsHeaderLayoutRoute,
   } as any)
+const DocsHeaderLayoutDocsCommunityToolsRoute =
+  DocsHeaderLayoutDocsCommunityToolsRouteImport.update({
+    id: '/docs/community-tools',
+    path: '/docs/community-tools',
+    getParentRoute: () => DocsHeaderLayoutRoute,
+  } as any)
 const DocsHeaderLayoutDocsApiRoute = DocsHeaderLayoutDocsApiRouteImport.update({
   id: '/docs/api',
   path: '/docs/api',
@@ -543,6 +550,7 @@ export interface FileRoutesByFullPath {
   '/xrpc/dev.cocore.account.revokeApiKey': typeof XrpcDevDotcocoreDotaccountDotrevokeApiKeyRoute
   '/lexicons/': typeof LexiconsIndexRoute
   '/docs/api': typeof DocsHeaderLayoutDocsApiRoute
+  '/docs/community-tools': typeof DocsHeaderLayoutDocsCommunityToolsRoute
   '/docs/inference': typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
   '/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
   '/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
@@ -621,6 +629,7 @@ export interface FileRoutesByTo {
   '/xrpc/dev.cocore.account.revokeApiKey': typeof XrpcDevDotcocoreDotaccountDotrevokeApiKeyRoute
   '/lexicons': typeof LexiconsIndexRoute
   '/docs/api': typeof DocsHeaderLayoutDocsApiRoute
+  '/docs/community-tools': typeof DocsHeaderLayoutDocsCommunityToolsRoute
   '/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
   '/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
   '/blog/$slug': typeof HeaderLayoutBlogSlugRoute
@@ -701,6 +710,7 @@ export interface FileRoutesById {
   '/_header-layout/': typeof HeaderLayoutIndexRoute
   '/lexicons/': typeof LexiconsIndexRoute
   '/_docs-header-layout/docs/api': typeof DocsHeaderLayoutDocsApiRoute
+  '/_docs-header-layout/docs/community-tools': typeof DocsHeaderLayoutDocsCommunityToolsRoute
   '/_docs-header-layout/docs/inference': typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
   '/_docs-header-layout/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
   '/_header-layout/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
@@ -781,6 +791,7 @@ export interface FileRouteTypes {
     | '/xrpc/dev.cocore.account.revokeApiKey'
     | '/lexicons/'
     | '/docs/api'
+    | '/docs/community-tools'
     | '/docs/inference'
     | '/docs/lexicons'
     | '/admin/disputes'
@@ -859,6 +870,7 @@ export interface FileRouteTypes {
     | '/xrpc/dev.cocore.account.revokeApiKey'
     | '/lexicons'
     | '/docs/api'
+    | '/docs/community-tools'
     | '/docs/lexicons'
     | '/admin/disputes'
     | '/blog/$slug'
@@ -938,6 +950,7 @@ export interface FileRouteTypes {
     | '/_header-layout/'
     | '/lexicons/'
     | '/_docs-header-layout/docs/api'
+    | '/_docs-header-layout/docs/community-tools'
     | '/_docs-header-layout/docs/inference'
     | '/_docs-header-layout/docs/lexicons'
     | '/_header-layout/admin/disputes'
@@ -1487,6 +1500,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsHeaderLayoutDocsInferenceRouteImport
       parentRoute: typeof DocsHeaderLayoutRoute
     }
+    '/_docs-header-layout/docs/community-tools': {
+      id: '/_docs-header-layout/docs/community-tools'
+      path: '/docs/community-tools'
+      fullPath: '/docs/community-tools'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsCommunityToolsRouteImport
+      parentRoute: typeof DocsHeaderLayoutRoute
+    }
     '/_docs-header-layout/docs/api': {
       id: '/_docs-header-layout/docs/api'
       path: '/docs/api'
@@ -1604,6 +1624,7 @@ const DocsHeaderLayoutDocsInferenceRouteWithChildren =
 
 interface DocsHeaderLayoutRouteChildren {
   DocsHeaderLayoutDocsApiRoute: typeof DocsHeaderLayoutDocsApiRoute
+  DocsHeaderLayoutDocsCommunityToolsRoute: typeof DocsHeaderLayoutDocsCommunityToolsRoute
   DocsHeaderLayoutDocsInferenceRoute: typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
   DocsHeaderLayoutDocsLexiconsRoute: typeof DocsHeaderLayoutDocsLexiconsRoute
   DocsHeaderLayoutDocsIndexRoute: typeof DocsHeaderLayoutDocsIndexRoute
@@ -1611,6 +1632,8 @@ interface DocsHeaderLayoutRouteChildren {
 
 const DocsHeaderLayoutRouteChildren: DocsHeaderLayoutRouteChildren = {
   DocsHeaderLayoutDocsApiRoute: DocsHeaderLayoutDocsApiRoute,
+  DocsHeaderLayoutDocsCommunityToolsRoute:
+    DocsHeaderLayoutDocsCommunityToolsRoute,
   DocsHeaderLayoutDocsInferenceRoute:
     DocsHeaderLayoutDocsInferenceRouteWithChildren,
   DocsHeaderLayoutDocsLexiconsRoute: DocsHeaderLayoutDocsLexiconsRoute,

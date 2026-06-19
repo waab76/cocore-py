@@ -5,38 +5,41 @@ import { useCallback } from "react";
 
 import { DocsMobileJumpSelect } from "@/components/docs/docs-mobile-jump-select.tsx";
 import {
+  COMMUNITY_TOOLS_NAV_ID,
   INFERENCE_DOCS_CATALOG,
-  inferenceDocsHref,
   inferenceDocsJumpNavGroups,
+  isCommunityToolsPath,
   type InferenceDocsSlug,
 } from "@/lib/inference-docs/navigation.ts";
 
 const groups = inferenceDocsJumpNavGroups();
 const OVERVIEW_KEY = "overview";
 
-function activeSlug(pathname: string): InferenceDocsSlug | null {
+function activeNavId(pathname: string): string {
+  if (isCommunityToolsPath(pathname)) return COMMUNITY_TOOLS_NAV_ID;
+
   const prefix = "/docs/inference/";
-  if (pathname === "/docs/inference" || pathname === "/docs/inference/") return null;
-  if (!pathname.startsWith(prefix)) return null;
-  const slug = pathname.slice(prefix.length);
-  return slug as InferenceDocsSlug;
+  if (pathname === "/docs/inference" || pathname === "/docs/inference/") return OVERVIEW_KEY;
+  if (!pathname.startsWith(prefix)) return OVERVIEW_KEY;
+  return pathname.slice(prefix.length) as InferenceDocsSlug;
 }
 
 const selectGroups = groups.map((group) => ({
   label: group.label,
   options: group.options.map((option) => ({
-    id: option.slug ?? OVERVIEW_KEY,
+    id: option.id,
     label: option.label,
   })),
 }));
 
 export function InferenceDocsMobileNav() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const value = activeSlug(pathname) ?? OVERVIEW_KEY;
+  const value = activeNavId(pathname);
 
   const onValueChange = useCallback((id: string) => {
-    const slug = id === OVERVIEW_KEY ? null : (id as InferenceDocsSlug);
-    globalThis.location.assign(inferenceDocsHref(slug));
+    const option = groups.flatMap((group) => group.options).find((entry) => entry.id === id);
+    if (option == null) return;
+    globalThis.location.assign(option.href);
   }, []);
 
   return (
@@ -50,7 +53,17 @@ export function InferenceDocsMobileNav() {
 }
 
 export function inferenceDocsPageTitle(pathname: string): string {
-  const slug = activeSlug(pathname);
+  if (isCommunityToolsPath(pathname)) {
+    return INFERENCE_DOCS_CATALOG.find((entry) => entry.href != null)?.title ?? "Community tools";
+  }
+
+  const prefix = "/docs/inference/";
+  const slug =
+    pathname === "/docs/inference" || pathname === "/docs/inference/"
+      ? null
+      : pathname.startsWith(prefix)
+        ? (pathname.slice(prefix.length) as InferenceDocsSlug)
+        : null;
   const entry = INFERENCE_DOCS_CATALOG.find((item) => item.slug === slug);
   return entry?.title ?? "Inference API";
 }
