@@ -534,6 +534,7 @@ export function buildServer(store: Store, opts: BuildServerOptions = {}) {
       // already-serialized string and store the canonical JSON string.
       const data = typeof body.data === "string" ? body.data : JSON.stringify(body.data);
       accountStore.putOAuthSession(body.did, data);
+      console.error(`appview: stored OAuth session handoff for ${body.did}`);
       json(res, 200, { ok: true });
     };
   }

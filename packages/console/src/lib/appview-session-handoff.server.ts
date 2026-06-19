@@ -43,6 +43,7 @@ export async function handOffSessionToAppview(did: string): Promise<boolean> {
       console.warn(`[appview-handoff] AppView returned ${res.status} for ${did}`);
       return false;
     }
+    console.log(`[appview-handoff] pushed session for ${did} to AppView`);
     return true;
   } catch (e) {
     console.warn(`[appview-handoff] push failed for ${did}:`, (e as Error).message);
