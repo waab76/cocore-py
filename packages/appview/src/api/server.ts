@@ -544,9 +544,62 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       console.error(`appview: stored OAuth session handoff for ${body.did}`);
       json(res, 200, { ok: true });
     };
+
+    // Provisioning primitive: mint an API key for a DID. The console
+    // (which authenticates the browser via its cookie session) calls this
+    // with the user's DID to provision a key in the AppView's store. Gated
+    // on the shared secret — the same console<->AppView trust boundary as
+    // the session handoff.
+    routes["/internal/account/mint-key"] = async (req, res) => {
+      if (req.method !== "POST") {
+        json(res, 405, { error: "MethodNotAllowed" });
+        return;
+      }
+      const presented = req.headers["x-cocore-internal-secret"];
+      if (typeof presented !== "string" || !secretEquals(presented, secret)) {
+        json(res, 403, { error: "Forbidden" });
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      let body: { did?: unknown; name?: unknown };
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as typeof body;
+      } catch {
+        json(res, 400, { error: "InvalidRequest", message: "body must be JSON" });
+        return;
+      }
+      if (typeof body.did !== "string" || !body.did.startsWith("did:")) {
+        json(res, 400, { error: "InvalidRequest", message: "did required" });
+        return;
+      }
+      const name = typeof body.name === "string" && body.name.length > 0 ? body.name : "console";
+      const out = accountStore.createKey({ did: body.did, name });
+      json(res, 200, { key: out.key, secret: out.secret });
+    };
   }
 
+  // did:web DID document, so a requester's PDS can resolve this AppView's
+  // `#cocore_appview` service endpoint and proxy service-auth calls here.
+  const didDoc = opts.appviewDid?.startsWith("did:web:")
+    ? {
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        id: opts.appviewDid,
+        service: [
+          {
+            id: "#cocore_appview",
+            type: "CocoreAppView",
+            serviceEndpoint: `https://${opts.appviewDid.slice("did:web:".length)}`,
+          },
+        ],
+      }
+    : null;
+
   return async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> => {
+    if (didDoc && url.pathname === "/.well-known/did.json") {
+      json(res, 200, didDoc);
+      return true;
+    }
     // Liveness probe. Mirrors the bridge's /healthz so a deploy healthcheck
     // works whichever port it targets — and probing this one confirms the
     // read API itself (the part that went down) is serving.
