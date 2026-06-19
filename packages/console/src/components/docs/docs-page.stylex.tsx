@@ -82,27 +82,6 @@ export const docsStyles = stylex.create({
     flexShrink: 1,
     minWidth: 0,
   },
-  brandLink: {
-    // eslint-disable-next-line @stylexjs/valid-styles
-    textBoxEdge: "cap alphabetic",
-    // eslint-disable-next-line @stylexjs/valid-styles
-    textBoxTrim: "trim-both",
-    textDecoration: "none",
-    color: uiColor.text2,
-    fontFamily: fontFamily.title,
-    fontSize: fontSize.xl,
-    fontWeight: fontWeight.semibold,
-    letterSpacing: tracking.tight,
-    whiteSpace: "nowrap",
-  },
-  brandEm: {
-    // eslint-disable-next-line @stylexjs/valid-styles
-    textBoxEdge: "cap alphabetic",
-    // eslint-disable-next-line @stylexjs/valid-styles
-    textBoxTrim: "trim-both",
-    color: primaryColor.text2,
-    fontStyle: "italic",
-  },
   topbarTag: {
     // eslint-disable-next-line @stylexjs/valid-styles
     textBoxEdge: "cap alphabetic",
