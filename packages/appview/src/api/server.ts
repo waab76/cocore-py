@@ -483,11 +483,18 @@ export function buildServer(store: Store, opts: BuildServerOptions = {}) {
   // OAuth client is configured (private key / localhost) so it can
   // restore DPoP-bound sessions. Additive: absent otherwise.
   if (opts.accountStore && isOAuthConfigured()) {
-    const oauth = makeAppviewOAuth(opts.accountStore);
-    Object.assign(
-      routes,
-      pdsRoutes({ accounts: opts.accountStore, oauth, bridgeUrl: opts.bridgeUrl }),
-    );
+    try {
+      const oauth = makeAppviewOAuth(opts.accountStore);
+      Object.assign(
+        routes,
+        pdsRoutes({ accounts: opts.accountStore, oauth, bridgeUrl: opts.bridgeUrl }),
+      );
+      console.error("appview: /pds write endpoints enabled");
+    } catch (e) {
+      // A misconfigured OAuth client (e.g. bad ATPROTO_PRIVATE_KEY_JWK)
+      // must not take down the read API — disable /pds and keep serving.
+      console.error(`appview: /pds disabled — OAuth client init failed: ${(e as Error).message}`);
+    }
   }
 
   // OAuth session handoff: the console pushes a freshly minted session
