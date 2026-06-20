@@ -1,0 +1,73 @@
+# End-to-end stack smoke, gated behind a PR label.
+#
+# Boots the single-process `infra/services` stack (bridge + AppView indexer +
+# AppView read API + exchange) with the relay OFF, then runs `infra/smoke.ts`:
+# it publishes a real signed (paymentAuthorization, job, attestation, receipt)
+# tuple through the bridge, waits for the exchange to settle, and verifies the
+# receipt cryptographically via the AppView's verifyReceipt route. This is the
+# "does the whole stack actually move a job through to a verified, settled
+# receipt" check — heavier than the unit tests, so it's opt-in.
+#
+# Trigger: add the `smoke` label to a PR. The job runs on label-add and on
+# every subsequent push while the label is present (it no-ops on PRs without
+# it). Remove the label to stop running it.
+
+name: smoke
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stack-smoke:
+    # Only run when the PR carries the `smoke` label.
+    if: contains(github.event.pull_request.labels.*.name, 'smoke')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same pinned mise as ci.yml (provides node + aube per mise.toml).
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.6.6
+          cache: true
+
+      - name: aube install (workspaces)
+        run: aube install --frozen-lockfile
+
+      - name: Boot the services stack (relay off)
+        # RELAY off so the smoke never depends on the public firehose. All DBs
+        # default to in-memory. Backgrounded; the next step waits for healthz.
+        run: |
+          cd infra/services
+          COCORE_RELAY_URL=off \
+          COCORE_EXCHANGE_DID=did:web:exchange.local \
+            aube run start > /tmp/services.log 2>&1 &
+          echo "started services (pid $!)"
+
+      - name: Wait for /healthz
+        run: |
+          for i in $(seq 1 40); do
+            if curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
+              echo "services healthy after $((i*2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::services did not become healthy in 80s"
+          cat /tmp/services.log
+          exit 1
+
+      - name: Run stack smoke
+        run: node --experimental-strip-types infra/smoke.ts
+
+      - name: Services log on failure
+        if: failure()
+        run: cat /tmp/services.log
