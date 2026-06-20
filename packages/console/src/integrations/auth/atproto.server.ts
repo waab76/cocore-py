@@ -43,10 +43,31 @@ function getPrivateKey(): ClientAssertionPrivateJwk {
   return JSON.parse(keyJson) as ClientAssertionPrivateJwk;
 }
 
+/**
+ * Railway forks PR/preview environments from production and copies its
+ * variables, so an inherited CONSOLE_PUBLIC_URL points every preview at the
+ * prod origin. That's why OAuth login on a preview bounces back to prod: the
+ * client_id metadata / redirect_uris this client serves are baked from the
+ * base URL, so they advertise prod's callback and the PDS redirects there. In
+ * a non-production Railway environment, prefer that environment's own public
+ * domain so the OAuth client is self-consistent with the URL the user is on.
+ */
+function railwayPreviewBaseUrl(): string | undefined {
+  const env = process.env.RAILWAY_ENVIRONMENT_NAME;
+  const domain = process.env.RAILWAY_PUBLIC_DOMAIN;
+  if (domain && env && env !== "production") {
+    return `https://${domain}`;
+  }
+  return undefined;
+}
+
 /** Same precedence as kikbak: explicit auth URL, console public URL, localhost. */
 function getBaseUrl(): string {
   const url =
-    process.env.BETTER_AUTH_URL || process.env.ATPROTO_BASE_URL || process.env.CONSOLE_PUBLIC_URL;
+    railwayPreviewBaseUrl() ||
+    process.env.BETTER_AUTH_URL ||
+    process.env.ATPROTO_BASE_URL ||
+    process.env.CONSOLE_PUBLIC_URL;
   if (url) {
     return url.replace(/\/$/, "");
   }
