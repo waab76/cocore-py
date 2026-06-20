@@ -19,7 +19,7 @@ import { docsStyles } from "./docs-page.stylex";
 import { DocsRefShell } from "./docs-ref-shell";
 
 export function ApiDocsPage() {
-  const { fixtures, tagOptions, appviewBaseUrl, consoleBaseUrl, appviewDid } = useLoaderData({
+  const { fixtures, tagOptions, consoleBaseUrl, appviewDid } = useLoaderData({
     from: "/_docs-header-layout/docs/api",
   });
 
@@ -27,7 +27,6 @@ export function ApiDocsPage() {
     <ApiDocsPageProvider
       fixtures={fixtures}
       tagOptions={tagOptions}
-      appviewBaseUrl={appviewBaseUrl}
       consoleBaseUrl={consoleBaseUrl}
       appviewDid={appviewDid}
     >

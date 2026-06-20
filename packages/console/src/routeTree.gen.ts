@@ -20,6 +20,7 @@ import { Route as XrpcDevDotcocoreDotaccountDotrevokeApiKeyRouteImport } from '.
 import { Route as XrpcDevDotcocoreDotaccountDotlistApiKeysRouteImport } from './routes/xrpc.dev[.]cocore[.]account[.]listApiKeys'
 import { Route as XrpcDevDotcocoreDotaccountDotdeleteApiKeyRouteImport } from './routes/xrpc.dev[.]cocore[.]account[.]deleteApiKey'
 import { Route as XrpcDevDotcocoreDotaccountDotcreateApiKeyRouteImport } from './routes/xrpc.dev[.]cocore[.]account[.]createApiKey'
+import { Route as XrpcSplatRouteImport } from './routes/xrpc.$'
 import { Route as V1ModelsRouteImport } from './routes/v1.models'
 import { Route as LexiconsNsidRouteImport } from './routes/lexicons.$nsid'
 import { Route as ExchangeDidDotjsonRouteImport } from './routes/exchange.did[.]json'
@@ -148,6 +149,11 @@ const XrpcDevDotcocoreDotaccountDotcreateApiKeyRoute =
     path: '/xrpc/dev.cocore.account.createApiKey',
     getParentRoute: () => rootRouteImport,
   } as any)
+const XrpcSplatRoute = XrpcSplatRouteImport.update({
+  id: '/xrpc/$',
+  path: '/xrpc/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const V1ModelsRoute = V1ModelsRouteImport.update({
   id: '/v1/models',
   path: '/v1/models',
@@ -555,6 +561,7 @@ export interface FileRoutesByFullPath {
   '/exchange/did.json': typeof ExchangeDidDotjsonRoute
   '/lexicons/$nsid': typeof LexiconsNsidRoute
   '/v1/models': typeof V1ModelsRoute
+  '/xrpc/$': typeof XrpcSplatRoute
   '/xrpc/dev.cocore.account.createApiKey': typeof XrpcDevDotcocoreDotaccountDotcreateApiKeyRoute
   '/xrpc/dev.cocore.account.deleteApiKey': typeof XrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute
   '/xrpc/dev.cocore.account.listApiKeys': typeof XrpcDevDotcocoreDotaccountDotlistApiKeysRoute
@@ -636,6 +643,7 @@ export interface FileRoutesByTo {
   '/exchange/did.json': typeof ExchangeDidDotjsonRoute
   '/lexicons/$nsid': typeof LexiconsNsidRoute
   '/v1/models': typeof V1ModelsRoute
+  '/xrpc/$': typeof XrpcSplatRoute
   '/xrpc/dev.cocore.account.createApiKey': typeof XrpcDevDotcocoreDotaccountDotcreateApiKeyRoute
   '/xrpc/dev.cocore.account.deleteApiKey': typeof XrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute
   '/xrpc/dev.cocore.account.listApiKeys': typeof XrpcDevDotcocoreDotaccountDotlistApiKeysRoute
@@ -718,6 +726,7 @@ export interface FileRoutesById {
   '/exchange/did.json': typeof ExchangeDidDotjsonRoute
   '/lexicons/$nsid': typeof LexiconsNsidRoute
   '/v1/models': typeof V1ModelsRoute
+  '/xrpc/$': typeof XrpcSplatRoute
   '/xrpc/dev.cocore.account.createApiKey': typeof XrpcDevDotcocoreDotaccountDotcreateApiKeyRoute
   '/xrpc/dev.cocore.account.deleteApiKey': typeof XrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute
   '/xrpc/dev.cocore.account.listApiKeys': typeof XrpcDevDotcocoreDotaccountDotlistApiKeysRoute
@@ -802,6 +811,7 @@ export interface FileRouteTypes {
     | '/exchange/did.json'
     | '/lexicons/$nsid'
     | '/v1/models'
+    | '/xrpc/$'
     | '/xrpc/dev.cocore.account.createApiKey'
     | '/xrpc/dev.cocore.account.deleteApiKey'
     | '/xrpc/dev.cocore.account.listApiKeys'
@@ -883,6 +893,7 @@ export interface FileRouteTypes {
     | '/exchange/did.json'
     | '/lexicons/$nsid'
     | '/v1/models'
+    | '/xrpc/$'
     | '/xrpc/dev.cocore.account.createApiKey'
     | '/xrpc/dev.cocore.account.deleteApiKey'
     | '/xrpc/dev.cocore.account.listApiKeys'
@@ -964,6 +975,7 @@ export interface FileRouteTypes {
     | '/exchange/did.json'
     | '/lexicons/$nsid'
     | '/v1/models'
+    | '/xrpc/$'
     | '/xrpc/dev.cocore.account.createApiKey'
     | '/xrpc/dev.cocore.account.deleteApiKey'
     | '/xrpc/dev.cocore.account.listApiKeys'
@@ -1029,6 +1041,7 @@ export interface RootRouteChildren {
   ExchangeDidDotjsonRoute: typeof ExchangeDidDotjsonRoute
   LexiconsNsidRoute: typeof LexiconsNsidRoute
   V1ModelsRoute: typeof V1ModelsRoute
+  XrpcSplatRoute: typeof XrpcSplatRoute
   XrpcDevDotcocoreDotaccountDotcreateApiKeyRoute: typeof XrpcDevDotcocoreDotaccountDotcreateApiKeyRoute
   XrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute: typeof XrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute
   XrpcDevDotcocoreDotaccountDotlistApiKeysRoute: typeof XrpcDevDotcocoreDotaccountDotlistApiKeysRoute
@@ -1145,6 +1158,13 @@ declare module '@tanstack/react-router' {
       path: '/xrpc/dev.cocore.account.createApiKey'
       fullPath: '/xrpc/dev.cocore.account.createApiKey'
       preLoaderRoute: typeof XrpcDevDotcocoreDotaccountDotcreateApiKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/xrpc/$': {
+      id: '/xrpc/$'
+      path: '/xrpc/$'
+      fullPath: '/xrpc/$'
+      preLoaderRoute: typeof XrpcSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/v1/models': {
@@ -1764,6 +1784,7 @@ const rootRouteChildren: RootRouteChildren = {
   ExchangeDidDotjsonRoute: ExchangeDidDotjsonRoute,
   LexiconsNsidRoute: LexiconsNsidRoute,
   V1ModelsRoute: V1ModelsRoute,
+  XrpcSplatRoute: XrpcSplatRoute,
   XrpcDevDotcocoreDotaccountDotcreateApiKeyRoute:
     XrpcDevDotcocoreDotaccountDotcreateApiKeyRoute,
   XrpcDevDotcocoreDotaccountDotdeleteApiKeyRoute:

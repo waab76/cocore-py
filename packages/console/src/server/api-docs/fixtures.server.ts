@@ -84,10 +84,9 @@ export async function loadApiDocsFixturesAsync(): Promise<ApiDocsFixtures> {
 export type ApiDocsPageData = {
   fixtures: ApiDocsFixtures;
   tagOptions: Array<ApiDocsTagOption>;
-  /** Public origins resolved on the server so client-rendered curl examples
-   *  point at the real env (e.g. https://appview.cocore.dev) instead of the
-   *  browser-side localhost fallback. */
-  appviewBaseUrl: string;
+  /** Public console origin, resolved on the server. Curl examples target it
+   *  (the console reverse-proxies `/xrpc/*` to the AppView), so the internal
+   *  `COCORE_APPVIEW_URL` is never exposed to the browser. */
   consoleBaseUrl: string;
   /** AppView service DID, resolved on the server (COCORE_APPVIEW_DID in prod). */
   appviewDid: string;
@@ -109,12 +108,10 @@ function resolveAppviewDid(base: string): string {
  *  here — `loadApiDocsFixturesAsync` owns the per-viewer TTL cache. */
 export async function loadApiDocsPageData(): Promise<ApiDocsPageData> {
   const fixtures = await loadApiDocsFixturesAsync();
-  const appview = appviewBaseUrl();
   return {
     fixtures,
     tagOptions: [],
-    appviewBaseUrl: appview,
     consoleBaseUrl: consoleBaseUrlClient(),
-    appviewDid: resolveAppviewDid(appview),
+    appviewDid: resolveAppviewDid(appviewBaseUrl()),
   };
 }
