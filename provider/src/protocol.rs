@@ -26,6 +26,12 @@ pub enum AdvisorMessage {
     AttestationChallenge(AttestationChallenge),
     /// Provider → advisor: signed challenge response.
     AttestationResponse(AttestationResponse),
+    /// Provider → advisor (→ requester): per-request ephemeral session key for
+    /// the confidential tier. Minted fresh inside the measured engine and
+    /// SE-signed over the requester's nonce + the active attestation CID, so a
+    /// confidential requester can prove the key it seals to is controlled by
+    /// the attested enclave and was produced for THIS request (not replayed).
+    SessionKey(SessionKey),
     /// Advisor → provider: liveness probe. The provider answers `Pong`
     /// with the same nonce immediately from its serve loop, so a pong
     /// proves the request loop is pumping (stronger than a WS-level pong,
@@ -171,6 +177,32 @@ pub struct InferenceRequest {
     pub max_tokens_out: u32,
     pub ciphertext: Vec<u8>, // sealed plaintext prompt, base64-decoded by the wire layer
     pub session_id: String,
+    /// Confidential tier: the requester's fresh nonce. When present, the
+    /// provider mints a per-request ephemeral key and returns a `SessionKey`
+    /// signed over this nonce before serving. Additive — absent = best-effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    /// Confidential tier: CID of the attestation the requester verified, which
+    /// the provider's `SessionKey` signature binds to (so a key signed for a
+    /// different attestation can't be replayed). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation_cid: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionKey {
+    pub session_id: String,
+    /// base64 X25519 public key the requester seals the prompt to.
+    pub ephemeral_pub_key: String,
+    /// Echo of the requester's fresh nonce.
+    pub nonce: String,
+    /// CID of the attestation this session is bound to.
+    pub attestation_cid: String,
+    /// Secure Enclave P-256 signature (DER) over the canonical bytes of
+    /// `{attestationCid, ephemeralPubKey, nonce}` — the exact form the SDK's
+    /// `sessionKeyMessage` reconstructs and verifies against
+    /// `attestation.publicKey`.
+    pub signature: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

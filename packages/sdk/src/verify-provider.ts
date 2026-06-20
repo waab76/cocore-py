@@ -33,7 +33,7 @@
 
 import { canonicalBytes } from "./canonical.ts";
 import { type MdaResult, verifyChain, verifyChainAgainst } from "./mda.ts";
-import { verifyP256, SignatureVerifyError } from "./p256.ts";
+import { verifyAttestationSignature, verifyP256, SignatureVerifyError } from "./p256.ts";
 import type { AttestationRecord, Tier } from "./types.ts";
 import type { Finding, Severity, ValidationReport } from "./validate.ts";
 
@@ -79,8 +79,13 @@ export interface VerifyProviderOptions {
   /** The fresh nonce the caller generated for this request and sent to the
    *  provider. The SessionKey MUST echo it. */
   nonce?: string;
-  /** The enclave-signed ephemeral key returned for this request. */
+  /** The enclave-signed ephemeral key returned for this request (optional;
+   *  the stronger advisor-trustless freshness mode). */
   sessionKey?: SessionKey;
+  /** Require a per-request enclave-signed `SessionKey` (advisor-trustless
+   *  freshness). Default false: liveness is vouched by the advisor's standing
+   *  5-min challenge-response and the attestation's own expiry window. */
+  requireSessionKey?: boolean;
   /** Clock seam for tests. */
   now?: () => Date;
   /** ADVANCED / TEST ONLY. Verify the MDA chain against this DER trust anchor
@@ -147,6 +152,31 @@ export async function verifyProviderForSeal(
   const block = (code: string, message: string): void => {
     blockers.push({ code, message });
   };
+
+  // --- 0. The attestation must be self-signed by its own publicKey. ---
+  // This authenticates every posture field below (cdHash, getTaskAllow,
+  // encryptionPubKey, …). Without it those are unsigned claims: the MDA
+  // binding only proves `publicKey` is the device key and the session-key
+  // signature only covers the ephemeral key — neither covers posture. Run it
+  // first; a forged/tampered attestation fails here before anything else.
+  {
+    let selfOk = false;
+    try {
+      selfOk = await verifyAttestationSignature(
+        attestation as unknown as { selfSignature?: string } & Record<string, unknown>,
+        attestation.publicKey,
+      );
+    } catch (e) {
+      if (!(e instanceof SignatureVerifyError)) throw e;
+      selfOk = false;
+    }
+    if (!selfOk) {
+      block(
+        "attestation-signature-invalid",
+        "attestation.selfSignature did not verify against attestation.publicKey — posture fields are unauthenticated",
+      );
+    }
+  }
 
   // --- 1+2. MDA chain present, verifies, and is bound to the signing key. ---
   let mda: MdaResult | undefined;
@@ -248,11 +278,21 @@ export async function verifyProviderForSeal(
     block("attestation-expired", "attestation is outside its [attestedAt, expiresAt] window");
   }
 
-  // --- 7. Fresh, enclave-signed session key bound to nonce + attestationCid. ---
+  // --- 7. Freshness + the key to seal to. ---
+  // The confidential seal target is the attestation's `encryptionPubKey`,
+  // which the selfSignature gate (#0) just authenticated as enclave-bound.
+  // Forward secrecy comes from the requester's per-request ephemeral SENDER
+  // key (see `sealToProvider`). Liveness has two modes:
+  //   * Advisor-vouched (default): rely on the advisor's standing 5-min
+  //     challenge-response — it only advertises providers it has freshly
+  //     challenged — plus the attestation's own [attestedAt, expiresAt].
+  //   * Advisor-trustless (opt `requireSessionKey`): demand a per-request
+  //     enclave-signed `SessionKey` over the requester's nonce, so the
+  //     requester proves liveness itself without trusting the advisor.
+  // When a SessionKey is supplied it is always verified, and (being
+  // enclave-signed) its `ephemeralPubKey` becomes the seal target.
   const sk = opts.sessionKey;
-  if (!sk) {
-    block("no-session-key", "no enclave-signed session key supplied");
-  } else {
+  if (sk) {
     if (!opts.nonce || sk.nonce !== opts.nonce) {
       block("session-nonce-mismatch", "session key nonce does not match the request nonce");
     }
@@ -272,6 +312,13 @@ export async function verifyProviderForSeal(
     if (!sigOk) {
       block("session-signature-invalid", "session key signature did not verify against attestation.publicKey");
     }
+  } else if (opts.requireSessionKey) {
+    block(
+      "no-session-key",
+      "advisor-trustless freshness was required but no enclave-signed session key was supplied",
+    );
+  } else if (!attestation.encryptionPubKey) {
+    block("no-encryption-key", "attestation has no encryptionPubKey to seal to");
   }
 
   // --- Resolve tier + findings. ---
@@ -285,7 +332,9 @@ export async function verifyProviderForSeal(
     ok: confidential || !requireConfidential,
     findings,
   };
-  if (confidential && sk) result.sealToKey = sk.ephemeralPubKey;
+  // Seal to the enclave-signed ephemeral key when present, else the
+  // selfSignature-authenticated long-lived encryptionPubKey.
+  if (confidential) result.sealToKey = sk ? sk.ephemeralPubKey : attestation.encryptionPubKey;
   return result;
 }
 

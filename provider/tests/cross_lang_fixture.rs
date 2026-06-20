@@ -170,6 +170,144 @@ fn writes_mda_cross_lang_fixture() {
     eprintln!("wrote {}", path.display());
 }
 
+/// Emit a COMPLETE confidential-tier attestation fixture for the TS
+/// `verifyProviderForSeal` test. A single P-256 key (imported from the rcgen
+/// leaf key, so the MDA leaf certifies it) is used as the attestation
+/// `publicKey`, the `selfSignature` signer, AND the session-key signer — so
+/// the TS verifier exercises every gate end-to-end and returns
+/// `attested-confidential`. This is the definitive cross-language proof that
+/// the Rust producer's signed bytes + the SDK's verifier agree.
+#[test]
+fn writes_confidential_attestation_fixture() {
+    use base64::engine::general_purpose::STANDARD as B64e;
+    use cocore_provider::canonical::to_canonical_bytes;
+    use cocore_provider::crypto::ProviderKeypair;
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::pkcs8::DecodePrivateKey;
+
+    let now = time::OffsetDateTime::now_utc();
+    let nb = now - time::Duration::HOUR;
+    let na = now + time::Duration::days(365 * 2);
+
+    // Synthetic root.
+    let mut root_params = CertificateParams::new(vec!["cocore Conf Test Root".into()]).unwrap();
+    let mut root_dn = DistinguishedName::new();
+    root_dn.push(DnType::CommonName, "cocore Conf Test Root");
+    root_params.distinguished_name = root_dn;
+    root_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+    root_params.not_before = nb;
+    root_params.not_after = na;
+    let root_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+    let root_cert = root_params.self_signed(&root_key).unwrap();
+
+    // Leaf — its key becomes the attestation/signing key. Import the rcgen
+    // private key into p256 so the SAME key signs the attestation + session.
+    let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+    let leaf_priv_pem = leaf_key.serialize_pem();
+    let secret = p256::SecretKey::from_pkcs8_pem(&leaf_priv_pem).unwrap();
+    let signing_key = SigningKey::from(&secret);
+    let pub_point = secret.public_key().to_encoded_point(false);
+    let public_key_b64 = B64e.encode(&pub_point.as_bytes()[1..]); // drop 0x04 → 64 bytes
+
+    let mut leaf_params = CertificateParams::new(vec!["conf-device".into()]).unwrap();
+    let mut leaf_dn = DistinguishedName::new();
+    leaf_dn.push(DnType::CommonName, "conf-device");
+    leaf_dn.push(DnType::CustomDnType(vec![2, 5, 4, 5]), "C02CONFID");
+    leaf_params.distinguished_name = leaf_dn;
+    leaf_params.is_ca = IsCa::NoCa;
+    leaf_params.not_before = nb;
+    leaf_params.not_after = na;
+    let mut sip = CustomExtension::from_oid_content(
+        &[1, 2, 840, 113635, 100, 8, 13, 1],
+        vec![0x01, 0x01, 0xff],
+    );
+    sip.set_criticality(false);
+    leaf_params.custom_extensions.push(sip);
+    let leaf_cert = leaf_params
+        .signed_by(&leaf_key, &root_cert, &root_key)
+        .unwrap();
+    let root_der = root_cert.der().to_vec();
+    let leaf_der = leaf_cert.der().to_vec();
+
+    // Encryption key the requester seals to (best-effort/no-session path).
+    let enc = ProviderKeypair::generate();
+    let cd_hash = "ab".repeat(20); // 40 hex
+    let metallib_hash = "cd".repeat(32); // 64 hex
+    let attested_at = chrono::Utc::now();
+    let expires_at = attested_at + chrono::Duration::hours(24);
+
+    // Build the attestation body (sorted/canonical-independent) — every field a
+    // confidential verifier checks, set to the strong posture.
+    let mut body = json!({
+        "publicKey": public_key_b64,
+        "encryptionPubKey": enc.public_key_b64(),
+        "chipName": "Apple M4 Max",
+        "hardwareModel": "Mac16,1",
+        "serialNumberHash": "0".repeat(64),
+        "osVersion": "macOS 26.0",
+        "binaryHash": "1".repeat(64),
+        "cdHash": cd_hash,
+        "teamId": "4L45P7CP9M",
+        "hardenedRuntime": true,
+        "libraryValidation": true,
+        "getTaskAllow": false,
+        "metallibHash": metallib_hash,
+        "inProcessBackend": true,
+        "antiDebug": true,
+        "coreDumpsDisabled": true,
+        "envScrubbed": true,
+        "sipEnabled": true,
+        "secureBootEnabled": true,
+        "secureEnclaveAvailable": true,
+        "authenticatedRootEnabled": true,
+        "rdmaDisabled": true,
+        "mdaCertChain": [B64e.encode(&leaf_der)],
+        "tier": "attested-confidential",
+        "attestedAt": attested_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "expiresAt": expires_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    });
+    let canonical = to_canonical_bytes(&body).unwrap();
+    let self_sig: Signature = signing_key.sign(&canonical);
+    body.as_object_mut().unwrap().insert(
+        "selfSignature".into(),
+        json!(B64e.encode(self_sig.to_der().as_bytes())),
+    );
+
+    // Session key (advisor-trustless freshness mode): SE-sign canonical
+    // {attestationCid, ephemeralPubKey, nonce} with the SAME key.
+    let ephemeral = ProviderKeypair::generate();
+    let nonce = "f".repeat(32);
+    let attestation_cid = "bafyconfattestationcid";
+    let sk_msg = to_canonical_bytes(&json!({
+        "attestationCid": attestation_cid,
+        "ephemeralPubKey": ephemeral.public_key_b64(),
+        "nonce": nonce,
+    }))
+    .unwrap();
+    let sk_sig: Signature = signing_key.sign(&sk_msg);
+
+    let fixture = json!({
+        "attestation": body,
+        "rootDerB64": B64e.encode(&root_der),
+        "knownGoodCdHash": "ab".repeat(20),
+        "knownGoodMetallibHash": "cd".repeat(32),
+        "osFloor": "14.0.0",
+        "attestationCid": attestation_cid,
+        "nonce": nonce,
+        "sessionKey": {
+            "ephemeralPubKey": ephemeral.public_key_b64(),
+            "nonce": nonce,
+            "attestationCid": attestation_cid,
+            "signature": B64e.encode(sk_sig.to_der().as_bytes()),
+        },
+    });
+    let path = workspace_target_dir().join("confidential-attestation-fixture.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&fixture).unwrap())
+        .unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
+    eprintln!("wrote {}", path.display());
+}
+
 fn workspace_target_dir() -> std::path::PathBuf {
     // CARGO_TARGET_DIR or <workspace>/target. We want a stable path
     // under the workspace root so the TS test can find the fixture

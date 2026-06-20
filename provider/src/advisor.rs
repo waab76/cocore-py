@@ -28,7 +28,7 @@ use crate::pds::PdsClient;
 use crate::pricing;
 use crate::protocol::{
     AdvisorMessage, AttestationChallenge, AttestationResponse, HealthStanding, Heartbeat,
-    InferenceChunk, InferenceComplete, InferenceRequest, Pong, Register,
+    InferenceChunk, InferenceComplete, InferenceRequest, Pong, Register, SessionKey,
 };
 use crate::receipt::{self, Money, ReceiptInputs, StrongRef};
 use crate::secure_enclave::SigningIdentity;
@@ -696,7 +696,10 @@ async fn handle_inbound(text: &str, ctx: &ServeContext<'_>) -> Result<Vec<Adviso
         | AdvisorMessage::HealthNotice(_)
         | AdvisorMessage::ControlChanged(_)
         | AdvisorMessage::RecoverRequest(_)
-        | AdvisorMessage::RecoverResult(_) => {
+        | AdvisorMessage::RecoverResult(_)
+        // SessionKey is a frame the provider EMITS for the confidential tier,
+        // never one it receives.
+        | AdvisorMessage::SessionKey(_) => {
             tracing::debug!("advisor sent a message we don't act on");
             Ok(Vec::new())
         }
@@ -1224,6 +1227,44 @@ pub fn build_challenge_response(
     })
 }
 
+/// Mint a per-request ephemeral X25519 key and SE-sign it for the confidential
+/// tier (WS-EPHEMERAL). The signature covers the canonical bytes of
+/// `{attestationCid, ephemeralPubKey, nonce}` — byte-identical to the SDK's
+/// `sessionKeyMessage` — so a confidential requester can verify (against
+/// `attestation.publicKey`) that the key it seals to is controlled by the
+/// attested enclave and was produced fresh for THIS request. Returns the
+/// ephemeral keypair (which the serve loop uses to `open_from`/`seal_to`) and
+/// the wire frame to relay to the requester.
+pub fn build_session_key(
+    signer: &dyn SigningIdentity,
+    session_id: &str,
+    attestation_cid: &str,
+    nonce: &str,
+) -> Result<(ProviderKeypair, SessionKey)> {
+    let ephemeral = ProviderKeypair::generate();
+    let ephemeral_pub = ephemeral.public_key_b64();
+    let payload = json!({
+        "attestationCid": attestation_cid,
+        "ephemeralPubKey": ephemeral_pub,
+        "nonce": nonce,
+    });
+    let canonical = to_canonical_bytes(&payload)
+        .map_err(|e| ProviderError::Advisor(format!("canonical: {e}")))?;
+    let sig = signer
+        .sign(&canonical)
+        .map_err(|e| ProviderError::Advisor(format!("sign: {e}")))?;
+    Ok((
+        ephemeral,
+        SessionKey {
+            session_id: session_id.into(),
+            ephemeral_pub_key: ephemeral_pub,
+            nonce: nonce.into(),
+            attestation_cid: attestation_cid.into(),
+            signature: sig,
+        },
+    ))
+}
+
 /// Best-effort current SIP status. On non-macOS this is always
 /// `true` because there's no equivalent kill-switch; on macOS we
 /// optimistically return `true` because if SIP weren't enabled the
@@ -1339,6 +1380,40 @@ mod tests {
     }
 
     #[test]
+    fn session_key_signature_verifies_and_binds_inputs() {
+        // WS-EPHEMERAL: the SE signature over {attestationCid, ephemeralPubKey,
+        // nonce} must verify against the signer's public key over the SAME
+        // canonical bytes the SDK's `sessionKeyMessage` reconstructs.
+        let signer = load_or_create_identity().unwrap();
+        let (eph, sk) =
+            build_session_key(&*signer, "sess-1", "bafycid-xyz", "noncedeadbeef").unwrap();
+
+        assert_eq!(sk.session_id, "sess-1");
+        assert_eq!(sk.attestation_cid, "bafycid-xyz");
+        assert_eq!(sk.nonce, "noncedeadbeef");
+        assert_eq!(sk.ephemeral_pub_key, eph.public_key_b64());
+        // ephemeral pub is a 32-byte X25519 key.
+        assert_eq!(B64.decode(&sk.ephemeral_pub_key).unwrap().len(), 32);
+
+        let canonical = to_canonical_bytes(&json!({
+            "attestationCid": sk.attestation_cid,
+            "ephemeralPubKey": sk.ephemeral_pub_key,
+            "nonce": sk.nonce,
+        }))
+        .unwrap();
+
+        let pub_raw = B64.decode(signer.public_key_b64()).unwrap();
+        let mut uncompressed = [0u8; 65];
+        uncompressed[0] = 0x04;
+        uncompressed[1..].copy_from_slice(&pub_raw);
+        let point = EncodedPoint::from_bytes(uncompressed).unwrap();
+        let vk = VerifyingKey::from_encoded_point(&point).unwrap();
+        let sig = Signature::from_der(&sk.signature).unwrap();
+        vk.verify(&canonical, &sig)
+            .expect("session key signature must verify");
+    }
+
+    #[test]
     fn challenge_response_echoes_nonce_and_timestamp() {
         let signer = load_or_create_identity().unwrap();
         let ts = chrono::Utc::now();
@@ -1433,6 +1508,8 @@ mod tests {
             max_tokens_out: 16,
             ciphertext: ct,
             session_id: "session-1".into(),
+            nonce: None,
+            attestation_cid: None,
         };
         let replies = handle_inference_request(req, &cx).await;
         let chunks: Vec<&InferenceChunk> = replies
@@ -1484,6 +1561,8 @@ mod tests {
             // Garbage bytes — won't decrypt.
             ciphertext: vec![0u8; 64],
             session_id: "bad".into(),
+            nonce: None,
+            attestation_cid: None,
         };
         let replies = handle_inference_request(req, &cx).await;
         assert!(replies.is_empty());
@@ -1518,6 +1597,8 @@ mod tests {
             max_tokens_out: 4,
             ciphertext: ct,
             session_id: "publish-fails".into(),
+            nonce: None,
+            attestation_cid: None,
         };
         let replies = handle_inference_request(req, &cx).await;
         match replies.last() {

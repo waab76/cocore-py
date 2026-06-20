@@ -69,6 +69,30 @@ export async function verifyReceiptSignature(
   }
 }
 
+/** Verify an attestation record's `selfSignature` against its own
+ *  `publicKey`. This is what authenticates every posture field — `cdHash`,
+ *  `getTaskAllow`, `hardenedRuntime`, `encryptionPubKey`, … — as having been
+ *  signed by the enclave key, so a verifier MUST run this before trusting any
+ *  of them. (The MDA binding only proves `publicKey` is the device's key; the
+ *  session-key signature only covers the ephemeral key. Neither covers
+ *  posture.) Strips `selfSignature` (and any `$type` lexicon framing),
+ *  canonicalises the rest, and runs WebCrypto. */
+export async function verifyAttestationSignature(
+  attestation: { selfSignature?: string } & Record<string, unknown>,
+  publicKeyB64: string,
+): Promise<boolean> {
+  const sig = attestation.selfSignature;
+  if (!sig) return false;
+  const { selfSignature: _omit, $type: _type, ...signed } = attestation as Record<string, unknown>;
+  const message = new TextEncoder().encode(canonicalize(signed));
+  try {
+    return await verifyP256(publicKeyB64, sig, message);
+  } catch (e) {
+    if (e instanceof SignatureVerifyError) return false;
+    throw e;
+  }
+}
+
 // ---- internals -------------------------------------------------------
 
 function decodeBase64(b64: string): Uint8Array {
