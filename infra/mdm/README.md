@@ -114,6 +114,57 @@ real blockers — resolve these on the next dedicated deploy pass:
    Until then, drive the CLI with `railway link --project <id> --environment <env>
    --service <name>` (all three) in a single shell, then bare subcommands.
 
+## ✅ PROVEN END-TO-END (2026-06-20) — real Apple hardware attestation
+
+The full chain ran successfully on a real Apple-silicon Mac (M1, macOS 26.4.1,
+serial `H2WHW38LQ6NV`):
+
+1. **Enroll** — installed `enroll.mobileconfig`; NanoMDM logged `Authenticate
+   serial_number=H2WHW38LQ6NV` + `cert associated` + `TokenUpdate`.
+2. **Push** — `InstallProfile` (the attestation profile) enqueued + APNs-pushed.
+3. **Attest** — the Mac generated a hardware-bound SEP key + Apple attestation and
+   ran ACME `device-attest-01`; step-ca validated it against Apple's attestation CA
+   → **`challenge device-attest-01 status=valid`** (the attestation statement carried
+   the real hardware ids `["00008103-001869192E20801E" (UDID), "H2WHW38LQ6NV"
+   (serial)]`).
+4. **Issue** — finalize succeeded, step-ca issued the attestation cert; the device
+   reported `status=Acknowledged`; the profile shows installed under "Device
+   (Managed)".
+
+**Gotchas that each cost a full attempt (fix ALL of them):**
+- **PKCS12 identity MUST be `openssl pkcs12 -legacy`.** OpenSSL 3's default p12
+  uses a SHA-256 MAC that Apple's keychain can't parse → the install fails with the
+  misleading *"The certificate could not be verified (authentication error)"*
+  (NanoMDM never even gets contacted). Verify with `security import test.p12` →
+  "1 identity imported" before pushing to a device.
+- **The attestation profile is PER-DEVICE.** `ClientIdentifier` (ACME
+  permanent-identifier) **and** the `Subject` CN must BOTH equal the device's
+  hardware **serial** (or UDID). A literal id fails the challenge
+  (`badAttestationStatement … doesn't match any of the attested hardware
+  identifiers`); a mismatched CN fails finalize (`badCSR … CSR Subject Common Name
+  does not match identifiers`). Template `__DEVICE_SERIAL__` in
+  `profiles/cocore-attestation.mobileconfig` per enrollment (serial comes from the
+  NanoMDM `Authenticate` check-in).
+- **Least-privilege `AccessRights`.** Use `3` (install + inspect configuration
+  profiles) — NOT the all-rights `8191`. With `8191` the install dialog scares the
+  user with "Erase all data / Lock screen / Change settings / App management"; with
+  `3` it shows only the two config-profile rights we actually use to push the
+  attestation profile.
+- **NanoMDM push cert is ephemeral** (file storage in the container) — it vanishes
+  on every restart (`getting …pem: key not found`). Re-upload before pushing:
+  `cat apns_push.pem push.key | curl -T - -u nanomdm:<key> https://<host>/v1/pushcert`.
+- **Recover a wedged install UI:** if System Settings hangs on "Installing
+  profile…", the system itself is usually fine (`profiles list` shows nothing) —
+  it's the settings extension; `kill <ProfilesSettingsExt pid>` and reopen.
+
+Enrollment ID for this Mac: `376AF848-8EC9-5336-AB51-0801857F726D`.
+
+Remaining for full cocore integration: have step-ca export the Apple attestation
+**x5c chain** to the agent (mda::verify_chain), embed it in the
+`dev.cocore.compute.attestation` record, and resolve the leaf-key==signing-key vs
+freshness-code binding (see "The binding decision" above). The attestation itself
+is now proven; this is wiring.
+
 ## LIVE DEPLOYMENT STATE (2026-06-20) — step-ca is UP
 
 `cocore-step-ca` is deployed + serving in co/core **production**. The hard part

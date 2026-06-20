@@ -19,7 +19,14 @@
       <key>PayloadDisplayName</key><string>cocore Device Attestation (ACME)</string>
       <!-- step-ca ACME directory (live: co/core step-ca behind a Railway TCP proxy). -->
       <key>DirectoryURL</key><string>https://reseau.proxy.rlwy.net:43462/acme/cocore-attest/directory</string>
-      <key>ClientIdentifier</key><string>cocore-provider</string>
+      <!-- PER-DEVICE: ClientIdentifier (the ACME permanent-identifier) AND the
+           Subject CN below MUST both equal the device's hardware serial (or UDID).
+           step-ca matches the order's permanent-identifier and the CSR Subject CN
+           against the hardware identifiers inside Apple's attestation statement;
+           a literal like "cocore-provider" fails with badAttestationStatement
+           ("doesn't match any of the attested hardware identifiers"). The MDM
+           templates this per enrollment — see infra/mdm/README.md. -->
+      <key>ClientIdentifier</key><string>__DEVICE_SERIAL__</string>
       <!-- Hardware-bound P-384 SEP key + Apple attestation. -->
       <key>KeyType</key><string>ECSECPrimeRandom</string>
       <key>KeySize</key><integer>384</integer>
@@ -30,7 +37,7 @@
       <key>UsageFlags</key><integer>5</integer>
       <key>Subject</key>
       <array>
-        <array><array><string>CN</string><string>cocore-provider-attestation</string></array></array>
+        <array><array><string>CN</string><string>__DEVICE_SERIAL__</string></array></array>
         <array><array><string>O</string><string>Graze Social PBC</string></array></array>
       </array>
     </dict>
