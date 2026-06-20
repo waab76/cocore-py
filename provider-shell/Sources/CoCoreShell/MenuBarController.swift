@@ -213,6 +213,7 @@ final class MenuBarController {
         // up to date, a routine "Check for updates…" (also in the Help tab).
         addUpdateItems(to: menu)
         menu.addItem(.separator())
+        menu.addItem(action(title: "Enable Secure Mode…", #selector(openSecureModeWizard)))
         menu.addItem(action(title: "Open co/core…", #selector(openMainWindow)))
         if let err = state.lastError, !err.isEmpty {
             // Catch-all for a surfaced error (e.g. a failed sign-in). Clip it
@@ -498,6 +499,17 @@ final class MenuBarController {
         onUninstall: { [weak self] in self?.confirmUninstall() }
     )
     @objc private func openMainWindow() { mainWindow.show() }
+
+    /// The guided (manual) Secure Mode hardening wizard — MDM enrollment +
+    /// step-ca attestation chain, then a recommended-models pin. Additive and
+    /// best-effort: nothing here gates serving.
+    private lazy var secureModeWizard: SecureModeWizardController = SecureModeWizardController(
+        state: state,
+        supervisor: supervisor,
+        updater: updater,
+        modelManager: modelManager
+    )
+    @objc private func openSecureModeWizard() { secureModeWizard.show() }
 
     private lazy var welcomeWindow: WelcomeWindowController = {
         let c = WelcomeWindowController(state: state, supervisor: supervisor)

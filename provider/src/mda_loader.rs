@@ -19,7 +19,7 @@
 //!      into the query string). At each refresh we `curl` it; the
 //!      response is either a raw PEM chain or JSON
 //!      `{"chain": ["<pem>", …] | null}` (the shape the console's
-//!      `/agent/mdm/attestation-chain` endpoint returns once step-ca
+//!      `/api/agent/mdm/attestation-chain` endpoint returns once step-ca
 //!      has captured the device's Apple attestation). A `null`/absent
 //!      chain is "not captured yet" → empty, not an error.
 //!

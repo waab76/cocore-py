@@ -49,18 +49,46 @@ final class ModelManager: ObservableObject {
     init(supervisor: AgentSupervisor? = nil) { self.supervisor = supervisor }
     private var appManaged: Bool { supervisor.map { !$0.isLaunchAgentManaged } ?? false }
 
+    /// A quick-add catalog entry. `minRamGB` floors mirror the agent's
+    /// `pricing::min_ram_gb`; `recommended` mirrors `pricing::RATES`'s
+    /// `recommended` flag (the latest-&-greatest rotation we surface first).
+    struct CatalogEntry {
+        let nsid: String
+        let label: String
+        let minRamGB: Int
+        let recommended: Bool
+        let blurb: String
+    }
+
     /// Curated quick-add catalog. `minRamGB` floors mirror the agent's
-    /// `pricing::pickable_for_machine`. These are suggestions, not an
-    /// allowlist — any MLX-format HuggingFace `org/model` NSID works via
-    /// the custom field.
-    static let catalog: [(nsid: String, label: String, minRamGB: Int)] = [
-        ("mlx-community/Qwen2.5-0.5B-Instruct-4bit", "Qwen 2.5 0.5B", 4),
-        ("mlx-community/Qwen2.5-3B-Instruct-4bit", "Qwen 2.5 3B", 8),
-        ("mlx-community/gemma-3-4b-it-qat-4bit", "Gemma 3 4B", 8),
-        ("mlx-community/Qwen2.5-7B-Instruct-4bit", "Qwen 2.5 7B", 16),
-        ("mlx-community/Qwen2.5-32B-Instruct-4bit", "Qwen 2.5 32B", 32),
-        ("mlx-community/Llama-3.3-70B-Instruct-4bit", "Llama 3.3 70B", 64),
+    /// `pricing::min_ram_gb`. These are suggestions, not an allowlist — any
+    /// MLX-format HuggingFace `org/model` NSID works via the custom field.
+    /// The `recommended` set is the current latest-&-greatest rotation
+    /// (mirrors the Rust `RATES` `recommended: true` entries); the rest are
+    /// kept as legacy choices. This is the OFFLINE fallback for the live
+    /// `/v1/recommended-models` fetch.
+    static let catalog: [CatalogEntry] = [
+        // Recommended rotation (latest & greatest) — mirrors Rust RATES.
+        CatalogEntry(nsid: "mlx-community/Qwen3.5-0.8B-MLX-4bit", label: "Qwen 3.5 0.8B", minRamGB: 4, recommended: true, blurb: "Tiny & fast — fits almost any Mac."),
+        CatalogEntry(nsid: "mlx-community/Qwen3.5-2B-MLX-4bit", label: "Qwen 3.5 2B", minRamGB: 6, recommended: true, blurb: "Small, snappy general chat model."),
+        CatalogEntry(nsid: "mlx-community/Qwen3.5-4B-MLX-4bit", label: "Qwen 3.5 4B", minRamGB: 8, recommended: true, blurb: "Solid all-rounder for everyday work."),
+        CatalogEntry(nsid: "mlx-community/gemma-4-e4b-it-4bit", label: "Gemma 4 E4B", minRamGB: 8, recommended: true, blurb: "Google's compact instruct model."),
+        CatalogEntry(nsid: "mlx-community/Qwen3.5-9B-MLX-4bit", label: "Qwen 3.5 9B", minRamGB: 16, recommended: true, blurb: "Strong mid-size reasoning."),
+        CatalogEntry(nsid: "mlx-community/Qwen3.6-27B-4bit", label: "Qwen 3.6 27B", minRamGB: 24, recommended: true, blurb: "High-quality dense model."),
+        CatalogEntry(nsid: "mlx-community/Qwen3.6-35B-A3B-4bit", label: "Qwen 3.6 35B A3B", minRamGB: 32, recommended: true, blurb: "MoE — big quality at modest active cost."),
+        CatalogEntry(nsid: "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit", label: "Llama 4 Scout 17B", minRamGB: 64, recommended: true, blurb: "Meta's mixture-of-experts flagship."),
+        CatalogEntry(nsid: "mlx-community/Qwen3.5-122B-A10B-4bit", label: "Qwen 3.5 122B A10B", minRamGB: 96, recommended: true, blurb: "Frontier-class MoE for big rigs."),
+        // Legacy choices — still serviceable, no longer the front-runners.
+        CatalogEntry(nsid: "mlx-community/Qwen2.5-0.5B-Instruct-4bit", label: "Qwen 2.5 0.5B", minRamGB: 4, recommended: false, blurb: "Legacy tiny model."),
+        CatalogEntry(nsid: "mlx-community/Qwen2.5-3B-Instruct-4bit", label: "Qwen 2.5 3B", minRamGB: 8, recommended: false, blurb: "Legacy small model."),
+        CatalogEntry(nsid: "mlx-community/gemma-3-4b-it-qat-4bit", label: "Gemma 3 4B", minRamGB: 8, recommended: false, blurb: "Legacy Gemma instruct model."),
+        CatalogEntry(nsid: "mlx-community/Qwen2.5-7B-Instruct-4bit", label: "Qwen 2.5 7B", minRamGB: 16, recommended: false, blurb: "Legacy mid-size model."),
+        CatalogEntry(nsid: "mlx-community/Qwen2.5-32B-Instruct-4bit", label: "Qwen 2.5 32B", minRamGB: 32, recommended: false, blurb: "Legacy large model."),
+        CatalogEntry(nsid: "mlx-community/Llama-3.3-70B-Instruct-4bit", label: "Llama 3.3 70B", minRamGB: 64, recommended: false, blurb: "Legacy flagship model."),
     ]
+
+    /// The recommended (latest & greatest) subset of the catalog mirror.
+    static var recommendedCatalog: [CatalogEntry] { catalog.filter { $0.recommended } }
 
     /// This Mac's physical RAM in GB (rounded), via sysctl `hw.memsize`.
     /// 0 if the probe fails, in which case the picker degrades to showing
@@ -76,20 +104,24 @@ final class ModelManager: ObservableObject {
         deviceRamGB == 0 || minRamGB <= deviceRamGB
     }
 
-    /// The biggest catalog model that fits this Mac — the suggested
-    /// default. nil when RAM is unknown or nothing fits.
+    /// The biggest *recommended* catalog model that fits this Mac — the
+    /// suggested default. Prefers the latest-&-greatest rotation; falls back
+    /// to any fitting catalog model if no recommended one fits. nil when RAM
+    /// is unknown or nothing fits.
     static var recommendedNSID: String? {
         guard deviceRamGB > 0 else { return nil }
-        return catalog.filter { $0.minRamGB <= deviceRamGB }
-            .max(by: { $0.minRamGB < $1.minRamGB })?
-            .nsid
+        let fitting = catalog.filter { $0.minRamGB <= deviceRamGB }
+        if let best = fitting.filter({ $0.recommended }).max(by: { $0.minRamGB < $1.minRamGB }) {
+            return best.nsid
+        }
+        return fitting.max(by: { $0.minRamGB < $1.minRamGB })?.nsid
     }
 
     /// Catalog ordered best-for-this-device first: fitting models by
     /// descending size (recommended on top), then the ones that need more
     /// RAM than this Mac has. Falls back to declaration order when RAM is
     /// unknown.
-    static var catalogForDevice: [(nsid: String, label: String, minRamGB: Int)] {
+    static var catalogForDevice: [CatalogEntry] {
         guard deviceRamGB > 0 else { return catalog }
         let fits = catalog.filter { $0.minRamGB <= deviceRamGB }.sorted { $0.minRamGB > $1.minRamGB }
         let tooBig = catalog.filter { $0.minRamGB > deviceRamGB }.sorted { $0.minRamGB < $1.minRamGB }
@@ -151,13 +183,45 @@ final class ModelManager: ObservableObject {
         return w.start < w.end ? (hour >= w.start && hour < w.end) : (hour >= w.start || hour < w.end)
     }
 
-    /// Overprovisioning check (the validator half): for each hour, sum the
-    /// active models' RAM floors; if any hour's total exceeds this Mac's RAM,
-    /// return a human warning naming the worst hour. nil when every hour fits
-    /// (or device RAM is unknown). The agent enforces the same budget by
-    /// pruning largest-first, so this is a "you didn't mean to do that" nudge.
-    static func overprovisionWarning(models: [String], schedules: [String: Window]) -> String? {
-        guard deviceRamGB > 0 else { return nil }
+    // MARK: resource budget (mirrors Rust `pricing::budget_report`)
+
+    /// RAM (GB) to hold back for the OS + the owner's own apps so a personal
+    /// Mac stays usable while it serves. `ceil(total/5)` (20%), clamped to
+    /// [2, 12]. Byte-for-byte the same as Rust `pricing::user_reserve_gb`.
+    static func userReserveGB(_ total: Int) -> Int {
+        guard total > 0 else { return 0 }
+        let pct = (total + 4) / 5 // ceil(total/5)
+        return min(max(pct, 2), 12)
+    }
+
+    /// Traffic-light verdict for a pinned set on this machine. Mirrors Rust
+    /// `pricing::BudgetStatus`.
+    enum BudgetStatus {
+        case comfortable  // green — fits with headroom for you
+        case tight        // yellow — fits, but little left for your own work
+        case oversubscribed  // red — exceeds RAM; agent drops the largest to fit
+    }
+
+    /// A computed budget verdict for a pinned model set, driving the meter +
+    /// traffic-light. Mirrors Rust `pricing::BudgetReport`. `used` sums the
+    /// worst overlapping SCHEDULED hour's catalog floors (off-catalog/unknown
+    /// models contribute 0); the agent enforces the same budget by pruning
+    /// largest-first.
+    struct BudgetReport {
+        let usedGB: Int
+        let reserveGB: Int
+        let totalGB: Int
+        let status: BudgetStatus
+        /// The worst overlapping hour (0–23) the `used` total comes from.
+        let worstHour: Int
+    }
+
+    /// Classify a pinned set against this machine's RAM, respecting per-model
+    /// schedules: `used` is the largest sum over any single hour's active set.
+    /// The single source of truth for the meter, the warning copy, and the
+    /// agent's startup budget — green/yellow/red is identical everywhere.
+    static func budgetReport(models: [String], schedules: [String: Window]) -> BudgetReport {
+        let total = deviceRamGB
         var worstHour = 0
         var worstSum = 0
         for hour in 0..<24 {
@@ -170,8 +234,18 @@ final class ModelManager: ObservableObject {
                 worstHour = hour
             }
         }
-        guard worstSum > deviceRamGB else { return nil }
-        return "At \(PreferencesView.hourLabel(worstHour)), \(worstSum)GB of models are scheduled at once — more than this Mac's \(deviceRamGB)GB. The agent will drop the largest until they fit; stagger their hours so they don't overlap."
+        let reserve = userReserveGB(total)
+        let status: BudgetStatus
+        if total > 0, worstSum > total {
+            status = .oversubscribed
+        } else if total > 0, worstSum + reserve > total {
+            status = .tight
+        } else {
+            status = .comfortable
+        }
+        return BudgetReport(
+            usedGB: worstSum, reserveGB: reserve, totalGB: total,
+            status: status, worstHour: worstHour)
     }
 
     /// Persist the full per-model schedule set and reload the agent. Called
@@ -332,6 +406,47 @@ final class ModelManager: ObservableObject {
         busy = false
     }
 
+    /// Fetch the live recommended-models set from the console
+    /// (`GET {consoleURL}/v1/recommended-models`, shape
+    /// `[{id, minRamGb, blurb}]`). Falls back to the hardcoded mirror
+    /// (`recommendedCatalog`) on any failure, so the picker still works
+    /// offline. Best-effort, no throw.
+    static func fetchRecommended() async -> [CatalogEntry] {
+        struct Wire: Decodable {
+            let id: String
+            let minRamGb: Int?
+            let blurb: String?
+        }
+        guard let url = URL(string: "\(Endpoints.consoleURL)/v1/recommended-models") else {
+            return recommendedCatalog
+        }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+            (resp as? HTTPURLResponse)?.statusCode == 200,
+            let wire = try? JSONDecoder().decode([Wire].self, from: data),
+            !wire.isEmpty
+        else { return recommendedCatalog }
+        return wire.map { w in
+            // Keep the friendly label/blurb from the mirror when we know the
+            // id, so live entries still render nicely; else derive a label.
+            let known = catalog.first { $0.nsid == w.id }
+            return CatalogEntry(
+                nsid: w.id,
+                label: known?.label ?? friendlyLabel(for: w.id),
+                minRamGB: w.minRamGb ?? known?.minRamGB ?? 0,
+                recommended: true,
+                blurb: w.blurb ?? known?.blurb ?? "")
+        }
+    }
+
+    /// Derive a human label from an `org/model` NSID when it isn't in the
+    /// mirror (live recommended entries the app doesn't know yet).
+    nonisolated static func friendlyLabel(for nsid: String) -> String {
+        let tail = nsid.split(separator: "/").last.map(String.init) ?? nsid
+        return tail.replacingOccurrences(of: "-", with: " ")
+    }
+
     /// Run the cocore CLI off the main actor; returns (status, combined
     /// stdout+stderr).
     nonisolated static func run(_ args: [String]) async -> (Int32, String) {
@@ -369,6 +484,9 @@ struct ModelsView: View {
     /// Loaded from UserDefaults on appear, applied (debounced) on change.
     @State private var schedules: [String: ModelManager.Window] = [:]
     @State private var scheduleApplyTask: Task<Void, Never>?
+    /// Live recommended set from the console (falls back to the mirror).
+    /// Drives the "Latest" badges; loaded once on appear.
+    @State private var recommendedNSIDs: Set<String> = Set(ModelManager.recommendedCatalog.map { $0.nsid })
 
     var body: some View {
         // Scrollable: the tab area is a fixed 520×600, and the content (model
@@ -389,6 +507,8 @@ struct ModelsView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             runtimeBanner
+
+            budgetMeter
 
             GroupBox("Active") {
                 if manager.models.isEmpty {
@@ -424,15 +544,25 @@ struct ModelsView: View {
             GroupBox("Add from catalog") {
                 ForEach(ModelManager.catalogForDevice, id: \.nsid) { item in
                     let fits = ModelManager.fitsDevice(item.minRamGB)
-                    let recommended = item.nsid == ModelManager.recommendedNSID
+                    let suggested = item.nsid == ModelManager.recommendedNSID
+                    let isLatest = recommendedNSIDs.contains(item.nsid)
                     HStack {
                         VStack(alignment: .leading, spacing: 1) {
                             HStack(spacing: 6) {
                                 Text(item.label)
                                     .font(.caption)
-                                    .fontWeight(recommended ? .semibold : .regular)
-                                if recommended {
-                                    Text("recommended")
+                                    .fontWeight(suggested ? .semibold : .regular)
+                                if isLatest {
+                                    Text("Latest")
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Brand.success.opacity(0.18))
+                                        .foregroundStyle(Brand.success)
+                                        .clipShape(Capsule())
+                                }
+                                if suggested {
+                                    Text("recommended for this Mac")
                                         .font(.caption2)
                                         .padding(.horizontal, 5)
                                         .padding(.vertical, 1)
@@ -510,7 +640,91 @@ struct ModelsView: View {
         .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
         .brandStyled()
         .task { await manager.refresh() }
+        .task {
+            // Pull the live recommended set (falls back to the mirror); drives
+            // the "Latest" badges. Best-effort, never blocks the UI.
+            let live = await ModelManager.fetchRecommended()
+            recommendedNSIDs = Set(live.map { $0.nsid })
+        }
         .onAppear { schedules = ModelManager.loadSchedules() }
+    }
+
+    // MARK: resource budget meter + traffic light
+
+    /// A horizontal meter showing pinned RAM vs this Mac's total, with the
+    /// owner-reserve band marked, plus a traffic-light status line. Mirrors
+    /// the Rust `pricing::budget_report` verdict exactly. Hidden when device
+    /// RAM is unknown (the probe failed) — there's nothing honest to draw.
+    @ViewBuilder private var budgetMeter: some View {
+        if ModelManager.deviceRamGB > 0 {
+            let report = ModelManager.budgetReport(models: manager.models, schedules: schedules)
+            let total = report.totalGB
+            let used = report.usedGB
+            let reserve = report.reserveGB
+            let (color, title, detail): (Color, String, String?) = {
+                switch report.status {
+                case .comfortable:
+                    return (Brand.success, "Comfortable", nil)
+                case .tight:
+                    return (
+                        .orange, "Tight",
+                        "Your pinned models fit, but leave little for you — this Mac may get "
+                            + "sluggish while you work. Drop one or stagger their hours.")
+                case .oversubscribed:
+                    return (
+                        .red, "Oversubscribed",
+                        "Your pinned models need more RAM than this Mac has. The agent will drop "
+                            + "the largest to fit; remove one or schedule them at different hours.")
+                }
+            }()
+            GroupBox("Resource budget") {
+                VStack(alignment: .leading, spacing: 8) {
+                    GeometryReader { geo in
+                        let w = geo.size.width
+                        let denom = CGFloat(max(total, max(used, 1)))
+                        let usedW = min(w, w * CGFloat(used) / denom)
+                        // Reserve band sits at the top end of total RAM.
+                        let reserveStart = w * CGFloat(max(total - reserve, 0)) / denom
+                        let reserveW = min(w - reserveStart, w * CGFloat(reserve) / denom)
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Color.secondary.opacity(0.18))
+                            // Reserve band (held back for the owner).
+                            RoundedRectangle(cornerRadius: 0)
+                                .fill(Color.secondary.opacity(0.28))
+                                .frame(width: max(0, reserveW))
+                                .offset(x: reserveStart)
+                            // Used (pinned models) fill.
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(color.opacity(0.85))
+                                .frame(width: max(0, usedW))
+                        }
+                    }
+                    .frame(height: 14)
+
+                    Text(
+                        "Pinned \(used) GB · Reserved for you \(reserve) GB · This Mac \(total) GB"
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
+
+                    HStack(spacing: 6) {
+                        Circle().fill(color).frame(width: 9, height: 9)
+                        Text(title).font(.footnote.weight(.semibold)).foregroundStyle(color)
+                    }
+                    if let detail {
+                        Text(detail)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Comfortable headroom for your own work while you serve.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
+            }
+        }
     }
 
     // MARK: per-model schedule editor
@@ -521,11 +735,6 @@ struct ModelsView: View {
                 Text("Give a model its own hours so it only loads (and uses RAM) part of the day. A model with no schedule is always on while the agent serves.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if let warn = ModelManager.overprovisionWarning(models: manager.models, schedules: schedules) {
-                    Text("⚠ \(warn)")
-                        .font(.footnote).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 if manager.models.isEmpty {
                     Text("Add a model above to schedule it.")
                         .font(.footnote).foregroundStyle(.secondary)
