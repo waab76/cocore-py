@@ -4,34 +4,18 @@ export type ApiDocsFixtures = {
   requesterDid: string;
   jobUri: string;
   receiptUri: string;
+  settlementUri: string;
   listQuery: string;
 };
 
 export function getDefaultApiDocsFixtures(): ApiDocsFixtures {
+  const did = "did:plc:m2sjv3wncvsasdapla35hzwj";
   return {
-    providerDid: "did:plc:example-provider",
-    requesterDid: "did:plc:example-requester",
-    jobUri: "at://did:plc:example-requester/dev.cocore.compute.job/abc",
-    receiptUri: "at://did:plc:example-provider/dev.cocore.compute.receipt/xyz",
-    listQuery: "alice",
+    providerDid: did,
+    requesterDid: did,
+    jobUri: `at://${did}/dev.cocore.compute.job/abc`,
+    receiptUri: `at://${did}/dev.cocore.compute.receipt/xyz`,
+    settlementUri: `at://${did}/dev.cocore.compute.settlement/xyz`,
+    listQuery: did,
   };
-}
-
-const PLACEHOLDER_DID = "did:plc:example";
-
-/** Whether fixtures still use scaffold placeholders (no env discovery). */
-export function isPlaceholderApiDocsFixture(
-  fixtures: ApiDocsFixtures,
-  field: keyof ApiDocsFixtures,
-): boolean {
-  const defaults = getDefaultApiDocsFixtures();
-  const value = fixtures[field];
-  const defaultValue = defaults[field];
-  if (value === defaultValue) {
-    return true;
-  }
-  if (typeof value === "string" && value.includes(PLACEHOLDER_DID)) {
-    return true;
-  }
-  return false;
 }

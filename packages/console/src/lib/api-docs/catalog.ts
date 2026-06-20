@@ -203,7 +203,10 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     "Verify a settlement chain against indexed receipt and authorization records.",
     "none",
     [{ name: "uri", type: "at-uri", required: true }],
-    { autoRun: false, params: {} },
+    {
+      autoRun: false,
+      params: (f) => ({ uri: f.settlementUri }),
+    },
   ),
   q(
     "dev.cocore.compute.modelActivity",

@@ -544,6 +544,21 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
     // Alias at /api/pds/* so a paired agent whose apiBase is the AppView
     // (baked-in path `${apiBase}/api/pds/...`) reaches the same handlers.
     for (const [path, h] of Object.entries(pds)) routes[`/api${path}`] = h;
+    // Back-compat for pre-cutover release agents: they still write via the
+    // deprecated `/api/xrpc/dev.cocore.proxy.{create,put,delete}Record` path
+    // (bearer-key, identical body to /pds/*). The console keeps these shims,
+    // but post-cutover an agent's apiBase points HERE (the AppView), so serve
+    // them as aliases of the same handlers — otherwise old agents that pair
+    // after the cutover 404 on every write.
+    const proxyAlias: Record<string, string> = {
+      "/pds/createRecord": "/api/xrpc/dev.cocore.proxy.createRecord",
+      "/pds/putRecord": "/api/xrpc/dev.cocore.proxy.putRecord",
+      "/pds/deleteRecord": "/api/xrpc/dev.cocore.proxy.deleteRecord",
+    };
+    for (const [path, h] of Object.entries(pds)) {
+      const alias = proxyAlias[path];
+      if (alias) routes[alias] = h;
+    }
     // Internal trusted-DID write path (the console forwards key-resolved
     // writes here so the OAuth session work lives only in the AppView).
     // Private-network only; gated on the shared secret.

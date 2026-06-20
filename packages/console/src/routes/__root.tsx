@@ -5,7 +5,7 @@ import { HeadContent, Scripts, createRootRouteWithContext } from "@tanstack/reac
 import appCss from "../styles.css?url";
 
 import { SITE_MARKETING_DESCRIPTION, SITE_MARKETING_TITLE } from "@/lib/site-marketing.shared.ts";
-import { OG_HEIGHT, OG_WIDTH } from "@/og/root-og.tokens.ts";
+import { ogImageHref, socialMeta } from "@/lib/og-image.shared.ts";
 import { ToastRegion } from "@/design-system/toast";
 import { primaryColor, uiColor } from "@/design-system/theme/color.stylex";
 import { radius } from "@/design-system/theme/radius.stylex";
@@ -14,11 +14,6 @@ import { sand } from "@/design-system/theme/colors/sand.stylex";
 import { brown } from "@/design-system/theme/colors/brown.stylex";
 
 const THEME_INIT_SCRIPT = `(function(){try{var stored=window.localStorage.getItem('theme');var mode=(stored==='light'||stored==='dark'||stored==='auto')?stored:'auto';var prefersDark=window.matchMedia('(prefers-color-scheme: dark)').matches;var resolved=mode==='auto'?(prefersDark?'dark':'light'):mode;var root=document.documentElement;root.classList.remove('light','dark');root.classList.add(resolved);if(mode==='auto'){root.removeAttribute('data-theme')}else{root.setAttribute('data-theme',mode)}root.style.colorScheme=resolved;}catch(e){}})();`;
-
-function openGraphImageHref(): string {
-  const base = process.env["CONSOLE_PUBLIC_URL"]?.trim().replace(/\/$/, "");
-  return base ? `${base}/og.png` : "/og.png";
-}
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
@@ -30,16 +25,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         name: "description",
         content: "co/core: ATProto-native receipts of work for decentralized compute.",
       },
-      { property: "og:title", content: SITE_MARKETING_TITLE },
-      { property: "og:description", content: SITE_MARKETING_DESCRIPTION },
-      { property: "og:type", content: "website" },
-      { property: "og:image", content: openGraphImageHref() },
-      { property: "og:image:width", content: String(OG_WIDTH) },
-      { property: "og:image:height", content: String(OG_HEIGHT) },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: SITE_MARKETING_TITLE },
-      { name: "twitter:description", content: SITE_MARKETING_DESCRIPTION },
-      { name: "twitter:image", content: openGraphImageHref() },
+      ...socialMeta({
+        title: SITE_MARKETING_TITLE,
+        description: SITE_MARKETING_DESCRIPTION,
+        image: ogImageHref(),
+      }),
     ],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },

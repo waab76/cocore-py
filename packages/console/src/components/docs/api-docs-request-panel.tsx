@@ -12,7 +12,6 @@ import { runApiDocsExample } from "@/integrations/tanstack-query/api-docs.functi
 import { buildApiDocsCurl, resolveApiDocsExampleParams } from "@/lib/api-docs/build-curl.ts";
 import { apiDocsParamControls, apiDocsUsesSessionAuth } from "@/lib/api-docs/interactive-params";
 import { mergeApiDocsExampleParams } from "@/lib/api-docs/merge-example-params";
-import { appviewBaseUrlClient, consoleBaseUrlClient } from "@/lib/api-docs/discovery.ts";
 import { Play } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -50,7 +49,8 @@ export const ApiDocsRequestPanel = memo(function RequestPanel({
 }: {
   entry: ApiDocsCatalogEntry;
 }) {
-  const { fixtures, tagOptions, signedIn, sessionDid } = useApiDocsPageContext();
+  const { fixtures, tagOptions, signedIn, sessionDid, appviewBaseUrl, consoleBaseUrl } =
+    useApiDocsPageContext();
   const controls = useMemo(() => apiDocsParamControls(entry, signedIn), [entry, signedIn]);
 
   const [paramValues, setParamValues] = useState(() =>
@@ -75,12 +75,12 @@ export const ApiDocsRequestPanel = memo(function RequestPanel({
   const useSessionAuth = signedIn && apiDocsUsesSessionAuth(entry);
 
   const curl = useMemo(() => {
-    const base = entry.host === "console" ? consoleBaseUrlClient() : appviewBaseUrlClient();
+    const base = entry.host === "console" ? consoleBaseUrl : appviewBaseUrl;
     return buildApiDocsCurl(entry, base, fixtures, {
       params: effectiveParams,
       bearerPlaceholder: useSessionAuth,
     });
-  }, [entry, fixtures, effectiveParams, useSessionAuth]);
+  }, [entry, fixtures, effectiveParams, useSessionAuth, appviewBaseUrl, consoleBaseUrl]);
 
   const { mutate, isPending } = useMutation({
     mutationFn: () =>

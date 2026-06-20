@@ -16,6 +16,7 @@ export function loadApiDocsFixtures(): ApiDocsFixtures {
     requesterDid: env("API_DOCS_FIXTURE_REQUESTER_DID") ?? defaults.requesterDid,
     jobUri: env("API_DOCS_FIXTURE_JOB_URI") ?? defaults.jobUri,
     receiptUri: env("API_DOCS_FIXTURE_RECEIPT_URI") ?? defaults.receiptUri,
+    settlementUri: env("API_DOCS_FIXTURE_SETTLEMENT_URI") ?? defaults.settlementUri,
     listQuery: env("API_DOCS_FIXTURE_LIST_QUERY") ?? defaults.listQuery,
   };
 }

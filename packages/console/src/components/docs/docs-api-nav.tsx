@@ -1,6 +1,7 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
+import { Link } from "@tanstack/react-router";
 import { API_DOCS_CATALOG, API_DOCS_SECTIONS } from "@/lib/api-docs/catalog";
 import {
   API_DOCS_INTRO_IDS,
@@ -61,18 +62,21 @@ export function DocsApiNav() {
             </div>
             {entries.map((entry) => {
               const id = apiDocsEndpointId(entry.nsid);
+              const leaf = apiDocsNsidLeaf(entry.nsid);
               return (
-                <a
+                <Link
                   key={entry.nsid}
-                  href={`#${id}`}
+                  to="/docs/api"
+                  search={{ ref: leaf }}
+                  hash={id}
                   {...stylex.props(
                     docsStyles.refNavLink,
                     docsStyles.refNavLinkMono,
                     active === id && docsStyles.refNavLinkActive,
                   )}
                 >
-                  {apiDocsNsidLeaf(entry.nsid)}
-                </a>
+                  {leaf}
+                </Link>
               );
             })}
           </div>

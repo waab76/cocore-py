@@ -661,6 +661,15 @@ export const docsStyles = stylex.create({
   nsidDim: {
     color: uiColor.text1,
   },
+  refAnchor: {
+    color: "inherit",
+    cursor: "pointer",
+    textDecoration: {
+      default: "none",
+      ":hover": "underline",
+    },
+    textUnderlineOffset: "0.2em",
+  },
   methodBadge: {
     borderRadius: radius.sm,
     fontFamily: fontFamily.sans,
@@ -855,6 +864,7 @@ export const docsStyles = stylex.create({
     opacity: 0.65,
   },
   reqCode: {
+    flexShrink: 0,
     boxSizing: "border-box",
     color: docsCodeColors.fg,
     fontFamily: fontFamily.mono,
@@ -864,14 +874,12 @@ export const docsStyles = stylex.create({
     marginTop: verticalSpace.none,
     maxWidth: "100%",
     minWidth: 0,
-    overflowWrap: "anywhere",
     overflowX: "auto",
     paddingBottom: spacing["3.5"],
     paddingLeft: spacing["4"],
     paddingRight: spacing["4"],
     paddingTop: spacing["3.5"],
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-all",
+    whiteSpace: "pre",
   },
   reqCodeFlag: {
     color: docsCodeColors.faint,

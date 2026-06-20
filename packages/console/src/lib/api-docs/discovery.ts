@@ -3,15 +3,11 @@ import { cocoreConfig } from "@/lib/cocore-config.ts";
 /** Fragment id on did:web for the AppView XRPC service. */
 export const APPVIEW_SERVICE_ID = "cocore_appview";
 
-export function appviewDidClient(): string {
-  if (globalThis.window !== undefined) {
-    return "did:web:console.cocore.dev:appview";
-  }
-  const host = new URL(cocoreConfig().appviewUrl).hostname.replaceAll(".", ":");
-  return `did:web:${host}`;
-}
-
-function resolveAppviewBaseUrl(): string {
+/** Public AppView origin. Resolved from the server-side config (the source of
+ *  truth, set per-env via COCORE_APPVIEW_URL); callers that need this in the
+ *  browser should thread it down from a server loader rather than guessing,
+ *  since the client has no access to the env. */
+export function appviewBaseUrl(): string {
   if (globalThis.window !== undefined) {
     const configured = import.meta.env["VITE_COCORE_APPVIEW_URL"] as string | undefined;
     if (configured) {
@@ -20,18 +16,6 @@ function resolveAppviewBaseUrl(): string {
     return "http://localhost:8081";
   }
   return cocoreConfig().appviewUrl.replace(/\/$/, "");
-}
-
-export function appviewBaseUrlClient(): string {
-  return resolveAppviewBaseUrl();
-}
-
-export function xrpcBaseUrlClient(): string {
-  return `${resolveAppviewBaseUrl()}/xrpc`;
-}
-
-export function appviewBaseUrl(): string {
-  return resolveAppviewBaseUrl();
 }
 
 /** Origin of the console itself (host of the `/api/xrpc/*` methods that

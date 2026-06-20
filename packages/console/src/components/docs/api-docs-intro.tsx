@@ -2,16 +2,15 @@
 
 import * as stylex from "@stylexjs/stylex";
 import { Link } from "@tanstack/react-router";
-import {
-  APPVIEW_SERVICE_ID,
-  appviewDidClient,
-  xrpcBaseUrlClient,
-} from "@/lib/api-docs/discovery.ts";
+import { APPVIEW_SERVICE_ID } from "@/lib/api-docs/discovery.ts";
 import { API_DOCS_INTRO_IDS } from "@/lib/api-docs/navigation.ts";
 
+import { useApiDocsPageContext } from "./api-docs-fixtures-context.tsx";
 import { docsStyles } from "./docs-page.stylex.tsx";
 
 export function ApiDocsIntro() {
+  const { appviewBaseUrl, appviewDid } = useApiDocsPageContext();
+  const xrpcBaseUrl = `${appviewBaseUrl.replace(/\/$/, "")}/xrpc`;
   return (
     <>
       <div {...stylex.props(docsStyles.masthead)}>
@@ -23,7 +22,7 @@ export function ApiDocsIntro() {
         </p>
         <div {...stylex.props(docsStyles.baseUrl)}>
           <span {...stylex.props(docsStyles.baseUrlLabel)}>Base</span>
-          <span>{xrpcBaseUrlClient()}</span>
+          <span>{xrpcBaseUrl}</span>
           <span {...stylex.props(docsStyles.baseUrlDot)}>·</span>
           <span {...stylex.props(docsStyles.baseUrlOk)}>
             <span {...stylex.props(docsStyles.baseUrlOkDot)} aria-hidden />
@@ -34,24 +33,38 @@ export function ApiDocsIntro() {
 
       <div {...stylex.props(docsStyles.introProse)}>
         <h2 id={API_DOCS_INTRO_IDS.overview} {...stylex.props(docsStyles.h2, docsStyles.h2First)}>
-          Overview
+          <Link
+            to="/docs/api"
+            search={{ ref: API_DOCS_INTRO_IDS.overview }}
+            hash={API_DOCS_INTRO_IDS.overview}
+            {...stylex.props(docsStyles.refAnchor)}
+          >
+            Overview
+          </Link>
         </h2>
         <p {...stylex.props(docsStyles.prose)}>
           The co/core AppView indexes provider-signed records under{" "}
           <code {...stylex.props(docsStyles.codeInline)}>dev.cocore.*</code> from the network
           firehose. It exposes a small read API at{" "}
-          <code {...stylex.props(docsStyles.codeInline)}>{xrpcBaseUrlClient()}</code> for discovery,
+          <code {...stylex.props(docsStyles.codeInline)}>{xrpcBaseUrl}</code> for discovery,
           verification, and analytics. Authoritative state remains in each actor&apos;s PDS — the
           AppView is a cache, not a ledger.
         </p>
 
         <h2 id={API_DOCS_INTRO_IDS.discovery} {...stylex.props(docsStyles.h2)}>
-          Service discovery
+          <Link
+            to="/docs/api"
+            search={{ ref: API_DOCS_INTRO_IDS.discovery }}
+            hash={API_DOCS_INTRO_IDS.discovery}
+            {...stylex.props(docsStyles.refAnchor)}
+          >
+            Service discovery
+          </Link>
         </h2>
         <p {...stylex.props(docsStyles.prose)}>
           Service DID is{" "}
           <code {...stylex.props(docsStyles.codeInline, docsStyles.codeInlineAccent)}>
-            {appviewDidClient()}
+            {appviewDid}
           </code>
           . Production deployments advertise the AppView endpoint via{" "}
           <code {...stylex.props(docsStyles.codeInline)}>#{APPVIEW_SERVICE_ID}</code> on the console
@@ -59,7 +72,14 @@ export function ApiDocsIntro() {
         </p>
 
         <h2 id={API_DOCS_INTRO_IDS.inference} {...stylex.props(docsStyles.h2)}>
-          Inference API
+          <Link
+            to="/docs/api"
+            search={{ ref: API_DOCS_INTRO_IDS.inference }}
+            hash={API_DOCS_INTRO_IDS.inference}
+            {...stylex.props(docsStyles.refAnchor)}
+          >
+            Inference API
+          </Link>
         </h2>
         <p {...stylex.props(docsStyles.prose)}>
           To run inference against co/core providers, use the OpenAI-compatible chat completions

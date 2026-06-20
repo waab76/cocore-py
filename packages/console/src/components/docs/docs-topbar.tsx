@@ -36,7 +36,6 @@ const logoStyles = stylex.create({
 
 const NAV_ITEMS = [
   { label: "Inference", to: "/docs/inference" as const },
-  { label: "Community", to: "/docs/community-tools" as const },
   { label: "XRPC", to: "/docs/api" as const },
   { label: "Lexicons", to: "/docs/lexicons" as const },
 ] as const;

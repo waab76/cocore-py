@@ -11,6 +11,17 @@ export function apiDocsEndpointId(nsid: string): string {
   return `ref-${leaf}`;
 }
 
+/**
+ * Resolve a server-visible `?ref=` value (or a `ref-<leaf>` anchor id) to its
+ * catalog entry, so SSR `head()` can build a per-endpoint OG card. Hash
+ * fragments never reach the server, hence the query-param mirror.
+ */
+export function apiDocsEndpointByRef(ref: string | null | undefined) {
+  if (!ref) return undefined;
+  const leaf = ref.startsWith("ref-") ? ref.slice("ref-".length) : ref;
+  return API_DOCS_CATALOG.find((entry) => apiDocsNsidLeaf(entry.nsid) === leaf);
+}
+
 export function apiDocsSectionId(section: string): string {
   return section.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-");
 }

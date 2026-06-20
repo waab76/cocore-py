@@ -1085,7 +1085,7 @@ function ModelsPage() {
                       const isLast = i === selected.machines.length - 1;
                       return (
                         <tr
-                          key={`${selected.modelId}-${mach.did}`}
+                          key={`${selected.modelId}-${mach.attestationPubKey ?? mach.did}`}
                           {...stylex.props(styles.tableRow)}
                         >
                           <td {...stylex.props(styles.td, isLast && styles.tdLastRow)}>
