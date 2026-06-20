@@ -2,10 +2,11 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { generateKeyPairSync, sign as nodeSign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign as nodeSign } from "node:crypto";
 import { canonicalize } from "./canonical.ts";
 import {
   compareOsVersion,
+  freshnessBindsKey,
   type SessionKey,
   sessionKeyMessage,
   verifyProviderForSeal,
@@ -428,3 +429,25 @@ test.skipIf(!existsSync(CONF_FIXTURE))(
     assert.equal(bad.ok, false);
   },
 );
+
+// --- Option-B freshness-code binding (cross-language parity with mda.rs + py) ---
+test("freshnessBindsKey: binds iff freshness == sha256(publicKey), wrapper-tolerant", async () => {
+  const pubRaw = Buffer.alloc(64, 7); // raw 64-byte P-256 X‖Y
+  const pubB64 = pubRaw.toString("base64");
+  const good = createHash("sha256").update(pubRaw).digest(); // 32 bytes
+
+  // Raw 32-byte freshness == sha256(pubkey) → binds.
+  assert.equal(await freshnessBindsKey(new Uint8Array(good), pubB64), true);
+
+  // Same value inside its DER OCTET STRING wrapper (04 20 ‖ 32) → binds.
+  const wrapped = new Uint8Array([0x04, 0x20, ...good]);
+  assert.equal(await freshnessBindsKey(wrapped, pubB64), true);
+
+  // Freshness for a DIFFERENT key → does not bind.
+  const other = createHash("sha256").update(Buffer.alloc(64, 9)).digest();
+  assert.equal(await freshnessBindsKey(new Uint8Array(other), pubB64), false);
+
+  // Missing/empty freshness → false, never throws.
+  assert.equal(await freshnessBindsKey(undefined, pubB64), false);
+  assert.equal(await freshnessBindsKey(new Uint8Array(0), pubB64), false);
+});

@@ -300,7 +300,20 @@ export interface PushAttestationResult {
 /** Build the ACME attestation .mobileconfig that NanoMDM will deliver as
  *  an InstallProfile command. ClientIdentifier + the cert Subject CN are
  *  pinned to the device serial, which is what binds the captured Apple
- *  x5c chain back to this machine. */
+ *  x5c chain back to this machine.
+ *
+ *  KEY-BINDING (option b, freshness-code) — TODO(ops): the verifier accepts
+ *  the chain only when it binds to the agent's signing key, and we chose the
+ *  freshness-code rule: the leaf's Apple freshness OID
+ *  (1.2.840.113635.100.8.11.1) must equal `sha256(signing pubkey)` (the raw
+ *  64-byte P-256 point published as `attestation.publicKey`). Stock
+ *  `com.apple.security.acme` derives its freshness from the ACME challenge, so
+ *  making Apple emit that exact value needs ONE of: (1) a custom step-ca
+ *  `device-attest-01` nonce set to `sha256(signing pubkey)`, or (2) the App
+ *  Attest companion where the agent controls `clientDataHash`. Until that's
+ *  wired the captured chain verifies Apple-rooted but does NOT bind, so the
+ *  provider stays best-effort (fail-closed). See infra/mdm/README.md
+ *  "The binding decision". */
 function buildAttestationCommandProfile(serial: string): string {
   const acmeUrl = env("COCORE_MDM_ACME_URL") ?? "https://ca.cocore.dev/acme/attest";
   const uuid = crypto.randomUUID().toUpperCase();

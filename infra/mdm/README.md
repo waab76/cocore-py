@@ -70,20 +70,35 @@ in the repo.
 4. The coordinator stores the chain by serial and hands it to the agent, which
    embeds it; the provider flips to hardware-attested.
 
-## The binding decision (resolve HERE, on the first device)
+## The binding decision — RESOLVED: option (b), freshness-code binding
 
-`provider/src/mda.rs` currently binds **leaf-key == the agent's SE signing key**.
-The ACME `HardwareBound` flow attests a *new* SEP key (the ACME key), not the
-agent's existing signing key. So on the first real chain we decide:
+The ACME `HardwareBound` flow attests a *new* SEP key (the ACME/profile key), not
+the agent's existing receipt-signing key. We bind via the **freshness-code OID**
+(`1.2.840.113635.100.8.11.1`) so the agent keeps its own stable signing identity,
+decoupled from the MDM/ACME key lifecycle (darkbloom's approach).
 
-- **(a)** make the agent's signing key the ACME-attested key (then today's
-  leaf==key check works unchanged), or
-- **(b)** bind via the **freshness-code OID** (`mda.rs` already extracts it):
-  the step-ca nonce commits to `sha256(SE pubkey)`, and the verifier checks the
-  freshness code instead of leaf==key (darkbloom's approach, less invasive).
+**The commitment:** the attestation flow sets the Apple freshness value to
+`sha256(signing pubkey)` — the raw 64-byte P-256 X‖Y point that the agent
+publishes as `attestation.publicKey`. The verifier (TS/Python/Rust, all three) then
+recomputes `sha256(publicKey)` and checks it equals the leaf's freshness OID —
+offline, from `publicKey` alone (invariant #2). Implemented + cross-language tested:
+`MdaResult::freshness_binds` (Rust), `freshnessBindsKey` (TS), `_freshness_binds_key`
+(Python), all keyed off the same vector. The verifier accepts **either** binding —
+freshness-code (b) OR the legacy leaf==key (a) — and fail-closes if neither holds.
 
-**A wrong choice silently caps the tier at best-effort with no error** — so verify
-the bound chain end-to-end on the first enrolled Mac before rolling out.
+**What this proves (and the platform ceiling):** binding ties the genuine-hardware
+attestation to *this* signer + device, defeating "staple someone else's Apple chain
+onto my key." It does NOT by itself prove the signing key is enclave-resident or
+that the measured binary is honest — the `cdHash`/posture gates carry that, and on
+Apple silicon the cdHash is necessarily self-measured (no Apple API attests a
+running process's cdHash to a third party). That self-measurement ceiling is
+inherent to the platform and is the same for our reference.
+
+**Producer TODO(ops):** making Apple actually emit `freshness == sha256(signing
+pubkey)` is the enrollment-side wiring — either a custom step-ca `device-attest-01`
+nonce, or the App Attest companion (`COCORE_MDA_ATTEST_BINARY`) where the agent
+controls `clientDataHash = sha256(signing pubkey)` directly. The verifier is done;
+this is the live step to confirm on the first enrolled Mac before rollout.
 
 ## Deployment gotchas discovered (2026-06-20, partial deploy)
 

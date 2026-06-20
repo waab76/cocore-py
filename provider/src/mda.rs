@@ -84,6 +84,41 @@ pub struct MdaResult {
     pub third_party_kexts: Option<bool>,
 }
 
+impl MdaResult {
+    /// Option-B binding: the Apple freshness OID (1.2.840.113635.100.8.11.1)
+    /// commits to the signing key iff `freshness_code == sha256(pubkey_raw)`.
+    /// `pubkey_raw` is the raw 64-byte P-256 X‖Y point (the decoded
+    /// `attestation.publicKey`). Tolerates the DER OCTET STRING wrapper
+    /// (`04 20 ‖ 32`) so it matches the TS/Python verifiers byte-for-byte.
+    pub fn freshness_binds(&self, pubkey_raw: &[u8]) -> bool {
+        use sha2::{Digest, Sha256};
+        let Some(fc) = self.freshness_code.as_deref() else {
+            return false;
+        };
+        if pubkey_raw.is_empty() {
+            return false;
+        }
+        let inner: &[u8] = if fc.len() == 34 && fc[0] == 0x04 && fc[1] == 0x20 {
+            &fc[2..]
+        } else {
+            fc
+        };
+        let digest = Sha256::digest(pubkey_raw);
+        inner.len() == digest.len()
+            && inner
+                .iter()
+                .zip(digest.iter())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
+    }
+
+    /// True iff the chain is bound to `pubkey_raw` by EITHER the leaf key being
+    /// the signing key (option A) OR the freshness-code commitment (option B).
+    pub fn binds_key(&self, pubkey_raw: &[u8]) -> bool {
+        self.leaf_public_key.as_deref() == Some(pubkey_raw) || self.freshness_binds(pubkey_raw)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum MdaError {
     #[error("empty certificate chain")]
@@ -322,6 +357,50 @@ mod tests {
         BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa,
         KeyPair, PKCS_ECDSA_P256_SHA256,
     };
+
+    #[test]
+    fn freshness_binds_option_b() {
+        use sha2::{Digest, Sha256};
+        let pubkey = vec![7u8; 64]; // raw 64-byte P-256 X‖Y
+        let good = Sha256::digest(&pubkey).to_vec();
+
+        // Raw 32-byte freshness == sha256(pubkey) → binds.
+        let r = MdaResult {
+            freshness_code: Some(good.clone()),
+            ..Default::default()
+        };
+        assert!(r.freshness_binds(&pubkey));
+        assert!(r.binds_key(&pubkey));
+
+        // Same value still inside its DER OCTET STRING wrapper (04 20 ‖ 32) → binds.
+        let mut wrapped = vec![0x04u8, 0x20];
+        wrapped.extend_from_slice(&good);
+        let r = MdaResult {
+            freshness_code: Some(wrapped),
+            ..Default::default()
+        };
+        assert!(r.freshness_binds(&pubkey));
+
+        // Freshness for a DIFFERENT key → does NOT bind.
+        let other = Sha256::digest([9u8; 64]).to_vec();
+        let r = MdaResult {
+            freshness_code: Some(other),
+            ..Default::default()
+        };
+        assert!(!r.freshness_binds(&pubkey));
+        assert!(!r.binds_key(&pubkey));
+
+        // No freshness + no leaf key → no binding material.
+        let r = MdaResult::default();
+        assert!(!r.binds_key(&pubkey));
+
+        // Option A still works: leaf key == signing key.
+        let r = MdaResult {
+            leaf_public_key: Some(pubkey.clone()),
+            ..Default::default()
+        };
+        assert!(r.binds_key(&pubkey));
+    }
 
     #[test]
     fn parse_bool_fails_closed_on_malformed_input() {

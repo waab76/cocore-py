@@ -198,10 +198,10 @@ pub fn build(
         &inputs.mda_cert_chain
     } else {
         match crate::mda::verify_chain(&inputs.mda_cert_chain) {
-            Ok(res)
-                if res.valid
-                    && res.leaf_public_key.as_deref() == Some(&signer.public_key_bytes()[..]) =>
-            {
+            // Bind to our signing key by EITHER rule (leaf==key, or the
+            // freshness-code commitment sha256(signing pubkey)). See
+            // mda::MdaResult::binds_key + the BINDING CONTRACT in mda_loader.rs.
+            Ok(res) if res.valid && res.binds_key(&signer.public_key_bytes()) => {
                 if let Some(serial) = res.device_serial.as_deref() {
                     serial_hash = hash_serial(serial, &inputs.provider_did);
                 }
@@ -209,8 +209,8 @@ pub fn build(
             }
             Ok(res) if res.valid => {
                 tracing::warn!(
-                    "MDA chain verifies but its leaf does not certify our signing key; \
-                     dropping it and staying self-attested"
+                    "MDA chain verifies but is not bound to our signing key \
+                     (neither leaf-key nor freshness-code); dropping it and staying self-attested"
                 );
                 &empty
             }

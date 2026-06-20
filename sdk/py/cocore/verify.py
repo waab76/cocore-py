@@ -15,6 +15,8 @@ demanded confidential it FAILS CLOSED (ok=False).
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -98,10 +100,23 @@ def verify_provider_for_seal(
         if mda is not None:
             if not mda.valid:
                 block("mda-invalid", "MDA chain did not verify")
-            if not mda.leaf_public_key:
-                block("mda-no-leaf-key", "MDA leaf has no extractable P-256 key to bind")
-            elif mda.leaf_public_key != attestation.get("publicKey"):
-                block("mda-unbound", "MDA leaf key != attestation.publicKey (chain not bound)")
+            # BINDING (parity with verify-provider.ts): bind to the signing key
+            # via (A) leaf == publicKey, OR (B) freshness-code commits to it
+            # (freshness == sha256(publicKey)). Fail-closed if neither holds.
+            pub_b64 = attestation.get("publicKey")
+            leaf_binds = bool(mda.leaf_public_key) and mda.leaf_public_key == pub_b64
+            fresh_binds = _freshness_binds_key(mda.freshness_code, pub_b64)
+            if not leaf_binds and not fresh_binds:
+                if not mda.leaf_public_key and not mda.freshness_code:
+                    block(
+                        "mda-no-binding-material",
+                        "MDA leaf has neither an extractable P-256 key nor a freshness code to bind",
+                    )
+                else:
+                    block(
+                        "mda-unbound",
+                        "MDA chain is not bound to attestation.publicKey (neither leaf-key nor freshness-code binding holds)",
+                    )
 
     # 3. cdHash in the known-good set.
     cd = attestation.get("cdHash")
@@ -191,6 +206,25 @@ def verify_provider_for_seal(
             session_key["ephemeralPubKey"] if session_key else attestation.get("encryptionPubKey")
         )
     return result
+
+
+def _freshness_binds_key(freshness_code: Optional[bytes], public_key_b64: Optional[str]) -> bool:
+    """Option-B binding: the MDA leaf's Apple freshness code commits to the
+    signing key iff freshness == sha256(publicKey raw bytes). Tolerates the DER
+    OCTET STRING wrapper (04 20 ‖ 32) so it matches the TS/Rust verifiers
+    byte-for-byte. Constant-time compare; never raises."""
+    if not freshness_code or not public_key_b64:
+        return False
+    try:
+        pub = base64.b64decode(public_key_b64)
+    except (ValueError, TypeError):
+        return False
+    if not pub:
+        return False
+    fc = freshness_code
+    if len(fc) == 34 and fc[0] == 0x04 and fc[1] == 0x20:
+        fc = fc[2:]
+    return hmac.compare_digest(hashlib.sha256(pub).digest(), fc)
 
 
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:

@@ -120,3 +120,26 @@ def test_posture_gates_fail_closed():
     )
     assert not r2.ok
     assert "no-known-good-set" in r2.codes()
+
+
+def test_freshness_binds_key_option_b():
+    """Option-B binding parity with mda.rs::freshness_binds + verify-provider.ts.
+    Uses the SAME vector as the Rust/TS tests (64 bytes of 0x07)."""
+    import base64
+    import hashlib
+
+    from cocore.verify import _freshness_binds_key
+
+    pub_raw = bytes([7]) * 64
+    pub_b64 = base64.b64encode(pub_raw).decode()
+    good = hashlib.sha256(pub_raw).digest()
+
+    # raw 32-byte freshness == sha256(pubkey) → binds
+    assert _freshness_binds_key(good, pub_b64) is True
+    # DER OCTET STRING-wrapped (04 20 ‖ 32) → binds
+    assert _freshness_binds_key(b"\x04\x20" + good, pub_b64) is True
+    # freshness for a different key → does not bind
+    assert _freshness_binds_key(hashlib.sha256(bytes([9]) * 64).digest(), pub_b64) is False
+    # missing/empty → False, never raises
+    assert _freshness_binds_key(None, pub_b64) is False
+    assert _freshness_binds_key(b"", pub_b64) is False

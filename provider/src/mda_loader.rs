@@ -34,20 +34,27 @@
 //!      `DCAppAttestService` / DeviceCheck APIs and emit the chain
 //!      Apple signs on the spot.
 //!
-//! ## BINDING CONTRACT (load-bearing)
+//! ## BINDING CONTRACT (load-bearing) — RESOLVED: freshness-code (option b)
 //!
-//! Whichever flow produces the chain, its **leaf MUST certify this
-//! agent's receipt-signing P-256 key** (the `SigningIdentity` public
-//! key — the same value published as the attestation's `publicKey`). The
-//! ACME `device-attest-01` path lets the device choose the attested key,
-//! so the provisioning tool submits the signing key's public key. A
-//! verifier BINDS the chain to the signer by requiring
-//! `leaf.publicKey == attestation.publicKey`; a chain whose leaf attests
-//! some OTHER key earns nothing (it could be a valid Apple chain for an
-//! unrelated device, stapled onto this signer). `attestation::build`
-//! enforces the same on the way out — it drops any chain that doesn't
-//! verify Apple-rooted AND bind to the signing key, staying
-//! self-attested rather than publishing an unbacked hardware claim.
+//! Whichever flow produces the chain, it **MUST bind to this agent's
+//! receipt-signing P-256 key** (the `SigningIdentity` public key — the
+//! same value published as the attestation's `publicKey`), or a genuine
+//! Apple chain for an unrelated device could be stapled onto this signer.
+//! Two bindings are accepted (see `mda::MdaResult::binds_key`):
+//!
+//!   - **(a)** the attested leaf key IS the signing key
+//!     (`leaf.publicKey == attestation.publicKey`), or
+//!   - **(b)** the **freshness-code** binding (the chosen path): the leaf's
+//!     Apple freshness OID commits to the signing key —
+//!     `freshness_code == sha256(signing pubkey)`. The agent keeps its own
+//!     stable signing identity; the enrollment flow sets the attestation's
+//!     freshness / `clientDataHash` to that hash. The verifier recomputes
+//!     it offline from `publicKey` alone.
+//!
+//! `attestation::build` enforces the same on the way out — it drops any
+//! chain that doesn't verify Apple-rooted AND bind to the signing key (by
+//! either rule), staying self-attested rather than publishing an unbacked
+//! hardware claim.
 //!
 //! If both env vars are set, the file path wins (lets operators
 //! pin a chain across binary upgrades without re-attesting).

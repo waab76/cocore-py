@@ -40,6 +40,7 @@ APPLE_ENTERPRISE_ATTESTATION_ROOT_CA_PEM = (
 OID_SIP_STATUS = "1.2.840.113635.100.8.13.1"
 OID_SECURE_BOOT_STATUS = "1.2.840.113635.100.8.13.2"
 OID_DEVICE_SERIAL_NUMBER = "1.2.840.113635.100.8.9.1"
+OID_FRESHNESS_CODE = "1.2.840.113635.100.8.11.1"
 
 
 class MdaError(Exception):
@@ -55,6 +56,10 @@ class MdaResult:
     device_serial: Optional[str] = None
     sip_enabled: Optional[bool] = None
     secure_boot_enabled: Optional[bool] = None
+    #: Raw Apple freshness OID (1.2.840.113635.100.8.11.1) value — a 32-byte
+    #: SHA-256, possibly still in its DER OCTET STRING wrapper. The verifier's
+    #: freshness-code binding normalizes it.
+    freshness_code: Optional[bytes] = None
     error: Optional[str] = None
 
 
@@ -112,6 +117,7 @@ def _verify(chain_der: list[bytes], root: x509.Certificate, now: datetime) -> Md
     result.sip_enabled = _read_bool_oid(leaf, OID_SIP_STATUS)
     result.secure_boot_enabled = _read_bool_oid(leaf, OID_SECURE_BOOT_STATUS)
     result.device_serial = _read_str_oid(leaf, OID_DEVICE_SERIAL_NUMBER)
+    result.freshness_code = _ext_value(leaf, OID_FRESHNESS_CODE)
     return result
 
 

@@ -202,13 +202,36 @@ export async function verifyProviderForSeal(
       if (!mda.valid) {
         block("mda-invalid", "MDA chain did not verify");
       }
-      if (!mda.leafPublicKey) {
-        block("mda-no-leaf-key", "MDA leaf has no extractable P-256 key to bind");
-      } else if (mda.leafPublicKey !== attestation.publicKey) {
-        block(
-          "mda-unbound",
-          "MDA leaf public key does not equal attestation.publicKey (chain not bound to the signing key)",
-        );
+      // BINDING — the chain must be tied to the signing key
+      // (`attestation.publicKey`), or a genuine Apple chain for one device
+      // could be stapled onto an unrelated signing key. Two accepted ways:
+      //   (A) the attested leaf key IS the signing key (`leaf === publicKey`).
+      //       Works when the agent adopts the ACME/attested key as its signer.
+      //   (B) FRESHNESS-CODE binding (the chosen production path): the Apple
+      //       freshness OID (1.2.840.113635.100.8.11.1) in the leaf commits to
+      //       the signing key — `freshnessCode === sha256(publicKey)`. The
+      //       attestation flow sets that freshness/clientDataHash to the hash of
+      //       the agent's signing pubkey, so the verifier recomputes it OFFLINE
+      //       from `publicKey` alone (invariant #2 holds). This lets the agent
+      //       keep its own stable signing identity, decoupled from the MDM/ACME
+      //       key lifecycle. NOTE: binding proves the attestation belongs to this
+      //       signer + this genuine device; the cdHash/posture gates below are
+      //       what tie it to the *measured* binary (self-measured, the platform
+      //       ceiling on Apple silicon — same as our reference).
+      const leafBinds = !!mda.leafPublicKey && mda.leafPublicKey === attestation.publicKey;
+      const freshBinds = await freshnessBindsKey(mda.freshnessCode, attestation.publicKey);
+      if (!leafBinds && !freshBinds) {
+        if (!mda.leafPublicKey && (!mda.freshnessCode || mda.freshnessCode.length === 0)) {
+          block(
+            "mda-no-binding-material",
+            "MDA leaf has neither an extractable P-256 key nor a freshness code to bind",
+          );
+        } else {
+          block(
+            "mda-unbound",
+            "MDA chain is not bound to attestation.publicKey (neither leaf-key nor freshness-code binding holds)",
+          );
+        }
       }
     }
   }
@@ -362,6 +385,44 @@ function base64ToBytes(b64: string): Uint8Array {
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+/** Option-B binding: the MDA leaf's Apple freshness code commits to the signing
+ *  key iff `freshnessCode === sha256(publicKey-raw-bytes)`. `publicKeyB64` is the
+ *  attestation's `publicKey` (base64 of the raw 64-byte P-256 X‖Y point); the
+ *  attestation flow sets the freshness/clientDataHash to its SHA-256 so this is
+ *  recomputable offline. Returns false (never throws) on missing/short input. */
+export async function freshnessBindsKey(
+  freshnessCode: Uint8Array | undefined,
+  publicKeyB64: string,
+): Promise<boolean> {
+  if (!freshnessCode || freshnessCode.length === 0) return false;
+  let pub: Uint8Array;
+  try {
+    pub = base64ToBytes(publicKeyB64);
+  } catch {
+    return false;
+  }
+  if (pub.length === 0) return false;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", pub));
+  return constantTimeEqual(digest, normalizeFreshness(freshnessCode));
+}
+
+/** Apple's freshness OID value is a 32-byte SHA-256 carried in a DER OCTET
+ *  STRING. Depending on the X.509 parser we may receive the wrapped form
+ *  (`04 20 ‖ 32 bytes`) or the raw 32 bytes. Normalize to the inner 32 bytes so
+ *  the binding compares apples-to-apples across the TS/Py/Rust verifiers. */
+function normalizeFreshness(fc: Uint8Array): Uint8Array {
+  if (fc.length === 34 && fc[0] === 0x04 && fc[1] === 0x20) return fc.subarray(2);
+  return fc;
+}
+
+/** Length-checked constant-time byte compare (no early-out on content). */
+function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i]! ^ b[i]!;
+  return diff === 0;
 }
 
 /** Compare two macOS version strings. Extracts the first dotted-numeric run
