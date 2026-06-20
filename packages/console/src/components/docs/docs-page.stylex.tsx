@@ -661,6 +661,15 @@ export const docsStyles = stylex.create({
   nsidDim: {
     color: uiColor.text1,
   },
+  refAnchor: {
+    color: "inherit",
+    cursor: "pointer",
+    textDecoration: {
+      default: "none",
+      ":hover": "underline",
+    },
+    textUnderlineOffset: "0.2em",
+  },
   methodBadge: {
     borderRadius: radius.sm,
     fontFamily: fontFamily.sans,
