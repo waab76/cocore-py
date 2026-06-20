@@ -34,6 +34,38 @@ relays ciphertext + verified metadata and the provider record stays the source o
 truth. This is *stronger* than darkbloom on the coordinator-trust axis and keeps
 invariant #5.
 
+## Status (delivered in this work)
+
+| # | mechanism | status |
+|---|---|---|
+| 3 | binaryHash in signed attestation | ✅ pre-existing |
+| 4 | metallib hash attested | ✅ lexicon + producer (`metallib_hash()` engine hook) + verifier pin |
+| 5 | cdhash measurement | ✅ `codesign.rs` (csops) — **validated byte-for-byte vs `codesign -dvvv`** (cdHash + teamId) |
+| 6 | posture booleans (sip/secureBoot/hardened/LV/getTaskAllow) | ✅ produced + gated |
+| 7 | process hardening as attested capabilities (anti-debug/core-dumps/env-scrub) | ✅ `security::posture()` → attestation → verifier gate |
+| 9 | per-request forward-secret sealing + enclave-bound key | ✅ seal to selfSig-authenticated `encryptionPubKey`; optional enclave-signed `SessionKey` (`build_session_key`) |
+| 10 | 5-min challenge re-verifies SIP, fail-closed | ✅ advisor `recordChallengeSip` drops eligibility on SIP-off |
+| 11 | known-good build set | ✅ advisor `KnownGoodSet` + fail-closed `confidentialEligible` + `/verified-providers` |
+| 13 | fail-closed client-edge verifier | ✅ **`verify-provider.ts` + `cocore/verify.py`**, incl. the load-bearing **attestation selfSignature** check; cross-language PASS proven (Rust→TS, Rust→Python) |
+| 15 | tier markers | ✅ honest end-to-end (producer→Register→advisor `trustTier`→verifier recompute); console display = cosmetic follow-up |
+| 0 | agent signing posture | ✅ `cocore-provider.entitlements` + `sign-and-notarize.sh` — **validated** (flags `0x12000`, no get-task-allow, hypervisor) |
+
+**Remaining distance (environment/ops-gated, not code-writable here):**
+- **#1/#2 native in-process MLX token loop** — `engines/native_mlx.rs` scaffold is
+  done (in-process + metallib reporting, refuses to serve until wired); the MLX
+  wiring needs a **full-Xcode (Metal toolchain) build host** — absent here (CLT
+  only). The S1 design question is answered by the darkbloom reference
+  (precompiled `.metallib`, no `allow-jit`).
+- **#8 producing a real Apple MDA chain** — the verifier + binding are done and
+  proven; emitting a real chain needs **MDM ACME `device-attest-01` enrollment**
+  (S4, ops), not code.
+- **#12 APNs code-identity** — deliberately out; cocore reaches the equivalent
+  "no modified code" guarantee via measured-identity ∈ known-good + SIP
+  immutability + MDA binding, re-checked client-side.
+- **WS-EPHEMERAL two-phase transport** — the crypto core + cross-language vector
+  are done; wiring the optional advisor-trustless round-trip through the SSE
+  dispatch + console is the remaining integration.
+
 ## What this environment can and cannot finish
 
 - **Can build + test here:** WS-CDHASH (Rust+Swift, no Metal), WS-HARDENING,
