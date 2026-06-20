@@ -55,6 +55,7 @@ def verify_provider_for_seal(
     require_confidential: bool = False,
     known_good_cdhashes: Iterable[str] = (),
     known_good_metallib_hashes: Iterable[str] = (),
+    known_good_engine_lib_hashes: Iterable[str] = (),
     os_floor: Optional[str] = None,
     attestation_cid: Optional[str] = None,
     nonce: Optional[str] = None,
@@ -66,6 +67,7 @@ def verify_provider_for_seal(
     now = now or datetime.now(timezone.utc)
     known_good = {h.strip().lower() for h in known_good_cdhashes if h}
     known_good_metallibs = {h.strip().lower() for h in known_good_metallib_hashes if h}
+    known_good_engine_libs = {h.strip().lower() for h in known_good_engine_lib_hashes if h}
     blockers: list[tuple[str, str]] = []
 
     def block(code: str, message: str) -> None:
@@ -117,6 +119,14 @@ def verify_provider_for_seal(
             block("no-metallib-hash", "attestation has no measured metallibHash")
         elif mh.lower() not in known_good_metallibs:
             block("metallib-unknown", f"metallibHash {mh} is not in the known-good set")
+
+    # Engine-dylib pin (when supplied).
+    if known_good_engine_libs:
+        eh = attestation.get("engineLibHash")
+        if not eh:
+            block("no-engine-lib-hash", "attestation has no measured engineLibHash")
+        elif eh.lower() not in known_good_engine_libs:
+            block("engine-lib-unknown", f"engineLibHash {eh} is not in the known-good set")
 
     # 4. Hardened-runtime posture (absent booleans treated as the unsafe value).
     if attestation.get("sipEnabled") is not True:

@@ -919,6 +919,10 @@ async fn cmd_serve(advisor_url: &str) -> Result<()> {
         .entries()
         .iter()
         .find_map(|(_, e)| e.metallib_hash());
+    attestation_inputs.engine_lib_hash = engines
+        .entries()
+        .iter()
+        .find_map(|(_, e)| e.engine_lib_hash());
     // Echo the signed attestation's measured identity + tier on the Register
     // frame so the advisor can compute confidential eligibility (accelerator
     // only — the PDS attestation stays authoritative for client verification).
@@ -1322,6 +1326,30 @@ fn build_engines(
     use cocore_provider::engines::stub::StubEngine;
     let mut registry = cocore_provider::engines::EngineRegistry::new();
     registry.register("stub", std::sync::Arc::new(StubEngine));
+
+    // WS-ENGINE: the native in-process MLX engine (confidential tier). Opt-in
+    // and feature-gated so it never disrupts the subprocess path. Configure a
+    // model id + its local snapshot dir; the prompt is then served entirely
+    // inside the measured binary (flips inProcessBackend + metallibHash true).
+    #[cfg(feature = "native_mlx")]
+    if let (Ok(model), Ok(dir)) = (
+        std::env::var("COCORE_NATIVE_MLX_MODEL"),
+        std::env::var("COCORE_NATIVE_MLX_MODEL_DIR"),
+    ) {
+        use cocore_provider::engines::native_mlx::NativeMlxEngine;
+        use cocore_provider::engines::Engine;
+        match NativeMlxEngine::load(std::path::PathBuf::from(dir), None) {
+            Ok(engine) if engine.ready() => {
+                tracing::info!(model = %model, "loaded native in-process MLX engine (confidential-capable)");
+                registry.register(model, std::sync::Arc::new(engine));
+            }
+            Ok(_) => tracing::warn!(
+                model = %model,
+                "native MLX engine loaded but metallib not located; not registering (confidential tier unavailable)"
+            ),
+            Err(e) => tracing::warn!(error = %e, model = %model, "failed to load native MLX engine"),
+        }
+    }
 
     let raw = std::env::var("COCORE_INFERENCE_MODELS")
         .or_else(|_| std::env::var("COCORE_INFERENCE_MODEL"))

@@ -27,13 +27,22 @@ ENTITLEMENTS="$HERE/cocore-provider.entitlements"
 
 [ -f "$ENTITLEMENTS" ] || { echo "missing $ENTITLEMENTS" >&2; exit 1; }
 
-# Sign the metallib first (it's a dependency loaded at runtime; library
-# validation requires it to be signed by the same team).
+# Sign the metallib + the native engine dylib FIRST (they're loaded at runtime;
+# enforced library validation requires every loaded dylib to be signed by the
+# same team, and the metallib/dylib hashes are pinned in the attestation).
 if [ -n "$METALLIB" ]; then
   echo "==> signing metallib $METALLIB"
   codesign --force --options runtime --timestamp --sign "$IDENT" "$METALLIB"
   echo "    metallib SHA-256: $(shasum -a 256 "$METALLIB" | cut -d' ' -f1)"
 fi
+# Any libCoCoreMLX.dylib (and other engine dylibs) colocated with the binary.
+BIN_DIR="$(cd "$(dirname "$BIN")" && pwd)"
+for dylib in "$BIN_DIR"/*.dylib; do
+  [ -e "$dylib" ] || continue
+  echo "==> signing engine dylib $dylib"
+  codesign --force --options runtime --timestamp --sign "$IDENT" "$dylib"
+  echo "    engineLib SHA-256 (pin in the known-good set): $(shasum -a 256 "$dylib" | cut -d' ' -f1)"
+done
 
 # CRITICAL: runtime,library. `runtime` alone does NOT set CS_REQUIRE_LV, so the
 # attestation's libraryValidation would read false and the confidential tier

@@ -240,6 +240,17 @@ pub trait Engine: Send + Sync {
     fn metallib_hash(&self) -> Option<String> {
         None
     }
+
+    /// SHA-256 hex of the dynamic library that actually runs the in-process
+    /// engine (e.g. `libCoCoreMLX.dylib`), when one is loaded. Because a
+    /// dynamic engine lib is a measurable component the main binary's cdHash
+    /// does NOT cover, a confidential verifier pins this too (enforced library
+    /// validation already blocks a different team's dylib; this also locks the
+    /// hash within our own team's releases). `None` for engines whose code is
+    /// fully inside the measured binary (stub) or in a subprocess.
+    fn engine_lib_hash(&self) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(test)]

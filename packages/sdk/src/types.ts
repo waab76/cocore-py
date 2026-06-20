@@ -80,6 +80,9 @@ export interface AttestationRecord {
   /** SHA-256 hex of the precompiled Metal shader library the in-process
    *  engine loads. Absent when no native engine is loaded. */
   metallibHash?: string;
+  /** SHA-256 hex of the dynamic engine library (e.g. libCoCoreMLX.dylib) — a
+   *  measurable the cdHash doesn't cover. Absent for subprocess/static backends. */
+  engineLibHash?: string;
   /** True iff inference runs inside this measured binary (native engine),
    *  not an owner-controlled subprocess. The load-bearing confidential bit. */
   inProcessBackend?: boolean;

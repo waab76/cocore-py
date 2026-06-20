@@ -42,6 +42,9 @@ pub struct AttestationInputs {
     /// SHA-256 hex of the precompiled Metal shader library the in-process
     /// engine loads. `None` for the subprocess/best-effort backend.
     pub metallib_hash: Option<String>,
+    /// SHA-256 hex of the dynamic engine library (libCoCoreMLX.dylib). `None`
+    /// for the subprocess/best-effort backend.
+    pub engine_lib_hash: Option<String>,
     /// True iff inference runs inside THIS measured binary (native engine),
     /// not an owner-controlled subprocess. The load-bearing confidential bit.
     pub in_process_backend: bool,
@@ -79,6 +82,8 @@ pub struct AttestationRecord {
     pub getTaskAllow: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metallibHash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engineLibHash: Option<String>,
     pub inProcessBackend: bool,
     pub antiDebug: bool,
     pub coreDumpsDisabled: bool,
@@ -140,6 +145,7 @@ pub fn build_stub_inputs(provider_did: &str, encryption_pub_key_b64: &str) -> At
         // No native engine yet → no measured metallib and the prompt is still
         // handled by the subprocess backend. Honest: not in-process.
         metallib_hash: None,
+        engine_lib_hash: None,
         in_process_backend: false,
         anti_debug: hp.anti_debug,
         core_dumps_disabled: hp.core_dumps_disabled,
@@ -282,6 +288,9 @@ pub fn build(
         if let Some(mh) = &inputs.metallib_hash {
             map.insert("metallibHash".into(), Value::String(mh.clone()));
         }
+        if let Some(eh) = &inputs.engine_lib_hash {
+            map.insert("engineLibHash".into(), Value::String(eh.clone()));
+        }
     }
     let canonical = to_canonical_bytes(&unsigned)?;
     let sig = signer
@@ -308,6 +317,7 @@ pub fn build(
         libraryValidation: inputs.library_validation,
         getTaskAllow: inputs.get_task_allow,
         metallibHash: inputs.metallib_hash,
+        engineLibHash: inputs.engine_lib_hash,
         inProcessBackend: inputs.in_process_backend,
         antiDebug: inputs.anti_debug,
         coreDumpsDisabled: inputs.core_dumps_disabled,
@@ -373,6 +383,7 @@ mod tests {
             library_validation: true,
             get_task_allow: false,
             metallib_hash: None,
+            engine_lib_hash: None,
             in_process_backend: false,
             anti_debug: true,
             core_dumps_disabled: true,
@@ -416,6 +427,7 @@ mod tests {
             library_validation: true,
             get_task_allow: false,
             metallib_hash: None,
+            engine_lib_hash: None,
             in_process_backend: true,
             anti_debug: true,
             core_dumps_disabled: true,

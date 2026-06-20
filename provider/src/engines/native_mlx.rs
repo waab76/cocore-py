@@ -51,6 +51,7 @@ pub struct NativeMlxEngine {
     #[cfg(target_os = "macos")]
     handle: std::sync::Mutex<Handle>,
     metallib_hash: Option<String>,
+    engine_lib_hash: Option<String>,
     #[allow(dead_code)]
     model_dir: PathBuf,
 }
@@ -89,6 +90,7 @@ impl NativeMlxEngine {
         Ok(Self {
             handle: std::sync::Mutex::new(Handle(handle)),
             metallib_hash,
+            engine_lib_hash: dylib_hash(),
             model_dir,
         })
     }
@@ -97,6 +99,25 @@ impl NativeMlxEngine {
     pub fn load(_model_dir: PathBuf, _metallib_path: Option<PathBuf>) -> Result<Self> {
         anyhow::bail!("native_mlx engine is macOS/Apple-silicon only")
     }
+}
+
+/// SHA-256 hex of the `libCoCoreMLX.dylib` actually loaded — located via
+/// `dladdr` on one of its own exported symbols, then hashed. This pins the
+/// dynamic engine library (which the main binary's cdHash does not cover) so a
+/// confidential verifier can confirm it's a blessed build.
+#[cfg(target_os = "macos")]
+fn dylib_hash() -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    let sym = ffi::cocore_mlx_load_model as *const std::os::raw::c_void;
+    if unsafe { libc::dladdr(sym, &mut info) } == 0 || info.dli_fname.is_null() {
+        return None;
+    }
+    let path = unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }.to_str().ok()?;
+    let mut h = Sha256::new();
+    let mut f = std::fs::File::open(path).ok()?;
+    std::io::copy(&mut f, &mut h).ok()?;
+    Some(hex::encode(h.finalize()))
 }
 
 #[cfg(target_os = "macos")]
@@ -128,6 +149,10 @@ impl Engine for NativeMlxEngine {
 
     fn metallib_hash(&self) -> Option<String> {
         self.metallib_hash.clone()
+    }
+
+    fn engine_lib_hash(&self) -> Option<String> {
+        self.engine_lib_hash.clone()
     }
 
     #[cfg(target_os = "macos")]

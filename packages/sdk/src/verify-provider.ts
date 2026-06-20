@@ -69,6 +69,10 @@ export interface VerifyProviderOptions {
    *  in this set. Empty/absent skips the metallib pin (cdHash already pins the
    *  binary that loads it). */
   knownGoodMetallibHashes?: Iterable<string>;
+  /** SHA-256 hex of dynamic engine libraries the caller trusts. When provided,
+   *  an in-process provider's `engineLibHash` must be in this set (the dylib
+   *  isn't covered by the cdHash). Empty/absent skips the pin. */
+  knownGoodEngineLibHashes?: Iterable<string>;
   /** Minimum acceptable macOS version, e.g. "14.6.1" or "macOS 14.6.1".
    *  Providers below the floor cannot earn confidential. */
   osFloor?: string;
@@ -143,6 +147,9 @@ export async function verifyProviderForSeal(
   );
   const knownGoodMetallibs = new Set<string>(
     [...(opts.knownGoodMetallibHashes ?? [])].map((h) => h.toLowerCase()),
+  );
+  const knownGoodEngineLibs = new Set<string>(
+    [...(opts.knownGoodEngineLibHashes ?? [])].map((h) => h.toLowerCase()),
   );
 
   // Confidential blockers are collected here. If empty at the end, the
@@ -222,6 +229,16 @@ export async function verifyProviderForSeal(
       block("no-metallib-hash", "attestation has no measured metallibHash");
     } else if (!knownGoodMetallibs.has(attestation.metallibHash.toLowerCase())) {
       block("metallib-unknown", `metallibHash ${attestation.metallibHash} is not in the known-good set`);
+    }
+  }
+
+  // Engine-dylib pin (the in-process engine code the cdHash doesn't cover), when
+  // the caller supplies a known-good engine-lib set.
+  if (knownGoodEngineLibs.size > 0) {
+    if (!attestation.engineLibHash) {
+      block("no-engine-lib-hash", "attestation has no measured engineLibHash");
+    } else if (!knownGoodEngineLibs.has(attestation.engineLibHash.toLowerCase())) {
+      block("engine-lib-unknown", `engineLibHash ${attestation.engineLibHash} is not in the known-good set`);
     }
   }
 

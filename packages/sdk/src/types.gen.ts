@@ -90,6 +90,7 @@ export interface AttestationRecord {
   libraryValidation?: boolean;
   getTaskAllow?: boolean;
   metallibHash?: string;
+  engineLibHash?: string;
   inProcessBackend?: boolean;
   antiDebug?: boolean;
   coreDumpsDisabled?: boolean;

@@ -53,6 +53,7 @@ def test_cross_language_confidential_pass():
         require_session_key=True,
         known_good_cdhashes=[f["knownGoodCdHash"]],
         known_good_metallib_hashes=[f["knownGoodMetallibHash"]],
+        known_good_engine_lib_hashes=[f["knownGoodEngineLibHash"]],
         os_floor=f["osFloor"],
         trust_anchor_der=root_der,
         attestation_cid=f["attestationCid"],

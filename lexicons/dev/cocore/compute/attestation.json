@@ -83,6 +83,12 @@
             "maxLength": 64,
             "description": "SHA-256 hex of the precompiled Metal shader library (`mlx.metallib` or equivalent) the in-process inference engine loads at runtime. The GPU kernels that touch the plaintext live here, so a confidential verifier pins this to a known-good value alongside `cdHash`. Absent when no native engine is loaded (e.g. the subprocess/best-effort backend). Optional / additive."
           },
+          "engineLibHash": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "SHA-256 hex of the dynamic library that runs the in-process inference engine (e.g. `libCoCoreMLX.dylib`). When the engine is a separately-loaded dylib rather than code statically inside the agent binary, the `cdHash` does not cover it, so a confidential verifier pins this too. Enforced library validation already blocks a different team's dylib; this additionally locks the hash within the provider team's own blessed releases. Absent when inference runs in a subprocess or fully inside the measured binary. Optional / additive."
+          },
           "inProcessBackend": {
             "type": "boolean",
             "description": "True iff inference runs INSIDE this measured, signed binary (native in-process engine) rather than in an owner-controlled subprocess/interpreter. This is THE load-bearing confidentiality property — if false, the prompt is handed to a process the attestation does not cover, so the work can never be `attested-confidential`. Optional / additive; absent treated as false."

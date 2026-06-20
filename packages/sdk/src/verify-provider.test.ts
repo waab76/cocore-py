@@ -383,6 +383,7 @@ test.skipIf(!existsSync(CONF_FIXTURE))(
       requireSessionKey: true,
       knownGoodCdHashes: [f.knownGoodCdHash],
       knownGoodMetallibHashes: [f.knownGoodMetallibHash],
+      knownGoodEngineLibHashes: [f.knownGoodEngineLibHash],
       osFloor: f.osFloor,
       trustAnchorDer: rootDer,
       attestationCid: f.attestationCid,
