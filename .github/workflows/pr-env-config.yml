@@ -8,8 +8,8 @@
 # deterministic domains + fill the shared secrets, then redeploys. The script
 # is idempotent (a no-op once configured), so running on every push is cheap.
 #
-# Requires a Railway token with project-wide access as the `RAILWAY_TOKEN`
-# repo secret. Without it (or on fork PRs), the job no-ops — the app build
+# Requires a Railway account/team token as the `RAILWAY_API_TOKEN` repo secret.
+# Without it (or on fork PRs), the job no-ops — the app build
 # still targets the PR URLs (provider-pr-build.yml), the services just keep
 # their cloned-from-prod values until configured.
 

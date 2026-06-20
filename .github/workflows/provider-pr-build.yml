@@ -58,17 +58,14 @@ jobs:
       - name: Resolve this PR's stack URLs
         id: stack
         # Railway's per-PR preview environment is named `cocore-pr-<N>` and its
-        # service domains are deterministic: `<service>-<env>.up.railway.app`.
-        # So we can target this PR's console + advisor straight from the PR
-        # number — no Railway token, works on fork PRs too. (If Railway ever
-        # appends a collision suffix to a PR domain, switch this to a
-        # `railway variables --json` lookup of RAILWAY_PUBLIC_DOMAIN.)
+        # service domains are deterministic: `<slug>-<env>.up.railway.app`.
+        # co/core Railway services: Client, Services, Advisor → client-/services-/advisor-.
         if: github.event_name == 'pull_request'
         run: |
           ENV="cocore-pr-${{ github.event.pull_request.number }}"
-          echo "console_url=https://console-$ENV.up.railway.app" >> "$GITHUB_OUTPUT"
+          echo "console_url=https://client-$ENV.up.railway.app" >> "$GITHUB_OUTPUT"
           echo "advisor_url=wss://advisor-$ENV.up.railway.app/v1/agent" >> "$GITHUB_OUTPUT"
-          echo "Wiring app to PR stack: console-$ENV / advisor-$ENV"
+          echo "Wiring app to PR stack: client-$ENV / advisor-$ENV"
 
       - name: Build menu-bar app + CLI (ad-hoc signed)
         # build-mac-app.sh runs `swift build` for provider-shell, assembles
