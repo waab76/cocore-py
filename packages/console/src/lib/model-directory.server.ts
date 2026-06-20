@@ -150,6 +150,70 @@ function safeNumber(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+const SLINGSHOT_BASE = "https://slingshot.microcosm.blue";
+
+/** Resolve a DID's operator chip (handle + display name + avatar) WITHOUT the
+ *  Bluesky appview: microcosm's Slingshot returns the bidirectionally-verified
+ *  handle + PDS, then we read the `app.bsky.actor.profile` record off that PDS
+ *  for the display name + avatar blob (served back through the PDS's getBlob,
+ *  so still appview-agnostic). Best-effort — any failure yields whatever we
+ *  resolved, or null. Used for provider DIDs with no local
+ *  `dev.cocore.account.profile` record so the directory shows a real operator
+ *  instead of a bare DID. */
+async function hydrateMicrocosmProfile(did: string): Promise<ProfileChip | null> {
+  try {
+    const idRes = await fetch(
+      `${SLINGSHOT_BASE}/xrpc/com.bad-example.identity.resolveMiniDoc?identifier=${encodeURIComponent(did)}`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!idRes.ok) return null;
+    const mini = (await idRes.json()) as { handle?: string; pds?: string };
+    const handle = safeString(mini.handle);
+    const pds = safeString(mini.pds)?.replace(/\/$/, "") ?? null;
+
+    let displayName: string | null = null;
+    let avatarUrl: string | null = null;
+    if (pds) {
+      try {
+        const recRes = await fetch(
+          `${pds}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}` +
+            `&collection=app.bsky.actor.profile&rkey=self`,
+          { headers: { Accept: "application/json" } },
+        );
+        if (recRes.ok) {
+          const body = (await recRes.json()) as {
+            value?: { displayName?: unknown; avatar?: { ref?: { $link?: unknown } } };
+          };
+          displayName = safeString(body.value?.displayName);
+          const cid = body.value?.avatar?.ref?.$link;
+          if (typeof cid === "string" && cid.length > 0) {
+            avatarUrl =
+              `${pds}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}` +
+              `&cid=${encodeURIComponent(cid)}`;
+          }
+        }
+      } catch {
+        // profile record is optional — the handle alone is already a win.
+      }
+    }
+    if (!handle && !displayName && !avatarUrl) return null;
+    return { did, handle, displayName, avatarUrl };
+  } catch {
+    return null;
+  }
+}
+
+/** Batch-hydrate operator chips for the given DIDs via microcosm. Best-effort
+ *  and parallel; a slow/failed lookup never blocks the directory. */
+async function hydrateMicrocosmProfiles(dids: string[]): Promise<Map<string, ProfileChip>> {
+  const out = new Map<string, ProfileChip>();
+  const results = await Promise.allSettled(dids.map((d) => hydrateMicrocosmProfile(d)));
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled" && r.value) out.set(dids[i]!, r.value);
+  });
+  return out;
+}
+
 function emptyActivityStats(): AppviewActivityStats {
   return {
     hour: { requests: 0, tokens: 0 },
@@ -255,8 +319,29 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
     console.warn("[model-directory] AppView modelActivity failed:", activityResult.reason);
   }
 
-  // Group machines by model id.
+  // Fall back to microcosm for operator chips: any online provider DID without
+  // a local dev.cocore.account.profile record gets its handle/name/avatar from
+  // Slingshot + its PDS, so the table shows a real user instead of a bare DID.
+  const onlineMissingProfile = [
+    ...new Set(
+      providersResult.value.providers
+        .map((row) => row.repo)
+        .filter((did) => (advisorOnline?.has(did) ?? false) && !profilesByDid.has(did)),
+    ),
+  ];
+  const microcosmByDid =
+    onlineMissingProfile.length > 0
+      ? await hydrateMicrocosmProfiles(onlineMissingProfile)
+      : new Map<string, ProfileChip>();
+  const hostFor = (did: string): ProfileChip | null =>
+    profilesByDid.get(did) ?? microcosmByDid.get(did) ?? null;
+
+  // Group machines by model id, deduping by physical machine. A machine is
+  // keyed by its attestationPubKey (its identity key), so when one box has
+  // more than one provider record indexed (e.g. a stale rkey that never got
+  // cleaned up) we keep just the freshest — exactly one row per machine.
   const byModel = new Map<string, ModelDirectoryEntry>();
+  const machinesByModel = new Map<string, Map<string, ModelMachine>>();
   for (const row of providersResult.value.providers) {
     const body = row.body as ProviderRecordView;
     const supportedModels = body.supportedModels ?? [];
@@ -281,17 +366,26 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
         byModel.set(modelId, entry);
       }
       const seen = advisorOnline.get(did) ?? lastSeen;
-      entry.machines.push({
-        did,
-        machineLabel: safeString(body.machineLabel),
-        chip: safeString(body.chip),
-        ramGB: safeNumber(body.ramGB),
-        attestationPubKey: safeString(body.attestationPubKey),
-        lastSeen: seen,
-        host: profilesByDid.get(did) ?? null,
-        activity: activityFor(activity, modelId, did),
-      });
-      entry.machineCount = entry.machines.length;
+      const attestationPubKey = safeString(body.attestationPubKey);
+      const machineKey = attestationPubKey ?? did;
+      let machines = machinesByModel.get(modelId);
+      if (!machines) {
+        machines = new Map<string, ModelMachine>();
+        machinesByModel.set(modelId, machines);
+      }
+      const prev = machines.get(machineKey);
+      if (!prev || (seen != null && (prev.lastSeen == null || seen > prev.lastSeen))) {
+        machines.set(machineKey, {
+          did,
+          machineLabel: safeString(body.machineLabel),
+          chip: safeString(body.chip),
+          ramGB: safeNumber(body.ramGB),
+          attestationPubKey,
+          lastSeen: seen,
+          host: hostFor(did),
+          activity: activityFor(activity, modelId, did),
+        });
+      }
       const price = pickPrice(body.priceList, modelId);
       if (price) {
         // Take the first price we see for the model id. The exchange
@@ -310,6 +404,14 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
         }
       }
     }
+  }
+
+  // Materialize the deduped machine rows onto each entry.
+  for (const [modelId, machines] of machinesByModel) {
+    const entry = byModel.get(modelId);
+    if (!entry) continue;
+    entry.machines = [...machines.values()];
+    entry.machineCount = entry.machines.length;
   }
 
   // Sort models: most-provisioned first; within that, alphabetical.
