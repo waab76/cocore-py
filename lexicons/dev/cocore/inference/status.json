@@ -19,8 +19,8 @@
           "required": ["status"],
           "properties": {
             "status": { "type": "string", "enum": ["pending", "received", "settled"] },
-            "receipt": { "type": "ref", "ref": "dev.cocore.appview.defs#indexedRecord" },
-            "settlement": { "type": "ref", "ref": "dev.cocore.appview.defs#indexedRecord" }
+            "receipt": { "type": "ref", "ref": "dev.cocore.defs#indexedRecord" },
+            "settlement": { "type": "ref", "ref": "dev.cocore.defs#indexedRecord" }
           }
         }
       },

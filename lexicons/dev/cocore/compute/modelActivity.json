@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "dev.cocore.appview.modelActivity",
+  "id": "dev.cocore.compute.modelActivity",
   "defs": {
     "main": {
       "type": "query",
@@ -19,7 +19,7 @@
                 "required": ["modelId", "totals", "byProvider"],
                 "properties": {
                   "modelId": { "type": "string" },
-                  "totals": { "type": "ref", "ref": "dev.cocore.appview.defs#activityWindows" },
+                  "totals": { "type": "ref", "ref": "dev.cocore.defs#activityWindows" },
                   "byProvider": {
                     "type": "array",
                     "items": {
@@ -27,7 +27,7 @@
                       "required": ["did", "stats"],
                       "properties": {
                         "did": { "type": "string", "format": "did" },
-                        "stats": { "type": "ref", "ref": "dev.cocore.appview.defs#activityWindows" }
+                        "stats": { "type": "ref", "ref": "dev.cocore.defs#activityWindows" }
                       }
                     }
                   }

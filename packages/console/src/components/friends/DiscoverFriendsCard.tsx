@@ -2,7 +2,7 @@
 
 // Discovery directory for the /friends page. Shows a paginated grid
 // of every signed-up cocore account, sourced from the AppView's
-// `dev.cocore.appview.listAccounts` endpoint. Each card has avatar,
+// `dev.cocore.account.listAccounts` endpoint. Each card has avatar,
 // display name, handle, joined-at, an optional "provider"
 // badge, and a Friend / Friended button so the user can add someone
 // without leaving the page.

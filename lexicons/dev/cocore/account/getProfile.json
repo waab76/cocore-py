@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "dev.cocore.appview.getProfile",
+  "id": "dev.cocore.account.getProfile",
   "defs": {
     "main": {
       "type": "query",

@@ -175,7 +175,7 @@ async function loadPdsState(did: string): Promise<{
   const appviewBase = cocoreConfig().appviewUrl?.replace(/\/$/, "");
   if (!appviewBase) return { providerRecord: null, attestationRecord: null };
   const providers = await fetchJson<{ providers: AppViewIndexedRow[] }>(
-    `${appviewBase}/xrpc/dev.cocore.appview.listProviders`,
+    `${appviewBase}/xrpc/dev.cocore.compute.listProviders`,
   );
   let providerRecord: HealthResponse["pds"]["providerRecord"] = null;
   if (providers?.providers) {

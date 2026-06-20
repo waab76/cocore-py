@@ -96,7 +96,7 @@ export interface AppviewProfileWeekSeries {
   trustedByNew: number[];
 }
 
-/** Full payload returned by `dev.cocore.appview.getProfile`. Mirrors
+/** Full payload returned by `dev.cocore.account.getProfile`. Mirrors
  *  `ProfilePagePayload` on the AppView side; kept in sync by the
  *  cross-package convention that the UI consumes this verbatim. */
 export interface AppviewProfilePagePayload {
@@ -298,12 +298,12 @@ function appviewGetJsonEffect<T>(
 export const appviewListProvidersEffect: Effect.Effect<
   AppviewListProvidersResponse,
   AppviewFetchError
-> = appviewGetJsonEffect("/xrpc/dev.cocore.appview.listProviders", new URLSearchParams());
+> = appviewGetJsonEffect("/xrpc/dev.cocore.compute.listProviders", new URLSearchParams());
 
 export const appviewListProfilesEffect: Effect.Effect<
   AppviewListProfilesResponse,
   AppviewFetchError
-> = appviewGetJsonEffect("/xrpc/dev.cocore.appview.listProfiles", new URLSearchParams());
+> = appviewGetJsonEffect("/xrpc/dev.cocore.account.listProfiles", new URLSearchParams());
 
 /** Discovery directory used by /friends. The AppView returns every
  *  signed-up DID with profile fields denormalized + provider counts
@@ -311,7 +311,7 @@ export const appviewListProfilesEffect: Effect.Effect<
  *
  *  `viewerDid` excludes the caller from results so the directory
  *  doesn't offer "friend yourself." Pass the session's DID. */
-/** GET `/xrpc/dev.cocore.appview.getProfile?did=...`. Returns null
+/** GET `/xrpc/dev.cocore.account.getProfile?did=...`. Returns null
  *  when the DID has no signed-up footprint (404 from the AppView);
  *  any other error becomes an AppviewFetchError. */
 export function appviewGetProfileEffect(
@@ -322,7 +322,7 @@ export function appviewGetProfileEffect(
   return Effect.gen(function* () {
     const result = yield* Effect.either(
       appviewGetJsonEffect<AppviewGetProfileResponse>(
-        "/xrpc/dev.cocore.appview.getProfile",
+        "/xrpc/dev.cocore.account.getProfile",
         search,
       ),
     );
@@ -339,7 +339,7 @@ export function appviewListIncomingFriendsEffect(filters: {
   const search = new URLSearchParams();
   search.set("did", filters.did);
   if (filters.limit !== undefined) search.set("limit", String(filters.limit));
-  return appviewGetJsonEffect("/xrpc/dev.cocore.appview.listIncomingFriends", search);
+  return appviewGetJsonEffect("/xrpc/dev.cocore.account.listIncomingFriends", search);
 }
 
 export function appviewListFriendEdgesEffect(filters?: {
@@ -347,7 +347,7 @@ export function appviewListFriendEdgesEffect(filters?: {
 }): Effect.Effect<AppviewListFriendEdgesResponse, AppviewFetchError> {
   const search = new URLSearchParams();
   if (filters?.limit !== undefined) search.set("limit", String(filters.limit));
-  return appviewGetJsonEffect("/xrpc/dev.cocore.appview.listFriendEdges", search);
+  return appviewGetJsonEffect("/xrpc/dev.cocore.account.listFriendEdges", search);
 }
 
 export function appviewListAccountsEffect(filters: {
@@ -369,13 +369,13 @@ export function appviewListAccountsEffect(filters: {
   if (filters.excludeViewerFriends) search.set("excludeViewerFriends", "true");
   const q = filters.query?.trim();
   if (q) search.set("q", q);
-  return appviewGetJsonEffect("/xrpc/dev.cocore.appview.listAccounts", search);
+  return appviewGetJsonEffect("/xrpc/dev.cocore.account.listAccounts", search);
 }
 
 export const appviewModelActivityEffect: Effect.Effect<
   AppviewModelActivityResponse,
   AppviewFetchError
-> = appviewGetJsonEffect("/xrpc/dev.cocore.appview.modelActivity", new URLSearchParams());
+> = appviewGetJsonEffect("/xrpc/dev.cocore.compute.modelActivity", new URLSearchParams());
 
 export function appviewGetReceiptsEffect(filters: {
   provider?: string;
@@ -386,7 +386,7 @@ export function appviewGetReceiptsEffect(filters: {
   if (filters.provider?.trim()) search.set("provider", filters.provider.trim());
   if (filters.requester?.trim()) search.set("requester", filters.requester.trim());
   if (filters.job?.trim()) search.set("job", filters.job.trim());
-  return appviewGetJsonEffect("/xrpc/dev.cocore.appview.getReceipts", search);
+  return appviewGetJsonEffect("/xrpc/dev.cocore.compute.listReceipts", search);
 }
 
 export function appviewGetJobsEffect(
@@ -394,7 +394,7 @@ export function appviewGetJobsEffect(
 ): Effect.Effect<AppviewGetJobsResponse, AppviewFetchError> {
   const search = new URLSearchParams();
   search.set("requester", requester.trim());
-  return appviewGetJsonEffect("/xrpc/dev.cocore.appview.getJobs", search);
+  return appviewGetJsonEffect("/xrpc/dev.cocore.compute.listJobs", search);
 }
 
 export function appviewGetSettlementsEffect(filters: {
@@ -404,7 +404,7 @@ export function appviewGetSettlementsEffect(filters: {
   const search = new URLSearchParams();
   if (filters.receipt?.trim()) search.set("receipt", filters.receipt.trim());
   if (filters.requester?.trim()) search.set("requester", filters.requester.trim());
-  return appviewGetJsonEffect("/xrpc/dev.cocore.appview.getSettlements", search);
+  return appviewGetJsonEffect("/xrpc/dev.cocore.compute.listSettlements", search);
 }
 
 export function appviewVerifyReceiptEffect(
@@ -412,7 +412,7 @@ export function appviewVerifyReceiptEffect(
 ): Effect.Effect<AppviewVerifyReceiptResponse | { error: string }, AppviewFetchError> {
   const search = new URLSearchParams();
   search.set("uri", uri.trim());
-  return appviewGetJsonEffect("/xrpc/dev.cocore.appview.verifyReceipt", search);
+  return appviewGetJsonEffect("/xrpc/dev.cocore.compute.verifyReceipt", search);
 }
 
 export function appviewVerifySettlementEffect(
@@ -420,5 +420,5 @@ export function appviewVerifySettlementEffect(
 ): Effect.Effect<AppviewVerifySettlementResponse | { error: string }, AppviewFetchError> {
   const search = new URLSearchParams();
   search.set("uri", uri.trim());
-  return appviewGetJsonEffect("/xrpc/dev.cocore.appview.verifySettlement", search);
+  return appviewGetJsonEffect("/xrpc/dev.cocore.compute.verifySettlement", search);
 }

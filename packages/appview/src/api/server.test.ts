@@ -203,7 +203,7 @@ async function withServer<T>(
 
 test("verifyReceipt happy path returns ok=true with real P-256 signature", async () => {
   await withServer(async (base, ctx) => {
-    const url = `${base}/xrpc/dev.cocore.appview.verifyReceipt?uri=${encodeURIComponent(ctx.RECEIPT_URI)}`;
+    const url = `${base}/xrpc/dev.cocore.compute.verifyReceipt?uri=${encodeURIComponent(ctx.RECEIPT_URI)}`;
     const res = await fetch(url);
     assert.equal(res.status, 200);
     const body = (await res.json()) as { ok: boolean; findings: { code: string }[] };
@@ -253,7 +253,7 @@ test("verifyReceipt rejects a tampered receipt at the signature check", async ()
   if (typeof addr === "string" || !addr) throw new Error("no address");
   try {
     const res = await fetch(
-      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.verifyReceipt?uri=${encodeURIComponent(ctx.RECEIPT_URI)}`,
+      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.compute.verifyReceipt?uri=${encodeURIComponent(ctx.RECEIPT_URI)}`,
     );
     assert.equal(res.status, 200);
     const body = (await res.json()) as { ok: boolean; findings: { code: string }[] };
@@ -280,14 +280,14 @@ test("verifyReceipt rejects a tampered receipt at the signature check", async ()
 
 test("verifyReceipt returns 404 for unknown URI", async () => {
   await withServer(async (base) => {
-    const res = await fetch(`${base}/xrpc/dev.cocore.appview.verifyReceipt?uri=at%3A%2F%2Funknown`);
+    const res = await fetch(`${base}/xrpc/dev.cocore.compute.verifyReceipt?uri=at%3A%2F%2Funknown`);
     assert.equal(res.status, 404);
   });
 });
 
 test("listProviders returns indexed providers", async () => {
   await withServer(async (base) => {
-    const res = await fetch(`${base}/xrpc/dev.cocore.appview.listProviders`);
+    const res = await fetch(`${base}/xrpc/dev.cocore.compute.listProviders`);
     assert.equal(res.status, 200);
     const body = (await res.json()) as { providers: unknown[] };
     assert.equal(Array.isArray(body.providers), true);
@@ -296,7 +296,7 @@ test("listProviders returns indexed providers", async () => {
 
 test("getReceipts filters by provider", async () => {
   await withServer(async (base) => {
-    const res = await fetch(`${base}/xrpc/dev.cocore.appview.getReceipts?provider=did%3Aplc%3Ap`);
+    const res = await fetch(`${base}/xrpc/dev.cocore.compute.listReceipts?provider=did%3Aplc%3Ap`);
     assert.equal(res.status, 200);
     const body = (await res.json()) as { receipts: unknown[] };
     assert.equal(body.receipts.length, 1);
@@ -306,7 +306,7 @@ test("getReceipts filters by provider", async () => {
 test("latency endpoint derives stats from receipt startedAt/completedAt", async () => {
   // The signed receipt fixture spans 12:00:00 → 12:00:03 = 3000ms.
   await withServer(async (base) => {
-    const res = await fetch(`${base}/xrpc/dev.cocore.appview.latency`);
+    const res = await fetch(`${base}/xrpc/dev.cocore.compute.latency`);
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       overall: { sampleCount: number; p50Ms: number | null; lastMs: number | null };
@@ -360,7 +360,7 @@ test("getProfile includes provider latency derived from receipts", async () => {
   if (typeof addr === "string" || !addr) throw new Error("no addr");
   try {
     const res = await fetch(
-      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.getProfile?did=did:plc:alice`,
+      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.account.getProfile?did=did:plc:alice`,
     );
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
@@ -375,12 +375,14 @@ test("getProfile includes provider latency derived from receipts", async () => {
 
 test("getJobs filters by requester repo", async () => {
   await withServer(async (base) => {
-    const ok = await fetch(`${base}/xrpc/dev.cocore.appview.getJobs?requester=did%3Aplc%3Ar`);
+    const ok = await fetch(`${base}/xrpc/dev.cocore.compute.listJobs?requester=did%3Aplc%3Ar`);
     assert.equal(ok.status, 200);
     const body = (await ok.json()) as { jobs: { uri: string }[] };
     assert.equal(body.jobs.length, 1);
     assert.equal(body.jobs[0]!.uri, "at://did:plc:r/dev.cocore.compute.job/1");
-    const miss = await fetch(`${base}/xrpc/dev.cocore.appview.getJobs?requester=did%3Aplc%3Aother`);
+    const miss = await fetch(
+      `${base}/xrpc/dev.cocore.compute.listJobs?requester=did%3Aplc%3Aother`,
+    );
     assert.equal(miss.status, 200);
     const empty = (await miss.json()) as { jobs: unknown[] };
     assert.equal(empty.jobs.length, 0);
@@ -478,7 +480,7 @@ test("listAccounts returns every signed-up DID with denormalized profile", async
       { did: "did:plc:bob", handle: "bob.bsky.social", isProvider: true },
     ],
     async (base) => {
-      const res = await fetch(`${base}/xrpc/dev.cocore.appview.listAccounts`);
+      const res = await fetch(`${base}/xrpc/dev.cocore.account.listAccounts`);
       assert.equal(res.status, 200);
       const body = (await res.json()) as {
         accounts: AccountSummaryWire[];
@@ -506,7 +508,7 @@ test("listAccounts q= filters accounts by profile handle or DID substring", asyn
     ],
     async (base) => {
       const byHandle = await fetch(
-        `${base}/xrpc/dev.cocore.appview.listAccounts?q=${encodeURIComponent("alice")}`,
+        `${base}/xrpc/dev.cocore.account.listAccounts?q=${encodeURIComponent("alice")}`,
       );
       assert.equal(byHandle.status, 200);
       const hBody = (await byHandle.json()) as {
@@ -520,14 +522,14 @@ test("listAccounts q= filters accounts by profile handle or DID substring", asyn
       assert.equal(hBody.accounts[0]!.did, "did:plc:alice");
 
       const byDid = await fetch(
-        `${base}/xrpc/dev.cocore.appview.listAccounts?q=${encodeURIComponent("bob99")}`,
+        `${base}/xrpc/dev.cocore.account.listAccounts?q=${encodeURIComponent("bob99")}`,
       );
       const dBody = (await byDid.json()) as { accounts: AccountSummaryWire[]; total: number };
       assert.equal(dBody.total, 1);
       assert.equal(dBody.accounts[0]!.did, "did:plc:bob99");
 
       const noHit = await fetch(
-        `${base}/xrpc/dev.cocore.appview.listAccounts?q=${encodeURIComponent("zzz")}`,
+        `${base}/xrpc/dev.cocore.account.listAccounts?q=${encodeURIComponent("zzz")}`,
       );
       const zBody = (await noHit.json()) as { accounts: AccountSummaryWire[]; total: number };
       assert.equal(zBody.total, 0);
@@ -541,7 +543,7 @@ test("listAccounts viewerDid filter excludes self from the directory", async () 
     [{ did: "did:plc:alice" }, { did: "did:plc:bob" }, { did: "did:plc:carol" }],
     async (base) => {
       const res = await fetch(
-        `${base}/xrpc/dev.cocore.appview.listAccounts?viewerDid=${encodeURIComponent("did:plc:bob")}`,
+        `${base}/xrpc/dev.cocore.account.listAccounts?viewerDid=${encodeURIComponent("did:plc:bob")}`,
       );
       const body = (await res.json()) as { accounts: AccountSummaryWire[]; total: number };
       assert.equal(body.total, 2);
@@ -558,13 +560,13 @@ test("listAccounts excludeViewerFriends omits DIDs the viewer has friended", asy
     [{ did: "did:plc:alice" }, { did: "did:plc:bob" }, { did: "did:plc:carol" }],
     async (base) => {
       const all = await fetch(
-        `${base}/xrpc/dev.cocore.appview.listAccounts?viewerDid=${encodeURIComponent("did:plc:alice")}`,
+        `${base}/xrpc/dev.cocore.account.listAccounts?viewerDid=${encodeURIComponent("did:plc:alice")}`,
       );
       const allBody = (await all.json()) as { accounts: AccountSummaryWire[]; total: number };
       assert.equal(allBody.total, 2);
 
       const filtered = await fetch(
-        `${base}/xrpc/dev.cocore.appview.listAccounts?viewerDid=${encodeURIComponent("did:plc:alice")}&excludeViewerFriends=true`,
+        `${base}/xrpc/dev.cocore.account.listAccounts?viewerDid=${encodeURIComponent("did:plc:alice")}&excludeViewerFriends=true`,
       );
       const fBody = (await filtered.json()) as { accounts: AccountSummaryWire[]; total: number };
       assert.equal(fBody.total, 1);
@@ -583,12 +585,12 @@ test("listAccounts providersOnly=true filters to DIDs with provider records", as
       { did: "did:plc:provider-b", isProvider: true },
     ],
     async (base) => {
-      const all = await fetch(`${base}/xrpc/dev.cocore.appview.listAccounts`);
+      const all = await fetch(`${base}/xrpc/dev.cocore.account.listAccounts`);
       const allBody = (await all.json()) as { total: number };
       assert.equal(allBody.total, 3);
 
       const onlyProviders = await fetch(
-        `${base}/xrpc/dev.cocore.appview.listAccounts?providersOnly=true`,
+        `${base}/xrpc/dev.cocore.account.listAccounts?providersOnly=true`,
       );
       const opBody = (await onlyProviders.json()) as {
         accounts: AccountSummaryWire[];
@@ -610,9 +612,9 @@ test("listAccounts limit + offset paginate deterministically", async () => {
       { did: "did:plc:e" },
     ],
     async (base) => {
-      const page1 = await fetch(`${base}/xrpc/dev.cocore.appview.listAccounts?limit=2&offset=0`);
+      const page1 = await fetch(`${base}/xrpc/dev.cocore.account.listAccounts?limit=2&offset=0`);
       const p1 = (await page1.json()) as { accounts: AccountSummaryWire[]; total: number };
-      const page2 = await fetch(`${base}/xrpc/dev.cocore.appview.listAccounts?limit=2&offset=2`);
+      const page2 = await fetch(`${base}/xrpc/dev.cocore.account.listAccounts?limit=2&offset=2`);
       const p2 = (await page2.json()) as { accounts: AccountSummaryWire[]; total: number };
       assert.equal(p1.total, 5);
       assert.equal(p2.total, 5);
@@ -629,7 +631,7 @@ test("listAccounts limit + offset paginate deterministically", async () => {
 
 test("listAccounts limit caps at 100 even when a huge limit is requested", async () => {
   await withAccountsStore([{ did: "did:plc:a" }], async (base) => {
-    const res = await fetch(`${base}/xrpc/dev.cocore.appview.listAccounts?limit=99999`);
+    const res = await fetch(`${base}/xrpc/dev.cocore.account.listAccounts?limit=99999`);
     const body = (await res.json()) as { limit: number };
     assert.equal(body.limit, 100);
   });
@@ -660,7 +662,7 @@ test("listAccounts includes DIDs whose only cocore footprint is a profile record
   const addr = server.address();
   if (typeof addr === "string" || !addr) throw new Error("no addr");
   try {
-    const res = await fetch(`http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.listAccounts`);
+    const res = await fetch(`http://127.0.0.1:${addr.port}/xrpc/dev.cocore.account.listAccounts`);
     const body = (await res.json()) as {
       accounts: AccountSummaryWire[];
       total: number;
@@ -713,7 +715,7 @@ test("listAccounts hydrates handle + displayName from bsky when no local profile
   const addr = server.address();
   if (typeof addr === "string" || !addr) throw new Error("no addr");
   try {
-    const res = await fetch(`http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.listAccounts`);
+    const res = await fetch(`http://127.0.0.1:${addr.port}/xrpc/dev.cocore.account.listAccounts`);
     const body = (await res.json()) as { accounts: AccountSummaryWire[]; total: number };
     const byDid = Object.fromEntries(body.accounts.map((a) => [a.did, a]));
     // alice's local profile wins — bsky was not consulted.
@@ -746,7 +748,7 @@ test("listAccounts also includes DIDs whose only footprint is a compute record (
   const addr = server.address();
   if (typeof addr === "string" || !addr) throw new Error("no addr");
   try {
-    const res = await fetch(`http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.listAccounts`);
+    const res = await fetch(`http://127.0.0.1:${addr.port}/xrpc/dev.cocore.account.listAccounts`);
     const body = (await res.json()) as { accounts: AccountSummaryWire[]; total: number };
     assert.equal(body.total, 1);
     assert.equal(body.accounts[0]!.did, "did:plc:power");
@@ -782,7 +784,7 @@ interface ProfileWire {
 test("getProfile returns 404 for a DID with no cocore footprint", async () => {
   await withAccountsStore([], async (base) => {
     const res = await fetch(
-      `${base}/xrpc/dev.cocore.appview.getProfile?did=${encodeURIComponent("did:plc:ghost")}`,
+      `${base}/xrpc/dev.cocore.account.getProfile?did=${encodeURIComponent("did:plc:ghost")}`,
     );
     assert.equal(res.status, 404);
   });
@@ -790,9 +792,9 @@ test("getProfile returns 404 for a DID with no cocore footprint", async () => {
 
 test("getProfile returns 400 when did param is missing or malformed", async () => {
   await withAccountsStore([{ did: "did:plc:alice" }], async (base) => {
-    const missing = await fetch(`${base}/xrpc/dev.cocore.appview.getProfile`);
+    const missing = await fetch(`${base}/xrpc/dev.cocore.account.getProfile`);
     assert.equal(missing.status, 400);
-    const malformed = await fetch(`${base}/xrpc/dev.cocore.appview.getProfile?did=not-a-did`);
+    const malformed = await fetch(`${base}/xrpc/dev.cocore.account.getProfile?did=not-a-did`);
     assert.equal(malformed.status, 400);
   });
 });
@@ -876,7 +878,7 @@ test("getProfile aggregates profile + machines + activity counts for a signed-up
   if (typeof addr === "string" || !addr) throw new Error("no addr");
   try {
     const res = await fetch(
-      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.getProfile?did=did:plc:alice`,
+      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.account.getProfile?did=did:plc:alice`,
     );
     assert.equal(res.status, 200);
     const body = (await res.json()) as { profile: ProfileWire };
@@ -933,7 +935,7 @@ test("listIncomingFriends returns DIDs that named the queried DID as subject", a
   if (typeof addr === "string" || !addr) throw new Error("no addr");
   try {
     const res = await fetch(
-      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.listIncomingFriends?did=did:plc:alice`,
+      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.account.listIncomingFriends?did=did:plc:alice`,
     );
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
@@ -982,7 +984,7 @@ test("listIncomingFriends collapses duplicate records from the same friender int
   if (typeof addr === "string" || !addr) throw new Error("no addr");
   try {
     const res = await fetch(
-      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.listIncomingFriends?did=did:plc:alice`,
+      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.account.listIncomingFriends?did=did:plc:alice`,
     );
     const body = (await res.json()) as {
       friends: Array<{ friender: string; createdAt: string }>;
@@ -1030,7 +1032,7 @@ test("getProfile.incomingFriendsCount counts distinct frienders, not raw records
   if (typeof addr === "string" || !addr) throw new Error("no addr");
   try {
     const res = await fetch(
-      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.appview.getProfile?did=did:plc:alice`,
+      `http://127.0.0.1:${addr.port}/xrpc/dev.cocore.account.getProfile?did=did:plc:alice`,
     );
     const body = (await res.json()) as { profile: { incomingFriendsCount: number } };
     // One DISTINCT friender even with three records.
@@ -1077,7 +1079,7 @@ test("listFriendEdges returns directed trust edges, excluding self-edges", async
       { did: "did:plc:carol", handle: "carol.test", isProvider: true },
     ],
     async (base) => {
-      const res = await fetch(`${base}/xrpc/dev.cocore.appview.listFriendEdges`);
+      const res = await fetch(`${base}/xrpc/dev.cocore.account.listFriendEdges`);
       assert.equal(res.status, 200);
       const body = (await res.json()) as {
         edges: Array<{ friender: string; subject: string; createdAt: string }>;

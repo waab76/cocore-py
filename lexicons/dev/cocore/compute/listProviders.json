@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "dev.cocore.appview.listProviders",
+  "id": "dev.cocore.compute.listProviders",
   "defs": {
     "main": {
       "type": "query",
@@ -13,7 +13,7 @@
           "properties": {
             "providers": {
               "type": "array",
-              "items": { "type": "ref", "ref": "dev.cocore.appview.defs#indexedRecord" }
+              "items": { "type": "ref", "ref": "dev.cocore.defs#indexedRecord" }
             }
           }
         }

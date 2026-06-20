@@ -22,21 +22,21 @@ const input = (param: string, label?: string, placeholder?: string): ApiDocsPara
 });
 
 export const API_DOCS_INTERACTIVE: Partial<Record<string, Array<ApiDocsParamControl>>> = {
-  "dev.cocore.appview.getProfile": [input("did", "did")],
-  "dev.cocore.appview.listIncomingFriends": [input("did", "did")],
-  "dev.cocore.appview.listAccounts": [input("q", "q", "search query")],
-  "dev.cocore.appview.getReceipts": [
+  "dev.cocore.account.getProfile": [input("did", "did")],
+  "dev.cocore.account.listIncomingFriends": [input("did", "did")],
+  "dev.cocore.account.listAccounts": [input("q", "q", "search query")],
+  "dev.cocore.compute.listReceipts": [
     input("provider", "provider"),
     input("requester", "requester"),
     input("job", "job"),
   ],
-  "dev.cocore.appview.getJobs": [input("requester", "requester")],
-  "dev.cocore.appview.getSettlements": [
+  "dev.cocore.compute.listJobs": [input("requester", "requester")],
+  "dev.cocore.compute.listSettlements": [
     input("receipt", "receipt"),
     input("requester", "requester"),
   ],
-  "dev.cocore.appview.verifyReceipt": [input("uri", "uri")],
-  "dev.cocore.appview.verifySettlement": [input("uri", "uri")],
+  "dev.cocore.compute.verifyReceipt": [input("uri", "uri")],
+  "dev.cocore.compute.verifySettlement": [input("uri", "uri")],
 };
 
 /** Params the user can edit in the curl panel for this endpoint. */

@@ -68,7 +68,7 @@ async function main() {
 
   step("6. verifyReceipt at the AppView (cryptographic)");
   const verifyRes = await fetch(
-    `${APPVIEW}/xrpc/dev.cocore.appview.verifyReceipt?uri=${encodeURIComponent(receiptUri)}`,
+    `${APPVIEW}/xrpc/dev.cocore.compute.verifyReceipt?uri=${encodeURIComponent(receiptUri)}`,
   );
   const verify = (await verifyRes.json()) as { ok: boolean; findings: { code: string }[] };
   console.log(JSON.stringify(verify));
@@ -79,7 +79,7 @@ async function main() {
 
   step("7. assert receipt indexed for this provider");
   const list = (await fetch(
-    `${APPVIEW}/xrpc/dev.cocore.appview.getReceipts?provider=${encodeURIComponent(PROVIDER)}`,
+    `${APPVIEW}/xrpc/dev.cocore.compute.listReceipts?provider=${encodeURIComponent(PROVIDER)}`,
   ).then((r) => r.json())) as { receipts: { uri: string }[] };
   if (!list.receipts.some((r) => r.uri === receiptUri)) {
     throw new Error("receipt not in AppView getReceipts response");

@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "dev.cocore.appview.latency",
+  "id": "dev.cocore.compute.latency",
   "defs": {
     "main": {
       "type": "query",

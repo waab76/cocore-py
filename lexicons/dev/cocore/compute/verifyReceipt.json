@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "dev.cocore.appview.verifyReceipt",
+  "id": "dev.cocore.compute.verifyReceipt",
   "defs": {
     "main": {
       "type": "query",
@@ -22,7 +22,7 @@
             "trustLevel": { "type": "string", "enum": ["self-attested", "hardware-attested"] },
             "findings": {
               "type": "array",
-              "items": { "type": "ref", "ref": "dev.cocore.appview.defs#verifyFinding" }
+              "items": { "type": "ref", "ref": "dev.cocore.defs#verifyFinding" }
             }
           }
         }

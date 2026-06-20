@@ -79,7 +79,7 @@ function p(
 
 export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
   q(
-    "dev.cocore.appview.listProviders",
+    "dev.cocore.compute.listProviders",
     "Directory",
     "List indexed provider records (`dev.cocore.compute.provider`).",
     "none",
@@ -87,7 +87,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     { autoRun: true, params: {} },
   ),
   q(
-    "dev.cocore.appview.listProfiles",
+    "dev.cocore.account.listProfiles",
     "Directory",
     "List indexed account profile records (`dev.cocore.account.profile`).",
     "none",
@@ -95,7 +95,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     { autoRun: true, params: {} },
   ),
   q(
-    "dev.cocore.appview.getProfile",
+    "dev.cocore.account.getProfile",
     "Directory",
     "Full profile payload for one DID — machines, activity counts, and social context.",
     "none",
@@ -106,7 +106,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     },
   ),
   q(
-    "dev.cocore.appview.listAccounts",
+    "dev.cocore.account.listAccounts",
     "Directory",
     "Discovery directory of signed-up DIDs with profile and provider counts.",
     "none",
@@ -125,7 +125,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     },
   ),
   q(
-    "dev.cocore.appview.listIncomingFriends",
+    "dev.cocore.account.listIncomingFriends",
     "Social graph",
     "Friend records whose subject is the queried DID.",
     "none",
@@ -139,7 +139,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     },
   ),
   q(
-    "dev.cocore.appview.listFriendEdges",
+    "dev.cocore.account.listFriendEdges",
     "Social graph",
     "Every directed trust edge in the indexed network (friender → subject).",
     "none",
@@ -147,7 +147,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     { autoRun: true, params: { limit: "100" } },
   ),
   q(
-    "dev.cocore.appview.getReceipts",
+    "dev.cocore.compute.listReceipts",
     "Compute index",
     "Indexed receipt records with optional provider, requester, or job filters.",
     "none",
@@ -162,7 +162,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     },
   ),
   q(
-    "dev.cocore.appview.getJobs",
+    "dev.cocore.compute.listJobs",
     "Compute index",
     "Indexed job records for a requester DID.",
     "none",
@@ -173,7 +173,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     },
   ),
   q(
-    "dev.cocore.appview.getSettlements",
+    "dev.cocore.compute.listSettlements",
     "Compute index",
     "Indexed settlement records with optional receipt or requester filters.",
     "none",
@@ -187,7 +187,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     },
   ),
   q(
-    "dev.cocore.appview.verifyReceipt",
+    "dev.cocore.compute.verifyReceipt",
     "Verification",
     "Structural + cryptographic verification of an indexed receipt against its job and attestation.",
     "none",
@@ -198,7 +198,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     },
   ),
   q(
-    "dev.cocore.appview.verifySettlement",
+    "dev.cocore.compute.verifySettlement",
     "Verification",
     "Verify a settlement chain against indexed receipt and authorization records.",
     "none",
@@ -206,7 +206,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     { autoRun: false, params: {} },
   ),
   q(
-    "dev.cocore.appview.modelActivity",
+    "dev.cocore.compute.modelActivity",
     "Analytics",
     "Aggregate receipt activity per model across rolling time windows.",
     "none",
@@ -214,7 +214,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     { autoRun: true, params: {} },
   ),
   q(
-    "dev.cocore.appview.latency",
+    "dev.cocore.compute.latency",
     "Analytics",
     "Network latency rollup derived from indexed receipt timestamps.",
     "none",

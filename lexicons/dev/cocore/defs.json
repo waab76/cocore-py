@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "dev.cocore.appview.defs",
+  "id": "dev.cocore.defs",
   "defs": {
     "indexedRecord": {
       "type": "object",
@@ -43,10 +43,10 @@
       "description": "Activity rolled up across the four standard windows: last hour, day (24h), week (7d), and month (30d).",
       "required": ["hour", "day", "week", "month"],
       "properties": {
-        "hour": { "type": "ref", "ref": "dev.cocore.appview.defs#activityStat" },
-        "day": { "type": "ref", "ref": "dev.cocore.appview.defs#activityStat" },
-        "week": { "type": "ref", "ref": "dev.cocore.appview.defs#activityStat" },
-        "month": { "type": "ref", "ref": "dev.cocore.appview.defs#activityStat" }
+        "hour": { "type": "ref", "ref": "dev.cocore.defs#activityStat" },
+        "day": { "type": "ref", "ref": "dev.cocore.defs#activityStat" },
+        "week": { "type": "ref", "ref": "dev.cocore.defs#activityStat" },
+        "month": { "type": "ref", "ref": "dev.cocore.defs#activityStat" }
       }
     }
   }

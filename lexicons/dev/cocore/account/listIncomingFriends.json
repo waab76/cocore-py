@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "dev.cocore.appview.listIncomingFriends",
+  "id": "dev.cocore.account.listIncomingFriends",
   "defs": {
     "main": {
       "type": "query",

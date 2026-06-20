@@ -63,18 +63,18 @@ function secretEquals(a: string, b: string): boolean {
  *  bridge's public port. */
 export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {}) {
   const routes: Routes = {
-    "/xrpc/dev.cocore.appview.listProviders": (_req, res) => {
+    "/xrpc/dev.cocore.compute.listProviders": (_req, res) => {
       const items = store.listByCollection("dev.cocore.compute.provider", 100);
       json(res, 200, { providers: items });
     },
-    "/xrpc/dev.cocore.appview.listProfiles": (_req, res) => {
+    "/xrpc/dev.cocore.account.listProfiles": (_req, res) => {
       // Returns every `dev.cocore.account.profile` record we've
       // indexed. Used by the models page to render display-name +
       // avatar chips for the DIDs hosting machines.
       const items = store.listByCollection("dev.cocore.account.profile", 500);
       json(res, 200, { profiles: items });
     },
-    "/xrpc/dev.cocore.appview.getProfile": async (_req, res, url) => {
+    "/xrpc/dev.cocore.account.getProfile": async (_req, res, url) => {
       // Full profile-page payload for one DID — account fields,
       // machines they own, activity counts, incoming-friends count.
       // The console's /u/$identifier route consumes this in one
@@ -107,7 +107,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       }
       json(res, 200, { profile });
     },
-    "/xrpc/dev.cocore.appview.listIncomingFriends": async (_req, res, url) => {
+    "/xrpc/dev.cocore.account.listIncomingFriends": async (_req, res, url) => {
       // "Who has trusted me with work?" — every friend record whose
       // body.subject equals the queried DID. Newest first; capped.
       // Hydrates frienders via the public bsky appview so the UI
@@ -132,7 +132,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       }
       json(res, 200, { friends, total: friends.length });
     },
-    "/xrpc/dev.cocore.appview.listFriendEdges": (_req, res, url) => {
+    "/xrpc/dev.cocore.account.listFriendEdges": (_req, res, url) => {
       // Every directed trust edge in the network (friender → subject),
       // for the explorer's friend graph. No hydration here — the
       // console joins handles/avatars from listAccounts; this endpoint
@@ -141,7 +141,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       const edges = store.listFriendEdges(limit);
       json(res, 200, { edges, total: edges.length });
     },
-    "/xrpc/dev.cocore.appview.listAccounts": async (_req, res, url) => {
+    "/xrpc/dev.cocore.account.listAccounts": async (_req, res, url) => {
       // Discovery directory used by the /friends page. Returns every
       // signed-up DID (any DID with a record under `dev.cocore.*`),
       // joined with profile + provider counts so the UI can render
@@ -207,7 +207,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
         ...(q ? { q } : {}),
       });
     },
-    "/xrpc/dev.cocore.appview.modelActivity": (_req, res) => {
+    "/xrpc/dev.cocore.compute.modelActivity": (_req, res) => {
       // Aggregate receipt activity per model + per time window.
       // Walks indexed receipts (capped at 5000 most-recent), groups
       // by `body.model`, and tallies requests + tokens within four
@@ -282,7 +282,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       }));
       json(res, 200, { generatedAt: new Date().toISOString(), models });
     },
-    "/xrpc/dev.cocore.appview.latency": (_req, res) => {
+    "/xrpc/dev.cocore.compute.latency": (_req, res) => {
       // Network latency rollup, derived purely from indexed receipts'
       // signed `startedAt`/`completedAt` pairs — the last ≤100 per
       // group (overall, per-provider, per-model). No side metrics
@@ -290,7 +290,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       // can't drift from them.
       json(res, 200, store.latencyOverview());
     },
-    "/xrpc/dev.cocore.appview.getReceipts": (_req, res, url) => {
+    "/xrpc/dev.cocore.compute.listReceipts": (_req, res, url) => {
       const provider = url.searchParams.get("provider");
       const requester = url.searchParams.get("requester");
       const job = url.searchParams.get("job");
@@ -303,7 +303,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       });
       json(res, 200, { receipts: items });
     },
-    "/xrpc/dev.cocore.appview.getJobs": (_req, res, url) => {
+    "/xrpc/dev.cocore.compute.listJobs": (_req, res, url) => {
       const requester = url.searchParams.get("requester");
       const items = store.listByCollection("dev.cocore.compute.job", 500).filter((r) => {
         if (!requester) return false;
@@ -311,7 +311,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       });
       json(res, 200, { jobs: items });
     },
-    "/xrpc/dev.cocore.appview.getSettlements": (_req, res, url) => {
+    "/xrpc/dev.cocore.compute.listSettlements": (_req, res, url) => {
       const receipt = url.searchParams.get("receipt");
       const requester = url.searchParams.get("requester");
       const items = store.listByCollection("dev.cocore.compute.settlement", 200).filter((r) => {
@@ -329,7 +329,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
       });
       json(res, 200, { settlements: items });
     },
-    "/xrpc/dev.cocore.appview.verifyReceipt": async (_req, res, url) => {
+    "/xrpc/dev.cocore.compute.verifyReceipt": async (_req, res, url) => {
       const uri = url.searchParams.get("uri");
       if (!uri) {
         json(res, 400, { error: "missing query param: uri" });
@@ -449,7 +449,7 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
         findings,
       });
     },
-    "/xrpc/dev.cocore.appview.verifySettlement": (_req, res, url) => {
+    "/xrpc/dev.cocore.compute.verifySettlement": (_req, res, url) => {
       const uri = url.searchParams.get("uri");
       if (!uri) {
         json(res, 400, { error: "missing query param: uri" });

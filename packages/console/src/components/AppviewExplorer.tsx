@@ -390,7 +390,7 @@ export function AppviewExplorer() {
             placeholder="at://…/dev.cocore.compute.receipt/…"
             description={
               <>
-                Calls <InlineCode>dev.cocore.appview.verifyReceipt</InlineCode> on the AppView —
+                Calls <InlineCode>dev.cocore.compute.verifyReceipt</InlineCode> on the AppView —
                 structural, lexicon, signature, and optional MDA checks.
               </>
             }
@@ -457,7 +457,7 @@ export function AppviewExplorer() {
             placeholder="at://…/dev.cocore.compute.settlement/…"
             description={
               <>
-                Calls <InlineCode>dev.cocore.appview.verifySettlement</InlineCode> — chains receipt,
+                Calls <InlineCode>dev.cocore.compute.verifySettlement</InlineCode> — chains receipt,
                 authorization, and settlement records indexed by the AppView.
               </>
             }
