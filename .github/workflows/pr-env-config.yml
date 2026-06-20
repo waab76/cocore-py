@@ -18,10 +18,15 @@ name: pr-env-config
 on:
   pull_request:
     types: [opened, reopened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to (re)configure its cocore-pr-<N> env"
+        required: true
 
 concurrency:
   # Serialize per PR; never cancel a config mid-flight.
-  group: pr-env-config-${{ github.event.pull_request.number }}
+  group: pr-env-config-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 permissions:
@@ -29,15 +34,19 @@ permissions:
 
 jobs:
   configure:
-    # Fork PRs can't read the token; skip them.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Fork PRs can't read the token; skip them. Manual dispatch always runs.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    env:
+      # Set BOTH so the Railway CLI picks it up whether you created an
+      # account/team token (RAILWAY_API_TOKEN) or a project token
+      # (RAILWAY_TOKEN). Cross-PR-env access needs an account/team token.
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure this PR's Railway env
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "${RAILWAY_TOKEN:-}" ]; then
             echo "::notice::RAILWAY_TOKEN not set — skipping PR-env config (the app build still targets this PR's URLs)."
@@ -47,4 +56,4 @@ jobs:
           # Establish project context for the account/team token. The script
           # targets --environment/--service per command; link just sets the project.
           railway link --project a46692ef-f462-4801-9a64-0af69ea7143d >/dev/null 2>&1 || true
-          PR_NUMBER="${{ github.event.pull_request.number }}" bash scripts/configure-pr-env.sh
+          PR_NUMBER="${{ github.event.pull_request.number || inputs.pr_number }}" bash scripts/configure-pr-env.sh
