@@ -33,7 +33,14 @@ export function ApiDocsIntro() {
 
       <div {...stylex.props(docsStyles.introProse)}>
         <h2 id={API_DOCS_INTRO_IDS.overview} {...stylex.props(docsStyles.h2, docsStyles.h2First)}>
-          Overview
+          <Link
+            to="/docs/api"
+            search={{ ref: API_DOCS_INTRO_IDS.overview }}
+            hash={API_DOCS_INTRO_IDS.overview}
+            {...stylex.props(docsStyles.refAnchor)}
+          >
+            Overview
+          </Link>
         </h2>
         <p {...stylex.props(docsStyles.prose)}>
           The co/core AppView indexes provider-signed records under{" "}
@@ -45,7 +52,14 @@ export function ApiDocsIntro() {
         </p>
 
         <h2 id={API_DOCS_INTRO_IDS.discovery} {...stylex.props(docsStyles.h2)}>
-          Service discovery
+          <Link
+            to="/docs/api"
+            search={{ ref: API_DOCS_INTRO_IDS.discovery }}
+            hash={API_DOCS_INTRO_IDS.discovery}
+            {...stylex.props(docsStyles.refAnchor)}
+          >
+            Service discovery
+          </Link>
         </h2>
         <p {...stylex.props(docsStyles.prose)}>
           Service DID is{" "}
@@ -58,7 +72,14 @@ export function ApiDocsIntro() {
         </p>
 
         <h2 id={API_DOCS_INTRO_IDS.inference} {...stylex.props(docsStyles.h2)}>
-          Inference API
+          <Link
+            to="/docs/api"
+            search={{ ref: API_DOCS_INTRO_IDS.inference }}
+            hash={API_DOCS_INTRO_IDS.inference}
+            {...stylex.props(docsStyles.refAnchor)}
+          >
+            Inference API
+          </Link>
         </h2>
         <p {...stylex.props(docsStyles.prose)}>
           To run inference against co/core providers, use the OpenAI-compatible chat completions

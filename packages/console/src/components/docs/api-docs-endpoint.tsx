@@ -3,6 +3,7 @@
 import type { ApiDocsCatalogEntry } from "@/lib/api-docs/catalog";
 
 import * as stylex from "@stylexjs/stylex";
+import { Link } from "@tanstack/react-router";
 import {
   apiDocsAuthLabel,
   apiDocsEndpointId,
@@ -15,19 +16,27 @@ import { docsStyles } from "./docs-page.stylex";
 
 export function ApiDocsEndpoint({ entry, first }: { entry: ApiDocsCatalogEntry; first?: boolean }) {
   const authRequired = entry.auth !== "none";
+  const endpointId = apiDocsEndpointId(entry.nsid);
+  const leaf = apiDocsNsidLeaf(entry.nsid);
 
   return (
     <section
-      id={apiDocsEndpointId(entry.nsid)}
+      id={endpointId}
       {...stylex.props(docsStyles.endpoint, first && docsStyles.endpointFirst)}
     >
       <div {...stylex.props(docsStyles.endpointGrid)}>
         <div {...stylex.props(docsStyles.endpointLeft)}>
           <div {...stylex.props(docsStyles.nsidRow)}>
-            <span>
+            <Link
+              to="/docs/api"
+              search={{ ref: leaf }}
+              hash={endpointId}
+              title="Copy link to this endpoint"
+              {...stylex.props(docsStyles.refAnchor)}
+            >
               <span {...stylex.props(docsStyles.nsidDim)}>{apiDocsNsidPrefix(entry.nsid)}</span>
-              <span>{apiDocsNsidLeaf(entry.nsid)}</span>
-            </span>
+              <span>{leaf}</span>
+            </Link>
             <span
               {...stylex.props(
                 docsStyles.methodBadge,

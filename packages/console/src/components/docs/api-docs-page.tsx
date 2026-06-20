@@ -1,7 +1,7 @@
 "use client";
 
 import * as stylex from "@stylexjs/stylex";
-import { useLoaderData } from "@tanstack/react-router";
+import { Link, useLoaderData } from "@tanstack/react-router";
 import { API_DOCS_CATALOG, API_DOCS_SECTIONS } from "@/lib/api-docs/catalog";
 import {
   API_DOCS_SCROLL_SPY_IDS,
@@ -42,10 +42,20 @@ export function ApiDocsPage() {
           const count = apiDocsSectionEndpointCount(section);
           const subtitle = apiDocsSectionSubtitle(section);
 
+          const sectionId = apiDocsSectionId(section);
           return (
             <div key={section}>
-              <div {...stylex.props(docsStyles.tierHead)} id={apiDocsSectionId(section)}>
-                <h2 {...stylex.props(docsStyles.tierTitle)}>{section}</h2>
+              <div {...stylex.props(docsStyles.tierHead)} id={sectionId}>
+                <h2 {...stylex.props(docsStyles.tierTitle)}>
+                  <Link
+                    to="/docs/api"
+                    search={{ ref: sectionId }}
+                    hash={sectionId}
+                    {...stylex.props(docsStyles.refAnchor)}
+                  >
+                    {section}
+                  </Link>
+                </h2>
                 <span {...stylex.props(docsStyles.tierSub)}>
                   {subtitle} · {count} endpoint{count === 1 ? "" : "s"}
                 </span>
