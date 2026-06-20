@@ -89,6 +89,10 @@ phase "install binary"
 mkdir -p "$INSTALL_BIN_DIR" "$STATE_DIR" "$LOG_DIR"
 chmod 700 "$STATE_DIR"
 install -m 755 "$STAGED_BIN" "$INSTALL_BIN"
+# Strip the download quarantine off the bare CLI too — the LaunchAgent and
+# `cocore agent …` from a terminal both exec this ad-hoc-signed binary, and a
+# quarantined ad-hoc binary trips "developer cannot be verified" on first run.
+xattr -dr com.apple.quarantine "$INSTALL_BIN" 2>/dev/null || true
 note "installed: $INSTALL_BIN"
 case ":$PATH:" in
   *":$INSTALL_BIN_DIR:"*) ;;
@@ -215,6 +219,15 @@ if [[ -d "$STAGED_APP" && "$COCORE_SKIP_APP" != "1" ]]; then
   rm -rf "/Applications/cocore.app"
   cp -R "$STAGED_APP" "/Applications/cocore.app"
   note "installed /Applications/cocore.app"
+  # Clear the download quarantine so Gatekeeper doesn't block first launch.
+  # PR / local builds are ad-hoc-signed (not notarized), so without this macOS
+  # refuses to open the app and sends you to System Settings > Privacy &
+  # Security. Running ./install.sh on a tarball you downloaded IS the trust
+  # decision, so we pre-approve here. Recursive, so the bundled `cocore` CLI is
+  # cleared too. (A real notarized release passes Gatekeeper regardless, so
+  # this is a harmless no-op there.)
+  xattr -dr com.apple.quarantine "/Applications/cocore.app" 2>/dev/null || true
+  note "cleared Gatekeeper quarantine"
   if [[ -t 0 || "$COCORE_WRAPPER_INVOKED" == "1" ]]; then
     open "/Applications/cocore.app" 2>/dev/null \
       && note "launched — the cocore icon should appear in your menu bar" || true
