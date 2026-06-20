@@ -1,0 +1,10 @@
+{
+  "type": "ACME",
+  "name": "cocore-attest",
+  "challenges": ["device-attest-01"],
+  "attestationFormats": ["apple"],
+  "claims": {
+    "maxTLSCertDuration": "2160h",
+    "defaultTLSCertDuration": "2160h"
+  }
+}

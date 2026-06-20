@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- cocore provider device-attestation profile. Pushed via the MDM (NanoMDM)
+       to enrolled provider Macs. It makes the SEP generate a hardware-bound key
+       and run ACME device-attest-01 against OUR step-ca, which captures the
+       Apple-rooted attestation chain (device serial/UDID/OS/SIP/SecureBoot +
+       the hardware-bound key) and hands it back to the cocore agent to embed in
+       its dev.cocore.compute.attestation PDS record. Requires macOS 14+,
+       Apple silicon. No supervision / ABM required (Apple spec: supervised=false). -->
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>com.apple.security.acme</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadIdentifier</key><string>dev.cocore.attestation.acme</string>
+      <key>PayloadUUID</key><string>70F86723-D87F-43C2-9ED2-0C3533167C59</string>
+      <key>PayloadDisplayName</key><string>cocore Device Attestation (ACME)</string>
+      <!-- step-ca ACME directory (set to the deployed step-ca host). -->
+      <key>DirectoryURL</key><string>https://ca.cocore.dev/acme/cocore-attest/directory</string>
+      <key>ClientIdentifier</key><string>cocore-provider</string>
+      <!-- Hardware-bound P-384 SEP key + Apple attestation. -->
+      <key>KeyType</key><string>ECSECPrimeRandom</string>
+      <key>KeySize</key><integer>384</integer>
+      <key>HardwareBound</key><true/>
+      <key>Attest</key><true/>
+      <key>KeyIsExtractable</key><false/>
+      <!-- digitalSignature + keyEncipherment -->
+      <key>UsageFlags</key><integer>5</integer>
+      <key>Subject</key>
+      <array>
+        <array><array><string>CN</string><string>cocore-provider-attestation</string></array></array>
+        <array><array><string>O</string><string>Graze Social PBC</string></array></array>
+      </array>
+    </dict>
+  </array>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadIdentifier</key><string>dev.cocore.attestation</string>
+  <key>PayloadUUID</key><string>82487B5E-CDD5-46C7-BE3C-511052AA3869</string>
+  <key>PayloadDisplayName</key><string>cocore Provider Attestation</string>
+  <key>PayloadDescription</key><string>Lets this Mac prove to cocore requesters that it is a genuine, securely-booted Apple device.</string>
+  <key>PayloadOrganization</key><string>cocore</string>
+</dict>
+</plist>
