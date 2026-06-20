@@ -17,7 +17,11 @@ export const Route = createFileRoute("/_docs-header-layout/docs/lexicons")({
       ...socialMeta({
         title: TITLE,
         description: DESCRIPTION,
-        image: ogImageHref({ eyebrow: "Docs · Lexicons", title: "Lexicons", description: DESCRIPTION }),
+        image: ogImageHref({
+          eyebrow: "Docs · Lexicons",
+          title: "Lexicons",
+          description: DESCRIPTION,
+        }),
       }),
     ],
   }),

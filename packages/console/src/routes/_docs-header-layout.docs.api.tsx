@@ -17,7 +17,8 @@ interface ApiDocsSearch {
 
 export const Route = createFileRoute("/_docs-header-layout/docs/api")({
   validateSearch: (search: Record<string, unknown>): ApiDocsSearch => {
-    const ref = typeof search["ref"] === "string" && search["ref"].length > 0 ? search["ref"] : undefined;
+    const ref =
+      typeof search["ref"] === "string" && search["ref"].length > 0 ? search["ref"] : undefined;
     return ref ? { ref } : {};
   },
   loader: async () => getApiDocsPageData(),

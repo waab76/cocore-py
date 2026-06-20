@@ -26,9 +26,7 @@ export const Route = createFileRoute("/_docs-header-layout/docs/inference/$slug"
     return entry;
   },
   head: ({ loaderData }) => {
-    const title = loaderData
-      ? `${loaderData.title} · Inference · co/core`
-      : "Inference · co/core";
+    const title = loaderData ? `${loaderData.title} · Inference · co/core` : "Inference · co/core";
     if (!loaderData) {
       return { meta: [{ title }] };
     }

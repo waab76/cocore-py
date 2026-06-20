@@ -276,6 +276,3 @@ export function renderOgPngEffect(opts: OgCardOptions = {}) {
     return png;
   });
 }
-
-/** Backwards-compatible root card effect. */
-export const renderRootOgPngEffect = renderOgPngEffect();
