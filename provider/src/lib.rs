@@ -18,6 +18,7 @@
 pub mod advisor;
 pub mod attestation;
 pub mod canonical;
+pub mod codesign;
 pub mod crypto;
 pub mod diagnostics;
 pub mod engines;

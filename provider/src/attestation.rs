@@ -32,6 +32,23 @@ pub struct AttestationInputs {
     pub authenticated_root_enabled: bool,
     pub rdma_disabled: bool,
     pub mda_cert_chain: Vec<Vec<u8>>,
+    // --- WS-CDHASH: OS-enforced measured identity + hardened-runtime posture
+    // (read live via `codesign::read_self`). ---
+    pub cd_hash: Option<String>,
+    pub team_id: Option<String>,
+    pub hardened_runtime: bool,
+    pub library_validation: bool,
+    pub get_task_allow: bool,
+    /// SHA-256 hex of the precompiled Metal shader library the in-process
+    /// engine loads. `None` for the subprocess/best-effort backend.
+    pub metallib_hash: Option<String>,
+    /// True iff inference runs inside THIS measured binary (native engine),
+    /// not an owner-controlled subprocess. The load-bearing confidential bit.
+    pub in_process_backend: bool,
+    // --- WS-HARDENING: darkbloom-parity startup hardening capability flags. ---
+    pub anti_debug: bool,
+    pub core_dumps_disabled: bool,
+    pub env_scrubbed: bool,
 }
 
 // Field names match the lexicon's camelCase wire shape so serde produces
@@ -53,6 +70,22 @@ pub struct AttestationRecord {
     pub rdmaDisabled: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mdaCertChain: Vec<String>, // base64
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cdHash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub teamId: Option<String>,
+    pub hardenedRuntime: bool,
+    pub libraryValidation: bool,
+    pub getTaskAllow: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metallibHash: Option<String>,
+    pub inProcessBackend: bool,
+    pub antiDebug: bool,
+    pub coreDumpsDisabled: bool,
+    pub envScrubbed: bool,
+    /// Provider's self-asserted confidentiality tier. ADVISORY — verifiers
+    /// recompute from evidence; never trusted.
+    pub tier: String,
     /// Bytes — Secure Enclave P-256 signature over canonical JSON of
     /// every other field in this struct.
     pub selfSignature: String, // base64
@@ -77,6 +110,10 @@ pub fn build_stub_inputs(provider_did: &str, encryption_pub_key_b64: &str) -> At
     let chip_name = sysctl_string("machdep.cpu.brand_string").unwrap_or_else(|| "stub".into());
     let hardware_model = sysctl_string("hw.model").unwrap_or_else(|| "stub".into());
     let os_version = sysctl_string("kern.osproductversion").unwrap_or_else(|| "stub".into());
+    // Read the OS-enforced code-signing identity + posture of the running
+    // process (live, not a file digest), and the startup hardening posture.
+    let cs = crate::codesign::read_self();
+    let hp = crate::security::posture();
     AttestationInputs {
         provider_did: provider_did.into(),
         encryption_pub_key_b64: encryption_pub_key_b64.into(),
@@ -95,6 +132,18 @@ pub fn build_stub_inputs(provider_did: &str, encryption_pub_key_b64: &str) -> At
         authenticated_root_enabled: false,
         rdma_disabled: true,
         mda_cert_chain: Vec::new(),
+        cd_hash: cs.cd_hash,
+        team_id: cs.team_id,
+        hardened_runtime: cs.hardened_runtime,
+        library_validation: cs.library_validation,
+        get_task_allow: cs.get_task_allow,
+        // No native engine yet → no measured metallib and the prompt is still
+        // handled by the subprocess backend. Honest: not in-process.
+        metallib_hash: None,
+        in_process_backend: false,
+        anti_debug: hp.anti_debug,
+        core_dumps_disabled: hp.core_dumps_disabled,
+        env_scrubbed: hp.env_scrubbed,
     }
 }
 
@@ -171,9 +220,34 @@ pub fn build(
     };
     let mda_chain_b64: Vec<String> = mda_chain.iter().map(|c| B64.encode(c)).collect();
 
-    // Build the unsigned record as a Value, canonicalize, sign, and
-    // then produce the typed record with the signature attached.
-    let unsigned = json!({
+    // Producer's HONEST self-asserted tier. `attested-confidential` requires
+    // the full confidential posture AND a bound MDA chain that survived
+    // verification above; everything else is best-effort. Verifiers recompute
+    // this from evidence (and the requester's known-good set + session key) and
+    // never trust the field — but the producer must not over-claim.
+    let confidential_capable = inputs.in_process_backend
+        && !inputs.get_task_allow
+        && inputs.hardened_runtime
+        && inputs.library_validation
+        && inputs.anti_debug
+        && inputs.core_dumps_disabled
+        && inputs.env_scrubbed
+        && inputs.sip_enabled
+        && inputs.secure_boot_enabled
+        && inputs.cd_hash.is_some()
+        && !mda_chain_b64.is_empty();
+    let tier = if confidential_capable {
+        "attested-confidential"
+    } else {
+        "best-effort"
+    }
+    .to_string();
+
+    // Build the unsigned record as an ordered object, canonicalize, sign, and
+    // then produce the typed record with the signature attached. Optional
+    // measured fields are inserted only when present so the canonical bytes of
+    // a best-effort attestation stay minimal.
+    let mut unsigned = json!({
         "publicKey": public_key_b64,
         "encryptionPubKey": inputs.encryption_pub_key_b64,
         "chipName": inputs.chip_name,
@@ -187,9 +261,28 @@ pub fn build(
         "authenticatedRootEnabled": inputs.authenticated_root_enabled,
         "rdmaDisabled": inputs.rdma_disabled,
         "mdaCertChain": mda_chain_b64,
+        "hardenedRuntime": inputs.hardened_runtime,
+        "libraryValidation": inputs.library_validation,
+        "getTaskAllow": inputs.get_task_allow,
+        "inProcessBackend": inputs.in_process_backend,
+        "antiDebug": inputs.anti_debug,
+        "coreDumpsDisabled": inputs.core_dumps_disabled,
+        "envScrubbed": inputs.env_scrubbed,
+        "tier": tier,
         "attestedAt": rfc3339(attested_at),
         "expiresAt": rfc3339(expires_at),
     });
+    if let Value::Object(map) = &mut unsigned {
+        if let Some(cd) = &inputs.cd_hash {
+            map.insert("cdHash".into(), Value::String(cd.clone()));
+        }
+        if let Some(tid) = &inputs.team_id {
+            map.insert("teamId".into(), Value::String(tid.clone()));
+        }
+        if let Some(mh) = &inputs.metallib_hash {
+            map.insert("metallibHash".into(), Value::String(mh.clone()));
+        }
+    }
     let canonical = to_canonical_bytes(&unsigned)?;
     let sig = signer
         .sign(&canonical)
@@ -209,6 +302,17 @@ pub fn build(
         authenticatedRootEnabled: inputs.authenticated_root_enabled,
         rdmaDisabled: inputs.rdma_disabled,
         mdaCertChain: mda_chain_b64,
+        cdHash: inputs.cd_hash,
+        teamId: inputs.team_id,
+        hardenedRuntime: inputs.hardened_runtime,
+        libraryValidation: inputs.library_validation,
+        getTaskAllow: inputs.get_task_allow,
+        metallibHash: inputs.metallib_hash,
+        inProcessBackend: inputs.in_process_backend,
+        antiDebug: inputs.anti_debug,
+        coreDumpsDisabled: inputs.core_dumps_disabled,
+        envScrubbed: inputs.env_scrubbed,
+        tier,
         selfSignature: B64.encode(&sig),
         attestedAt: attested_at,
         expiresAt: expires_at,
@@ -263,11 +367,25 @@ mod tests {
             authenticated_root_enabled: true,
             rdma_disabled: true,
             mda_cert_chain: vec![],
+            cd_hash: Some("ab".repeat(20)),
+            team_id: Some("TEAM123456".into()),
+            hardened_runtime: true,
+            library_validation: true,
+            get_task_allow: false,
+            metallib_hash: None,
+            in_process_backend: false,
+            anti_debug: true,
+            core_dumps_disabled: true,
+            env_scrubbed: true,
         };
         let rec = build(inputs, &*signer).unwrap();
         assert!(!rec.selfSignature.is_empty());
         assert_eq!(rec.serialNumberHash.len(), 64);
         assert!(rec.expiresAt > rec.attestedAt);
+        // No MDA chain + no native engine → must self-assert best-effort,
+        // never attested-confidential.
+        assert_eq!(rec.tier, "best-effort");
+        assert!(!rec.inProcessBackend);
     }
 
     #[test]
@@ -292,11 +410,27 @@ mod tests {
             authenticated_root_enabled: true,
             rdma_disabled: true,
             mda_cert_chain: vec![b"leaf-cert-der".to_vec(), b"intermediate-cert-der".to_vec()],
+            cd_hash: Some("cd".repeat(20)),
+            team_id: None,
+            hardened_runtime: true,
+            library_validation: true,
+            get_task_allow: false,
+            metallib_hash: None,
+            in_process_backend: true,
+            anti_debug: true,
+            core_dumps_disabled: true,
+            env_scrubbed: true,
         };
         let rec = build(inputs, &*signer).unwrap();
         assert!(
             rec.mdaCertChain.is_empty(),
             "an unverifiable / unbound chain must be dropped, not embedded"
+        );
+        // Even with a full in-process confidential posture, a DROPPED MDA chain
+        // means the producer must NOT self-assert attested-confidential.
+        assert_eq!(
+            rec.tier, "best-effort",
+            "without a bound MDA chain the tier caps at best-effort"
         );
     }
 }

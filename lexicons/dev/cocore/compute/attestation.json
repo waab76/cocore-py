@@ -52,7 +52,52 @@
             "type": "string",
             "minLength": 64,
             "maxLength": 64,
-            "description": "SHA-256 hex of the cocore-provider binary that produced this attestation."
+            "description": "SHA-256 hex of the cocore-provider binary that produced this attestation. Back-compat measure of the whole file on disk. For trust decisions `cdHash` supersedes it: the OS enforces the code-signing cdhash, not a whole-file digest, so a verifier deciding `tier` MUST prefer `cdHash` when present and treat `binaryHash` as informational."
+          },
+          "cdHash": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 64,
+            "description": "Lowercase hex of the code-signing directory hash (cdhash) the OS actually enforces for the running cocore-provider binary, read from the live process (SecCodeCopySelf / SecCodeCopySigningInformation, fallback csops CS_OPS_CDHASH). This is the measured identity a confidential-tier verifier checks against the known-good set — unlike `binaryHash` it reflects exactly what library validation and `get-task-allow=false` protect. Optional / additive; absent caps the work at `best-effort`."
+          },
+          "teamId": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Apple Developer Team Identifier from the code signature of the running binary. A confidential-tier verifier pins this to the expected cocore signing team so a validly-signed but unrelated binary cannot pass. Optional / additive."
+          },
+          "hardenedRuntime": {
+            "type": "boolean",
+            "description": "True iff the running binary is signed with the hardened runtime (CS_RUNTIME). Required for `attested-confidential`. Optional / additive; absent treated as false."
+          },
+          "libraryValidation": {
+            "type": "boolean",
+            "description": "True iff library validation is enforced (the binary will not load libraries signed by a different team / unsigned code). Closes the dylib-injection path. Required for `attested-confidential`. Optional / additive; absent treated as false."
+          },
+          "getTaskAllow": {
+            "type": "boolean",
+            "description": "Value of the get-task-allow entitlement on the running binary. MUST be false for `attested-confidential` — a true value means another process (even the owner) can attach a debugger and read process memory, defeating confidentiality. Optional / additive; absent treated as true (the unsafe default) so a missing value never silently earns the confidential tier."
+          },
+          "metallibHash": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "SHA-256 hex of the precompiled Metal shader library (`mlx.metallib` or equivalent) the in-process inference engine loads at runtime. The GPU kernels that touch the plaintext live here, so a confidential verifier pins this to a known-good value alongside `cdHash`. Absent when no native engine is loaded (e.g. the subprocess/best-effort backend). Optional / additive."
+          },
+          "inProcessBackend": {
+            "type": "boolean",
+            "description": "True iff inference runs INSIDE this measured, signed binary (native in-process engine) rather than in an owner-controlled subprocess/interpreter. This is THE load-bearing confidentiality property — if false, the prompt is handed to a process the attestation does not cover, so the work can never be `attested-confidential`. Optional / additive; absent treated as false."
+          },
+          "antiDebug": {
+            "type": "boolean",
+            "description": "True iff the process denied debugger attachment at startup (PT_DENY_ATTACH). Required for `attested-confidential`. Optional / additive; absent treated as false."
+          },
+          "coreDumpsDisabled": {
+            "type": "boolean",
+            "description": "True iff core dumps were disabled at startup (RLIMIT_CORE=0), so a crash cannot spill plaintext to disk. Required for `attested-confidential`. Optional / additive; absent treated as false."
+          },
+          "envScrubbed": {
+            "type": "boolean",
+            "description": "True iff dynamic-linker injection vectors (DYLD_*) were scrubbed from the environment at startup. Required for `attested-confidential`. Optional / additive; absent treated as false."
           },
           "sipEnabled": { "type": "boolean" },
           "secureBootEnabled": { "type": "boolean" },
@@ -75,6 +120,11 @@
             "type": "string",
             "format": "datetime",
             "description": "Receipts that strong-ref this attestation are only considered fresh if completedAt < expiresAt. Default 24h after attestedAt."
+          },
+          "tier": {
+            "type": "ref",
+            "ref": "dev.cocore.compute.defs#tier",
+            "description": "The provider's self-asserted confidentiality tier for work done under this attestation. ADVISORY ONLY: a verifier MUST recompute the tier from the evidence in this record (bound mdaCertChain, cdHash ∈ known-good, posture booleans) and the session handshake, and MUST NOT trust this field. Present so consumers can display the provider's claim before verifying. Optional / additive; absent equivalent to `best-effort`."
           }
         }
       }

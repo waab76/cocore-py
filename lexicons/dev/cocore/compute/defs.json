@@ -80,6 +80,11 @@
       "description": "How strongly the provider's environment is attested.",
       "knownValues": ["self-attested", "hardware-attested"]
     },
+    "tier": {
+      "type": "string",
+      "description": "Confidentiality tier of a unit of work — whether the prompt was provably handled only inside a measured, signed binary the owner cannot read. Distinct from `trustLevel` (which describes how the environment is attested) because a hardware-attested machine can still run a best-effort engine. A verifier MUST recompute this from evidence and never trust a self-asserted value: `attested-confidential` REQUIRES a verified Apple MDA chain bound to the signing key, a known-good measured `cdHash`, the hardened-runtime posture booleans (sip && hardenedRuntime && libraryValidation && !getTaskAllow && secureBoot), and a fresh enclave-signed session key; anything weaker is `best-effort`. Absent is equivalent to `best-effort` for pre-2026-06 readers.",
+      "knownValues": ["attested-confidential", "best-effort"]
+    },
     "settlementStatus": {
       "type": "string",
       "description": "Lifecycle state of a settlement record.",

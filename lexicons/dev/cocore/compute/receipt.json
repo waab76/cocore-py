@@ -51,6 +51,18 @@
             "maxLength": 64,
             "description": "Optional SHA-256 hex over the EXACT encrypted bytes delivered to the requester (the sealed reply). Lets a requester confirm the ciphertext they received is the one the provider's enclaveSignature commits to — defends against an intermediary swapping the delivered bytes. Covered by enclaveSignature like every other field."
           },
+          "sessionKeyCommitment": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "Optional SHA-256 hex over (ephemeralPubKey || sessionNonce) — the per-job ephemeral X25519 key the requester sealed the input to, bound to the request nonce. Present when the job ran under the forward-secret confidential handshake (the enclave minted a fresh ephemeral key, enclave-signed it against the requester's nonce, and the requester sealed to that key after verifying it). Lets a requester prove after the fact that its prompt was sealed to a key the measured enclave controlled for this job, not the long-lived encryptionPubKey. Covered by enclaveSignature."
+          },
+          "sessionNonce": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 64,
+            "description": "Optional lowercase hex of the fresh requester nonce that the ephemeral session key was bound to (the freshness challenge for this job). Pairs with sessionKeyCommitment. Covered by enclaveSignature."
+          },
           "params": {
             "type": "ref",
             "ref": "#generationParams",
@@ -81,6 +93,11 @@
             "type": "bytes",
             "maxLength": 256,
             "description": "Secure Enclave P-256 signature (DER) over a sorted-key canonical JSON of every other field in this record. Verified against the publicKey of the strong-reffed attestation. This binding survives PDS migration: the repo-commit signature changes when keys rotate, but the enclaveSignature does not."
+          },
+          "tier": {
+            "type": "ref",
+            "ref": "dev.cocore.compute.defs#tier",
+            "description": "The confidentiality tier this job actually ran under. Set by the provider to `attested-confidential` only when the input was sealed to a verified, enclave-bound ephemeral session key AND served by a measured native engine under a hardware-attested posture; otherwise `best-effort`. A requester recomputes this from the receipt's attestation + sessionKeyCommitment rather than trusting the field. Optional / additive; absent equivalent to `best-effort`."
           }
         }
       }

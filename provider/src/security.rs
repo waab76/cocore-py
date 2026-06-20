@@ -13,6 +13,35 @@
 //! be built and unit-tested in CI.
 
 use anyhow::{Context, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set once [`apply_all`] has successfully installed every hardening control.
+/// Read by the attestation producer via [`posture`] to report honest
+/// capability flags (`antiDebug` / `coreDumpsDisabled` / `envScrubbed`).
+static HARDENED: AtomicBool = AtomicBool::new(false);
+
+/// Which startup hardening controls are in force. The attestation producer
+/// turns these into the darkbloom-parity capability flags a confidential
+/// verifier requires; they read `true` only after [`apply_all`] has fully
+/// succeeded, so an un-hardened process can never claim them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HardeningPosture {
+    pub anti_debug: bool,
+    pub core_dumps_disabled: bool,
+    pub env_scrubbed: bool,
+}
+
+/// Snapshot the hardening posture for attestation. Honest: every flag is
+/// `false` until `apply_all` has run to completion, and `anti_debug` is only
+/// claimed on macOS where PT_DENY_ATTACH actually denies `task_for_pid`.
+pub fn posture() -> HardeningPosture {
+    let on = HARDENED.load(Ordering::SeqCst);
+    HardeningPosture {
+        anti_debug: on && cfg!(target_os = "macos"),
+        core_dumps_disabled: on,
+        env_scrubbed: on,
+    }
+}
 
 /// Apply every available hardening control. Returns the first error
 /// encountered; callers MUST treat any error as fatal.
@@ -29,6 +58,7 @@ pub fn apply_all() -> Result<()> {
     scrub_environment();
     #[cfg(target_os = "macos")]
     require_sip_enabled().context("SIP")?;
+    HARDENED.store(true, Ordering::SeqCst);
     Ok(())
 }
 

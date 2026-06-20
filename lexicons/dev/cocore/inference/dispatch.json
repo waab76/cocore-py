@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "procedure",
-      "description": "Submit an inference request and stream the result back as Server-Sent Events. Authenticates the requester, runs the dispatch core, and emits typed SSE frames. Unlike `submit` (which returns URIs to poll), `dispatch` drives the full request and streams plaintext output chunks until completion.\n\nSSE events:\n  * `meta`     — { jobUri, jobCid, authUri, inputCommitment, providerDid, sessionId }\n  * `chunk`    — { seq, text }   (plaintext, decrypted)\n  * `complete` — { tokensIn, tokensOut, receiptUri, providerCredit? }\n  * `error`    — { reason, code }",
+      "description": "Submit an inference request and stream the result back as Server-Sent Events. Authenticates the requester, runs the dispatch core, and emits typed SSE frames. Unlike `submit` (which returns URIs to poll), `dispatch` drives the full request and streams plaintext output chunks until completion.\n\nConfidentiality: by default the AppView seals the prompt to the chosen provider on the caller's behalf (`best-effort` tier) — convenient, but the AppView is in the plaintext path. A caller that needs privacy FROM the provider sets `requireConfidential` and supplies a fresh `nonce`; the AppView then runs the verified, enclave-bound ephemeral handshake and either confirms an `attested-confidential` session or fails closed with the `ConfidentialUnavailable` error. For genuine end-to-end confidentiality the prompt is sealed at the client edge (SDK/browser) and the AppView forwards ciphertext only; this method's server-side seal path is always `best-effort`.\n\nSSE events:\n  * `meta`       — { jobUri, jobCid, authUri, inputCommitment, providerDid, sessionId, tier }\n  * `sessionKey` — { ephemeralPubKey, nonce, attestationCid, signature }   (only when `requireConfidential`; the enclave-signed fresh key the requester verifies before sealing)\n  * `chunk`      — { seq, text }   (plaintext, decrypted)\n  * `complete`   — { tokensIn, tokensOut, receiptUri, tier, providerCredit? }\n  * `error`      — { reason, code }",
       "input": {
         "encoding": "application/json",
         "schema": {
@@ -22,7 +22,9 @@
                 "currency": { "type": "string", "minLength": 1 }
               }
             },
-            "targetProviderDid": { "type": "string", "format": "did", "description": "Pin dispatch to a specific provider DID instead of letting the advisor route." }
+            "targetProviderDid": { "type": "string", "format": "did", "description": "Pin dispatch to a specific provider DID instead of letting the advisor route." },
+            "requireConfidential": { "type": "boolean", "description": "Demand the `attested-confidential` tier: the chosen provider must present a verified, signing-key-bound Apple MDA chain, a known-good measured cdHash, the hardened-runtime posture, and a fresh enclave-signed ephemeral session key bound to `nonce`. If no eligible provider is available the request fails closed with `ConfidentialUnavailable` rather than silently downgrading to best-effort. Optional / additive; absent or false means best-effort." },
+            "nonce": { "type": "string", "minLength": 32, "maxLength": 64, "description": "Fresh lowercase-hex freshness challenge (>=16 random bytes) supplied by the caller when `requireConfidential` is set. The provider's enclave signs (ephemeralPubKey || nonce || attestationCid) so the caller can prove the ephemeral seal key was minted for THIS request and is not replayed. Required when requireConfidential is true; ignored otherwise." }
           }
         }
       },
@@ -32,7 +34,8 @@
       },
       "errors": [
         { "name": "AuthRequired", "description": "The caller is not authenticated." },
-        { "name": "InvalidRequest", "description": "The body failed validation." }
+        { "name": "InvalidRequest", "description": "The body failed validation." },
+        { "name": "ConfidentialUnavailable", "description": "requireConfidential was set but no provider could satisfy the attested-confidential tier (no verified+bound MDA chain, cdHash not in the known-good set, posture failed, or the ephemeral session handshake did not verify). The request was NOT downgraded; no prompt was sealed." }
       ]
     }
   }

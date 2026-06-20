@@ -124,6 +124,7 @@ function refToType(ref: string): string {
   if (ref.endsWith("#modelPrice")) return "ModelPrice";
   if (ref.endsWith("#tokenRate")) return "TokenRate";
   if (ref.endsWith("#trustLevel")) return "TrustLevel";
+  if (ref.endsWith("#tier")) return "Tier";
   if (ref.endsWith("#settlementStatus")) return "SettlementStatus";
   // Inline-fallback: use a Record<string, unknown> for unknown refs
   // rather than crashing — keeps codegen forward-compatible.
