@@ -85,6 +85,35 @@ agent's existing signing key. So on the first real chain we decide:
 **A wrong choice silently caps the tier at best-effort with no error** — so verify
 the bound chain end-to-end on the first enrolled Mac before rolling out.
 
+## Deployment gotchas discovered (2026-06-20, partial deploy)
+
+Confirmed Railway access + created `cocore-step-ca` (smallstep/step-ca image,
+service id `4de1dff8-3abb-4427-a117-1696a67e2719`, in the **production** env —
+the CLI link didn't hold across shells so the first `railway add` defaulted
+there), added a volume (`/home/step`) + domain
+(`https://cocore-step-ca-production.up.railway.app`, target port 9000). Then hit
+real blockers — resolve these on the next dedicated deploy pass:
+
+1. **step-ca volume permissions (crash-loop).** `/entrypoint.sh: /home/step/password:
+   Permission denied` — step-ca runs as a non-root user but the Railway volume
+   mounts root-owned. Fix: run an init that `chown`s `/home/step`, set the volume
+   ownership, or run step-ca as the matching uid. (For an initial attestation
+   PROOF, persistence isn't required — dropping the volume lets step-ca init in
+   ephemeral storage and boot.)
+2. **TLS termination — the architectural decision.** step-ca serves its OWN HTTPS
+   (its CA-issued cert) on 9000; Railway's HTTP proxy expects an HTTP upstream, so
+   an HTTP domain → 9000 mismatches. The clean fix: a Railway **TCP proxy** (raw
+   TCP) to 9000 so step-ca terminates its own TLS, AND **push step-ca's root CA to
+   the provider Mac via an MDM cert profile** so the Mac trusts that TLS for the
+   ACME `DirectoryURL`. (Avoids needing a publicly-trusted cert on step-ca.)
+   step-ca `DNS_NAMES` must then include the TCP proxy hostname.
+3. **Railway MCP needs auth.** `railway setup agent` installed the MCP, but the
+   MCP server process doesn't inherit `RAILWAY_API_TOKEN`, so it returns
+   "Unauthorized." Either `railway login` (OAuth, then restart so the MCP reads
+   the stored creds) or add the token to the MCP server's env in `~/.claude.json`.
+   Until then, drive the CLI with `railway link --project <id> --environment <env>
+   --service <name>` (all three) in a single shell, then bare subcommands.
+
 ## Files
 
 - `profiles/cocore-attestation.mobileconfig` — the ACME attestation profile
