@@ -259,7 +259,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     { autoRun: false, body: { id: "<key-id>" } },
   ),
 
-  // --- Inference (currently served by the console at /api/xrpc) ---
+  // --- Inference (served by the AppView; the console route forwards) ---
   p(
     "dev.cocore.inference.dispatch",
     "Inference",
@@ -281,10 +281,10 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
         priceCeiling: { amount: 1000, currency: "CC" },
       },
     },
-    { host: "console" },
+    { host: "appview" },
   ),
 
-  // --- Device pairing (currently served by the console at /api/xrpc) ---
+  // --- Device pairing (served by the AppView; the console route forwards) ---
   p(
     "dev.cocore.devicePair.start",
     "Device pairing",
@@ -292,7 +292,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     "none",
     [],
     { autoRun: false },
-    { host: "console" },
+    { host: "appview" },
   ),
   q(
     "dev.cocore.devicePair.poll",
@@ -301,7 +301,7 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     "none",
     [{ name: "deviceId", type: "string", required: true }],
     { autoRun: false, params: {} },
-    { host: "console" },
+    { host: "appview" },
   ),
   p(
     "dev.cocore.devicePair.confirm",
@@ -311,10 +311,9 @@ export const API_DOCS_CATALOG: Array<ApiDocsCatalogEntry> = [
     [
       { name: "userCode", type: "string", required: true },
       { name: "decision", type: "string", required: true },
-      { name: "session", type: "object" },
     ],
     { autoRun: false, body: { userCode: "ABCD-1234", decision: "approve" } },
-    { host: "console" },
+    { host: "appview" },
   ),
 ];
 

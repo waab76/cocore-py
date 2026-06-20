@@ -1,11 +1,13 @@
 // POST /xrpc/dev.cocore.inference.dispatch
 //
-// Browser-facing dispatch endpoint. Authenticates via the OAuth
-// session cookie, then runs the shared dispatch core
-// (`@/lib/inference-dispatch.server.ts`) and renders the typed
-// events as SSE for the in-app UI to consume. The OpenAI-compatible
-// shim at `/api/v1/chat/completions` reuses the same core with API
-// key auth.
+// Browser-facing dispatch endpoint. Authenticates via the OAuth session
+// cookie, then EITHER forwards the dispatch to the AppView's SSE XRPC
+// endpoint (when COCORE_APPVIEW_INTERNAL_URL + COCORE_APPVIEW_DID are set —
+// the AppView now owns the dispatch core, OAuth session, and Store) OR runs
+// the in-process dispatch core (`@/lib/inference-dispatch.server.ts`) as a
+// legacy fallback. Either way the response is the same SSE shape. The
+// OpenAI-compatible shim at `/api/v1/chat/completions` still uses the local
+// core with API-key auth.
 //
 // Output: text/event-stream. Events:
 //   * `meta`     — { jobUri, jobCid, authUri, inputCommitment, providerDid }
@@ -15,6 +17,10 @@
 
 import { createFileRoute } from "@tanstack/react-router";
 
+import {
+  forwardDispatch,
+  isDispatchForwardConfigured,
+} from "@/lib/inference-dispatch-forward.server.ts";
 import { runDispatch } from "@/lib/inference-dispatch.server.ts";
 import { getAtprotoSessionForRequest } from "@/middleware/auth.server.ts";
 
@@ -95,6 +101,13 @@ export const Route = createFileRoute("/api/xrpc/dev.cocore.inference.dispatch")(
         }
         const parsed = parseDispatch(body);
         if (typeof parsed === "string") return json({ error: parsed }, 400);
+
+        // Forward to the AppView when configured (it owns the dispatch core +
+        // the requester's OAuth session); otherwise run the legacy in-process
+        // core below. Both yield the same SSE shape.
+        if (isDispatchForwardConfigured()) {
+          return forwardDispatch({ oauthSession: session.oauthSession, body: { ...parsed } });
+        }
 
         const events = runDispatch({
           did: session.did,

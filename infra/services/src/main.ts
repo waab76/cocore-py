@@ -424,6 +424,10 @@ async function main() {
     // The bridge runs in this same process; mirror PDS writes to it.
     bridgeUrl: process.env["COCORE_BRIDGE_URL"] ?? `http://127.0.0.1:${PORT}`,
     internalSecret: process.env["COCORE_INTERNAL_SECRET"],
+    // inference.dispatch routes through the advisor and publishes the job
+    // under the requester's AppView-owned session; both enable the SSE route.
+    advisorUrl: process.env["COCORE_ADVISOR_URL"],
+    exchangeDid: EXCHANGE_DID,
   });
   const appviewServer = createServer(async (req, res) => {
     try {

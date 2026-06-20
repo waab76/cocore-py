@@ -16,10 +16,15 @@ import { timingSafeEqual } from "node:crypto";
 import { ids, lexicons } from "@cocore/sdk/lex";
 import { accountRoutes } from "./account-routes.ts";
 import { AccountStore } from "../operational/account-store.ts";
-import { isOAuthConfigured, makeAppviewOAuth } from "../auth/oauth-client.ts";
+import {
+  type AppviewOAuthClient,
+  isOAuthConfigured,
+  makeAppviewOAuth,
+} from "../auth/oauth-client.ts";
 import { internalPdsRoutes, pdsRoutes } from "../pds/write.ts";
 import { PairStore } from "../devicepair/pair-store.ts";
 import { devicePairRoutes } from "../devicepair/routes.ts";
+import { inferenceRoutes } from "../inference/routes.ts";
 import type {
   AttestationRecord,
   JobRecord,
@@ -46,6 +51,11 @@ export interface BuildServerOptions {
    *  OAuth session (`POST /internal/oauth-session`). When unset, the
    *  handoff endpoint is not registered. */
   internalSecret?: string;
+  /** HTTP base for the matchmaking advisor (`/providers`, `/jobs`).
+   *  Required to enable `dev.cocore.inference.dispatch`. */
+  advisorUrl?: string;
+  /** Exchange DID stamped onto dispatch's paymentAuthorization + job. */
+  exchangeDid?: string;
 }
 
 /** Constant-time string compare that tolerates length differences. */
@@ -487,31 +497,57 @@ export function buildAppviewHandler(store: Store, opts: BuildServerOptions = {})
     Object.assign(routes, accountRoutes(opts.accountStore, opts.appviewDid));
   }
 
-  // PDS-write executor: /pds/{create,put,delete}Record. Registered only
-  // when an account store exists (for bearer-key resolution) and the
-  // OAuth client is configured (private key / localhost) so it can
-  // restore DPoP-bound sessions. Additive: absent otherwise.
+  // Single shared OAuth client (when configured). One client over one
+  // session store is required — two would dual-refresh the same session.
+  // Both /pds and inference.dispatch draw from this one instance.
+  let oauth: AppviewOAuthClient | null = null;
   if (opts.accountStore && isOAuthConfigured()) {
     try {
-      const oauth = makeAppviewOAuth(opts.accountStore);
-      const pctx = { accounts: opts.accountStore, oauth, bridgeUrl: opts.bridgeUrl };
-      const pds = pdsRoutes(pctx);
-      Object.assign(routes, pds);
-      // Alias at /api/pds/* so a paired agent whose apiBase is the AppView
-      // (baked-in path `${apiBase}/api/pds/...`) reaches the same handlers.
-      for (const [path, h] of Object.entries(pds)) routes[`/api${path}`] = h;
-      // Internal trusted-DID write path (the console forwards key-resolved
-      // writes here so the OAuth session work lives only in the AppView).
-      // Private-network only; gated on the shared secret.
-      if (opts.internalSecret) Object.assign(routes, internalPdsRoutes(pctx, opts.internalSecret));
-      console.error(
-        `appview: /pds write endpoints enabled${opts.internalSecret ? " (+ /internal/pds)" : ""}`,
-      );
+      oauth = makeAppviewOAuth(opts.accountStore);
     } catch (e) {
       // A misconfigured OAuth client (e.g. bad ATPROTO_PRIVATE_KEY_JWK)
-      // must not take down the read API — disable /pds and keep serving.
-      console.error(`appview: /pds disabled — OAuth client init failed: ${(e as Error).message}`);
+      // must not take down the read API — leave it null and keep serving.
+      console.error(`appview: OAuth client init failed: ${(e as Error).message}`);
     }
+  }
+
+  // PDS-write executor: /pds/{create,put,delete}Record. Registered only
+  // when an account store exists (for bearer-key resolution) and the
+  // OAuth client initialized so it can restore DPoP-bound sessions.
+  // Additive: absent otherwise.
+  if (opts.accountStore && oauth) {
+    const pctx = { accounts: opts.accountStore, oauth, bridgeUrl: opts.bridgeUrl };
+    const pds = pdsRoutes(pctx);
+    Object.assign(routes, pds);
+    // Alias at /api/pds/* so a paired agent whose apiBase is the AppView
+    // (baked-in path `${apiBase}/api/pds/...`) reaches the same handlers.
+    for (const [path, h] of Object.entries(pds)) routes[`/api${path}`] = h;
+    // Internal trusted-DID write path (the console forwards key-resolved
+    // writes here so the OAuth session work lives only in the AppView).
+    // Private-network only; gated on the shared secret.
+    if (opts.internalSecret) Object.assign(routes, internalPdsRoutes(pctx, opts.internalSecret));
+    console.error(
+      `appview: /pds write endpoints enabled${opts.internalSecret ? " (+ /internal/pds)" : ""}`,
+    );
+  }
+
+  // Inference dispatch: /xrpc/dev.cocore.inference.dispatch (SSE). Needs a
+  // service identity (the service-auth `aud`), the shared OAuth client (to
+  // publish the job under the requester's AppView-owned session), and the
+  // advisor URL to route to a provider. Additive: absent otherwise.
+  if (opts.accountStore && opts.appviewDid && oauth && opts.advisorUrl) {
+    Object.assign(
+      routes,
+      inferenceRoutes({
+        store,
+        oauth,
+        appviewDid: opts.appviewDid,
+        advisorUrl: opts.advisorUrl,
+        exchangeDid: opts.exchangeDid ?? "did:web:exchange.local",
+        bridgeUrl: opts.bridgeUrl,
+      }),
+    );
+    console.error("appview: inference.dispatch endpoint enabled");
   }
 
   // OAuth session handoff: the console pushes a freshly minted session

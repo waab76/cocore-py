@@ -30,7 +30,8 @@
     "@atproto/identity": "^0.4.12",
     "@atproto/sync": "^0.2.2",
     "@cocore/sdk": "workspace:*",
-    "better-sqlite3": "^11.5.0"
+    "better-sqlite3": "^11.5.0",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@atproto/api": "^0.19.15",
