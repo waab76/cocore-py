@@ -19,6 +19,7 @@ import {
 } from "@/components/api-docs/snippets.ts";
 import { modelDirectoryRouteQueryOptions } from "@/components/models/models.functions.ts";
 import { OperatorChip } from "@/components/profile/OperatorChip.tsx";
+import { Badge } from "@/design-system/badge";
 import { Button } from "@/design-system/button";
 import { CopyToClipboardButton } from "@/design-system/copy-to-clipboard-button";
 import { Flex } from "@/design-system/flex";
@@ -1094,6 +1095,15 @@ function ModelsPage() {
                               {mach.chip ? ` · ${mach.chip}` : ""}
                               {mach.ramGB != null ? `, ${mach.ramGB} GB` : ""}
                             </SmallBody>
+                            {mach.confidential ? (
+                              <Badge
+                                size="sm"
+                                variant="success"
+                                title="Hardware-attested confidential tier — the advisor verified this machine's signed posture against a known-good build. Your prompt is sealed so the operator can't read it."
+                              >
+                                🔒 Confidential
+                              </Badge>
+                            ) : null}
                           </td>
                           <td {...stylex.props(styles.td, isLast && styles.tdLastRow)}>
                             <OperatorChip

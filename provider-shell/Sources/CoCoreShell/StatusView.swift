@@ -36,6 +36,15 @@ struct StatusRows: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             LabeledContent("Trust level", value: state.trustLevel.rawValue)
+            LabeledContent("Confidential tier") {
+                if state.confidential {
+                    Text("🔒 Verified")
+                        .foregroundStyle(.green)
+                } else {
+                    Text("Best-effort")
+                        .foregroundStyle(.secondary)
+                }
+            }
             if let exp = state.attestationExpiresAt {
                 LabeledContent("Attestation expires", value: exp.formatted(.dateTime))
             }

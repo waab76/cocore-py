@@ -14,6 +14,7 @@ import { Effect } from "effect";
 
 import { appviewListProvidersEffect } from "@/integrations/appview/appview.server.ts";
 import { resolveBearerKey } from "@/lib/api-keys.server.ts";
+import { cocoreConfig } from "@/lib/cocore-config.ts";
 import { sumReceiptInSince } from "@/lib/earnings.ts";
 import { getBalance, listEvents } from "@/lib/exchange-balance.server.ts";
 
@@ -36,6 +37,28 @@ function jsonError(status: number, message: string): Response {
   });
 }
 
+/** The advisor's VERIFIED confidential standing for this machine — its
+ *  cdHash is known-good AND its challenge-verified posture holds. This is
+ *  the same signal the console model directory badges with, and it's the
+ *  honest one to show the operator (vs the provider record's self-asserted
+ *  trustLevel). Degrades to false when the advisor is unreachable. */
+async function fetchConfidentialEligible(did: string): Promise<boolean> {
+  try {
+    const base = cocoreConfig().advisorUrl.replace(/\/$/, "");
+    const r = await fetch(`${base}/providers`);
+    if (!r.ok) return false;
+    const list = (await r.json()) as Array<{
+      did: string;
+      confidentialEligible?: boolean;
+      trustTier?: string;
+    }>;
+    const mineRow = list.find((p) => p.did === did);
+    return mineRow?.confidentialEligible === true || mineRow?.trustTier === "attested-confidential";
+  } catch {
+    return false;
+  }
+}
+
 export const Route = createFileRoute("/api/agent/status")({
   server: {
     handlers: {
@@ -49,10 +72,11 @@ export const Route = createFileRoute("/api/agent/status")({
         const since = Date.now() - 24 * 60 * 60 * 1000;
         // All three degrade gracefully so a single backend hiccup yields
         // partial data the menu can still render, not a 500.
-        const [balance, events, providers] = await Promise.all([
+        const [balance, events, providers, confidential] = await Promise.all([
           getBalance(did).catch(() => null),
           listEvents(did, EVENT_LIMIT).catch(() => ({ events: [] })),
           Effect.runPromise(appviewListProvidersEffect).catch(() => ({ providers: [] })),
+          fetchConfidentialEligible(did),
         ]);
 
         const earned24h = sumReceiptInSince(events.events, since);
@@ -67,6 +91,7 @@ export const Route = createFileRoute("/api/agent/status")({
             balance: balance?.balance ?? null,
             earned24h,
             trustLevel: body.trustLevel ?? null,
+            confidential,
             agentVersion: body.binaryVersion ?? null,
           }),
           { status: 200, headers: { "content-type": "application/json" } },
