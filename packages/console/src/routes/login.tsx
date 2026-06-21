@@ -306,7 +306,7 @@ function AuthPage() {
                       alt={saved.handle}
                       fallback={saved.handle[0]?.toUpperCase() ?? "?"}
                     />
-                    <Text size="base" style={styles.savedHandleText} leading="none">
+                    <Text size="base" style={styles.savedHandleText} leading="base">
                       {saved.handle}
                     </Text>
                     <ChevronRight {...stylex.props(styles.savedHandleIcon)} />
