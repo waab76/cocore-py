@@ -15,6 +15,7 @@
 
 import type { Did } from "@atcute/lexicons";
 import { isDid } from "@atcute/lexicons/syntax";
+import { Duration, Effect, Schedule } from "effect";
 
 import { runTraced } from "@/lib/o11y.server.ts";
 
@@ -121,6 +122,28 @@ async function restoreSessionOr401(did: Did) {
   return session;
 }
 
+/** A *thrown* fetch means the AppView was unreachable (connection-level
+ *  blip — undici surfaces this as "fetch failed"); most recover within a
+ *  second, so a couple of quick retries absorb the blip. An HTTP error
+ *  *response* is returned by `forwardPdsWrite`, not thrown, so it never
+ *  reaches this path — those are the AppView's structured errors and we
+ *  relay them verbatim rather than retrying. Mirrors the read-side schedule
+ *  in appview.server.ts. */
+const forwardRetrySchedule = Schedule.intersect(
+  Schedule.exponential(Duration.millis(250), 2),
+  Schedule.recurs(2),
+);
+
+/** Undici hides the useful part of a network failure ("fetch failed") behind
+ *  `cause`; surface the syscall code (ECONNREFUSED, ETIMEDOUT, ENOTFOUND, …)
+ *  so a Railway private-networking outage is diagnosable from the 502 alone. */
+function describeFetchError(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+  const detail = cause?.code ?? cause?.message;
+  return `${message}${detail ? ` (${detail})` : ""}`;
+}
+
 /** When AppView forwarding is configured, forward the write and return the
  *  AppView's response verbatim; otherwise null so the caller runs the
  *  legacy console-session path. */
@@ -129,21 +152,24 @@ async function forwardOrNull(
   body: Record<string, unknown>,
 ): Promise<Response | null> {
   if (!isAppviewForwardConfigured()) return null;
-  // The AppView now returns structured errors; relay them verbatim. A thrown
-  // fetch (AppView unreachable) would otherwise escape the route handler as an
-  // opaque 500, so collapse it to a legible 502.
-  try {
-    const r = await forwardPdsWrite(op, body);
+  // Retry only the connection-level failures (see forwardRetrySchedule); a
+  // thrown fetch would otherwise escape the route handler as an opaque 500,
+  // so collapse the exhausted case to a legible 502.
+  const forwarded = await runTraced(
+    `pds.forward.${op}`,
+    Effect.tryPromise({
+      try: () => forwardPdsWrite(op, body),
+      catch: (e) => e,
+    }).pipe(Effect.retry(forwardRetrySchedule), Effect.either),
+  );
+  if (forwarded._tag === "Right") {
+    const r = forwarded.right;
     return new Response(await r.text(), {
       status: r.status,
       headers: { "content-type": "application/json" },
     });
-  } catch (e) {
-    return jsonError(
-      502,
-      `appview ${op} forward failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
   }
+  return jsonError(502, `appview ${op} forward failed: ${describeFetchError(forwarded.left)}`);
 }
 
 // ---- createRecord ---------------------------------------------------
