@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { WebSocketServer } from "ws";
 
+import { loadApnsConfig } from "./apns.ts";
 import { handleConnection } from "./connection.ts";
 import { handleJobsRequest } from "./jobs.ts";
 import { KnownGoodSet } from "./known-good.ts";
@@ -100,10 +101,21 @@ const REPROBE_TIMEOUT_MS = Number(process.env["COCORE_ADVISOR_REPROBE_TIMEOUT_MS
 const TTFT_WINDOW_SAMPLES = Number(process.env["COCORE_ADVISOR_TTFT_SAMPLES"] ?? 100);
 
 async function main(): Promise<void> {
+  // APNs code-identity sender config (APNS_AUTH_KEY/KEY_ID/TEAM_ID/TOPIC).
+  // Null when unset → the code-identity challenge is disabled AND confidential
+  // eligibility is NOT gated on it (pre-APNs behavior, no hard cutover at
+  // rollout). When present, the registry enforces code-attestation and the
+  // connection handler issues challenges.
+  const apnsConfig = loadApnsConfig();
+  if (apnsConfig) {
+    console.error(`[advisor] APNs code-identity enabled topic=${apnsConfig.topic}`);
+  } else {
+    console.error("[advisor] APNs code-identity disabled (APNS_* env not set)");
+  }
   // Known-good build set for confidential-tier routing hints (WS-COORDINATOR).
   // Empty unless COCORE_KNOWN_GOOD_CDHASHES is set → fail-closed (no machine is
   // advertised confidential-eligible until a blessed-build set is configured).
-  const registry = new ProviderRegistry(KnownGoodSet.fromEnv());
+  const registry = new ProviderRegistry(KnownGoodSet.fromEnv(), apnsConfig !== null);
   // Rolling time-to-first-token window (received → first chunk relayed),
   // surfaced at GET /ttft for the console's public latency stat.
   const ttft = new TtftWindow(TTFT_WINDOW_SAMPLES);
@@ -178,6 +190,9 @@ async function main(): Promise<void> {
           confidentialEligible: p.confidentialEligible,
           cdHash: p.cdHash,
           challengeVerifiedSip: p.challengeVerifiedSip,
+          // APNs code-identity: whether this machine answered a live, AMFI-gated
+          // code-identity challenge (the un-forgeable complement to cdHash).
+          codeAttested: p.codeAttested,
         })),
       );
     }
@@ -298,6 +313,7 @@ async function main(): Promise<void> {
       keepaliveIntervalMs: WS_KEEPALIVE_INTERVAL_MS,
       keepaliveMaxMissed: WS_KEEPALIVE_MAX_MISSED,
       maxConnectionMs: WS_MAX_CONNECTION_MS,
+      apns: apnsConfig,
     }),
   );
 

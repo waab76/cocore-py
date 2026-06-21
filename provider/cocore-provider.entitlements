@@ -48,5 +48,15 @@
     <!-- Outbound only (advisor WebSocket + PDS writes). Never inbound. -->
     <key>com.apple.security.network.client</key><true/>
     <key>com.apple.security.network.server</key><false/>
+
+    <!-- APNs code-identity (confidential tier, `apns` build). Lets THIS
+         measured binary receive the advisor's code-identity challenge push.
+         AMFI only honors this for a binary signed with our Developer ID + the
+         embedded dev.cocore.provider provisioning profile, so a re-signed fork
+         cannot receive the push and therefore cannot be code-attested.
+         "production" → the advisor sends via api.push.apple.com. The release
+         pipeline must embed the matching provisioning profile in the bundle
+         (codesign honors this entitlement only when the profile authorizes it). -->
+    <key>com.apple.developer.aps-environment</key><string>production</string>
 </dict>
 </plist>

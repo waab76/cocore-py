@@ -40,6 +40,16 @@ pub enum AdvisorMessage {
     Ping(Ping),
     /// Provider → advisor: reply to `Ping`, echoing the nonce.
     Pong(Pong),
+    /// Provider → advisor: response to an APNs code-identity challenge.
+    /// The challenge is delivered out-of-band over APNs (not on this socket):
+    /// the advisor pushes a nonce sealed to the provider's X25519 key `K`, and
+    /// only the genuine, Apple-provisioned binary can (a) receive that push at
+    /// all (AMFI gates the topic to our code signature) and (b) decrypt it with
+    /// `K`. The provider recovers the nonce and returns it here alongside a
+    /// Secure-Enclave signature over it, proving the same binary that received
+    /// the push also controls the attested signing key. Additive — pre-APNs
+    /// advisors never send a challenge and so never receive this.
+    CodeAttestationResponse(CodeAttestationResponse),
     /// Advisor → provider: standing change. `Bad` means the advisor
     /// stopped routing jobs here (failed preflight / went silent mid-job);
     /// the agent surfaces it to the operator. `Ok` clears it. Additive.
@@ -147,6 +157,15 @@ pub struct Register {
     /// eligibility from cdHash ∈ known-good + challenge-verified SIP. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
+    /// APNs device token (hex) for this machine's measured agent process, when
+    /// it could register for remote notifications (a logged-in GUI session with
+    /// the push entitlement). Lets the advisor send the APNs code-identity
+    /// challenge that proves this exact binary is the genuine, team-signed
+    /// agent — the un-self-reportable complement to `cd_hash`. Omitted on
+    /// headless/launchd installs (no GUI session → no APNs), which therefore
+    /// stay best-effort. Additive — pre-APNs advisors ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apns_device_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +232,20 @@ pub struct SessionKey {
     /// `{attestationCid, ephemeralPubKey, nonce}` — the exact form the SDK's
     /// `sessionKeyMessage` reconstructs and verifies against
     /// `attestation.publicKey`.
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeAttestationResponse {
+    /// The plaintext nonce recovered by decrypting the APNs-delivered
+    /// challenge with the provider's X25519 key `K`. Echoing it proves the
+    /// responder holds `K` (and, because only the genuine binary could receive
+    /// the AMFI-gated push, that the responder *is* that binary).
+    pub nonce: String,
+    /// Secure Enclave P-256 signature (DER) over the canonical bytes of
+    /// `{ nonce }` — the same canonicalisation the advisor's verifier
+    /// reconstructs. Binds the recovered nonce to the attested signing key so
+    /// the push receipt and the attestation chain are the same machine.
     pub signature: Vec<u8>,
 }
 

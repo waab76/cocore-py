@@ -1,0 +1,9 @@
+# NEVER commit secrets or build artifacts from this spike.
+*.p8
+AuthKey_*.p8
+build/
+*.app
+device-token.txt
+receiver.log
+*.log
+*-token.txt

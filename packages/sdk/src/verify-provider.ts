@@ -90,6 +90,19 @@ export interface VerifyProviderOptions {
    *  freshness). Default false: liveness is vouched by the advisor's standing
    *  5-min challenge-response and the attestation's own expiry window. */
   requireSessionKey?: boolean;
+  /** The advisor's live APNs code-identity standing for this provider (from the
+   *  `/providers` / `/verified-providers` feed's `codeAttested`). This is the
+   *  un-forgeable code-identity signal — a self-reported cdHash can be claimed
+   *  by a fork, but only the genuine, AMFI-gated binary can answer the advisor's
+   *  push challenge. NOTE: unlike every other gate here, this one is NOT
+   *  offline-verifiable from the receipt (the challenge is interactive); it is
+   *  advisor-asserted — the deliberate coordinator-trust carve-out the
+   *  confidential tier accepts (see infra/mdm + the parity ADR). */
+  codeAttested?: boolean;
+  /** Require {@link codeAttested} for the confidential tier. Set this when the
+   *  deployment enforces APNs code-identity (the advisor has APNs configured).
+   *  Default false so callers against a non-enforcing advisor keep working. */
+  requireCodeAttested?: boolean;
   /** Clock seam for tests. */
   now?: () => Date;
   /** ADVANCED / TEST ONLY. Verify the MDA chain against this DER trust anchor
@@ -368,6 +381,18 @@ export async function verifyProviderForSeal(
     );
   } else if (!attestation.encryptionPubKey) {
     block("no-encryption-key", "attestation has no encryptionPubKey to seal to");
+  }
+
+  // --- 8. APNs code identity (advisor-asserted, see opts.codeAttested). ---
+  // The un-forgeable complement to the self-reported cdHash: a fork can claim a
+  // blessed cdHash, but cannot answer the advisor's AMFI-gated push challenge.
+  // Only enforced when the caller opts in (the advisor runs APNs); off by
+  // default so non-enforcing deployments are unaffected.
+  if (opts.requireCodeAttested && opts.codeAttested !== true) {
+    block(
+      "code-not-attested",
+      "provider has not passed a live APNs code-identity challenge (advisor codeAttested is not true)",
+    );
   }
 
   // --- Resolve tier + findings. ---

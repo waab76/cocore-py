@@ -16,7 +16,14 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
 
-import { isFresh, makeChallenge, verifyAttestation } from "./attest.ts";
+import { type ApnsConfig, sendCodeChallenge as pushCodeChallenge } from "./apns.ts";
+import {
+  isFresh,
+  makeChallenge,
+  makeCodeNonce,
+  verifyAttestation,
+  verifyCodeAttestation,
+} from "./attest.ts";
 import type { AdvisorMessage, AttestationChallenge } from "./protocol.ts";
 import { CRASH_LOOP_THRESHOLD, ProviderRegistry } from "./registry.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -61,6 +68,11 @@ export interface ConnectionConfig {
    *  inevitable cut into a predictable, graceful cycle we control instead
    *  of an edge-initiated reset. 0 / unset disables. */
   maxConnectionMs?: number;
+  /** APNs sender config for the code-identity challenge. Null/absent disables
+   *  it: no challenges are sent and confidential eligibility is NOT gated on
+   *  code-attestation (the pre-APNs behavior). Set exactly when the advisor has
+   *  APNs configured (and the registry is constructed with enforcement on). */
+  apns?: ApnsConfig | null;
 }
 
 export function handleConnection(
@@ -74,6 +86,8 @@ export function handleConnection(
   let registeredDid: string | null = null;
   let registeredMachineId: string | null = null;
   let pendingChallenge: AttestationChallenge | null = null;
+  // Nonce of the most recent unanswered APNs code-identity challenge, if any.
+  let pendingCodeNonce: string | null = null;
   let challengeTimer: NodeJS.Timeout | null = null;
   let challengeResponseTimer: NodeJS.Timeout | null = null;
   let keepaliveTimer: NodeJS.Timeout | null = null;
@@ -211,6 +225,41 @@ export function handleConnection(
     );
   };
 
+  // Send an APNs code-identity challenge: a fresh nonce sealed to the machine's
+  // X25519 key, pushed to its device token. Only the genuine, AMFI-gated binary
+  // can receive + open it, so a valid response proves code identity. No-ops
+  // when APNs isn't configured or the machine reported no device token (those
+  // machines simply stay best-effort). Unlike the WS attestation challenge,
+  // a missed code challenge does NOT close the socket — it only drops the
+  // machine's confidential standing (best-effort serving is unaffected).
+  const issueCodeChallenge = async (): Promise<void> => {
+    if (!config.apns || !registeredDid || !registeredMachineId) return;
+    const entry = registry.get(registeredDid, registeredMachineId);
+    if (!entry || !entry.apnsDeviceToken) return;
+    // A still-pending nonce from the previous cycle means the machine missed a
+    // challenge — revoke its code-attested standing until it answers again.
+    if (pendingCodeNonce) {
+      registry.dropCodeAttested(registeredDid, registeredMachineId);
+    }
+    const nonce = makeCodeNonce();
+    pendingCodeNonce = nonce;
+    const res = await pushCodeChallenge(
+      config.apns,
+      entry.apnsDeviceToken,
+      entry.encryptionPubKey,
+      nonce,
+    );
+    if (!res.ok) {
+      console.error(
+        `[ws] code-challenge push failed did=${registeredDid} status=${res.status} reason=${res.reason ?? "?"}`,
+      );
+    } else {
+      console.error(
+        `[ws] -> code-challenge did=${registeredDid ?? "?"} nonce=${nonce.slice(0, 8)}…`,
+      );
+    }
+  };
+
   socket.on("message", (data) => {
     let msg: AdvisorMessage;
     try {
@@ -240,7 +289,11 @@ export function handleConnection(
           );
         }
         sendChallenge();
-        challengeTimer = setInterval(sendChallenge, config.rechallengeIntervalMs);
+        void issueCodeChallenge();
+        challengeTimer = setInterval(() => {
+          sendChallenge();
+          void issueCodeChallenge();
+        }, config.rechallengeIntervalMs);
         challengeTimer.unref();
         return;
       }
@@ -300,6 +353,33 @@ export function handleConnection(
         console.error(`[ws] attestation OK did=${registeredDid} machine=${registeredMachineId}`);
         pendingChallenge = null;
         clearResponseTimer();
+        return;
+      }
+      case "code_attestation_response": {
+        // APNs code-identity proof: the machine recovered the nonce we sealed
+        // to its X25519 key (so it received the AMFI-gated push and holds K)
+        // and SE-signed it. Grant code-attested standing. A bad/stale response
+        // only drops confidential standing — best-effort serving is unaffected,
+        // so we don't close the socket.
+        if (!registeredDid || !registeredMachineId || !pendingCodeNonce) {
+          console.error(`[ws] unsolicited code-attestation peer=${peer}`);
+          return;
+        }
+        const entry = registry.get(registeredDid, registeredMachineId);
+        if (!entry) return;
+        const ok = await verifyCodeAttestation(msg, pendingCodeNonce, entry.attestationPubKey);
+        if (!ok) {
+          console.error(
+            `[ws] BAD code-attestation did=${registeredDid} machine=${registeredMachineId}`,
+          );
+          registry.dropCodeAttested(registeredDid, registeredMachineId);
+          return;
+        }
+        registry.markCodeAttested(registeredDid, registeredMachineId);
+        console.error(
+          `[ws] code-attestation OK did=${registeredDid} machine=${registeredMachineId}`,
+        );
+        pendingCodeNonce = null;
         return;
       }
       case "inference_chunk": {

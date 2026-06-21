@@ -63,6 +63,8 @@ def verify_provider_for_seal(
     nonce: Optional[str] = None,
     session_key: Optional[Mapping[str, str]] = None,
     require_session_key: bool = False,
+    code_attested: bool = False,
+    require_code_attested: bool = False,
     trust_anchor_der: Optional[bytes] = None,
     now: Optional[datetime] = None,
 ) -> VerifyResult:
@@ -193,6 +195,15 @@ def verify_provider_for_seal(
         block("no-session-key", "advisor-trustless freshness required but no session key supplied")
     elif not attestation.get("encryptionPubKey"):
         block("no-encryption-key", "attestation has no encryptionPubKey to seal to")
+
+    # APNs code identity (advisor-asserted; the one signal not offline-verifiable
+    # from the receipt — the deliberate coordinator-trust carve-out). Only
+    # enforced when the caller opts in (the advisor runs APNs).
+    if require_code_attested and code_attested is not True:
+        block(
+            "code-not-attested",
+            "provider has not passed a live APNs code-identity challenge",
+        )
 
     confidential = not blockers
     tier = "attested-confidential" if confidential else "best-effort"

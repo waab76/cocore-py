@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- These three MUST match the embedded provisioning profile exactly. The
+         profile (decoded) carries:
+           com.apple.developer.aps-environment   = production
+           com.apple.application-identifier       = 4L45P7CP9M.dev.cocore.provider
+           com.apple.developer.team-identifier    = 4L45P7CP9M
+         aps-environment is what authorizes the app to receive pushes. For a
+         Developer ID (non-App-Store) app the value is "production", so the
+         sender must hit api.push.apple.com (the production gateway). -->
+    <key>com.apple.developer.aps-environment</key>
+    <string>production</string>
+    <key>com.apple.application-identifier</key>
+    <string>4L45P7CP9M.dev.cocore.provider</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>4L45P7CP9M</string>
+</dict>
+</plist>

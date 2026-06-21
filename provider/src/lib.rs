@@ -34,6 +34,10 @@ pub mod oauth;
 pub mod pds;
 pub mod pricing;
 pub mod protocol;
+/// APNs push host (confidential-tier code identity). macOS + `apns` only; the
+/// security-critical crypto lives in `advisor` and is tested cross-platform.
+#[cfg(all(target_os = "macos", feature = "apns"))]
+pub mod push_host;
 pub mod receipt;
 pub mod schedule;
 pub mod secure_enclave;

@@ -979,6 +979,14 @@ async fn cmd_serve(advisor_url: &str) -> Result<()> {
         engine_fault: provider_record.engineFault.clone(),
         cd_hash: register_cd_hash,
         tier: register_tier,
+        // The measured agent's APNs device token, when the push host registered
+        // one (confidential build + logged-in GUI session). Lets the advisor
+        // send the code-identity challenge that proves this exact binary is
+        // genuine. `None` everywhere else → those machines stay best-effort.
+        #[cfg(all(target_os = "macos", feature = "apns"))]
+        apns_device_token: cocore_provider::push_host::current_device_token(),
+        #[cfg(not(all(target_os = "macos", feature = "apns")))]
+        apns_device_token: None,
     };
     let attestation = attestation_ref.as_ref();
 

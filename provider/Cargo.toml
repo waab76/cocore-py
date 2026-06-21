@@ -90,6 +90,11 @@ secure_enclave = []
 # provider/spikes/SPIKE_RESULTS.md (S1/S2). When enabled, the engine reports
 # in_process=true and pins the precompiled signed mlx.metallib hash.
 native_mlx = []
+# APNs code-identity push host (confidential tier). Implies native_mlx because
+# the measured binary that receives the push is the same one that runs
+# in-process inference and holds K. macOS-only at the code level (the module is
+# additionally cfg(target_os = "macos")). Off by default so Linux/CI stays green.
+apns = ["native_mlx"]
 
 [dev-dependencies]
 tempfile = "3"

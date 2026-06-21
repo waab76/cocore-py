@@ -47,6 +47,11 @@ export interface Register {
    *  echoed from the signed attestation. Advisory — the advisor recomputes.
    *  Additive. */
   tier?: string;
+  /** APNs device token (hex) for the measured agent process, when it could
+   *  register for remote notifications (confidential build + GUI session). The
+   *  advisor sends the code-identity challenge here. Omitted on headless
+   *  installs, which therefore stay best-effort. Additive. */
+  apns_device_token?: string;
 }
 
 /** Content-free crash signature the provider folds into its heartbeat
@@ -89,6 +94,17 @@ export interface AttestationResponse {
   timestamp: string;
   sip_enabled: boolean;
   hypervisor_present?: boolean;
+  signature: number[] | string;
+}
+
+/** Provider → advisor: response to an APNs code-identity challenge. The
+ *  challenge arrives out-of-band over APNs (a nonce sealed to the provider's
+ *  X25519 key `K`); only the genuine, AMFI-gated binary can receive and open
+ *  it. The provider echoes the recovered `nonce` and a Secure-Enclave P-256
+ *  signature (DER) over the canonical `{ nonce }`. Mirror of the Rust
+ *  `CodeAttestationResponse`. Additive. */
+export interface CodeAttestationResponse {
+  nonce: string;
   signature: number[] | string;
 }
 
@@ -180,6 +196,7 @@ export type AdvisorMessage =
   | ({ type: "heartbeat" } & Heartbeat)
   | ({ type: "attestation_challenge" } & AttestationChallenge)
   | ({ type: "attestation_response" } & AttestationResponse)
+  | ({ type: "code_attestation_response" } & CodeAttestationResponse)
   | ({ type: "inference_request" } & InferenceRequest)
   | ({ type: "inference_chunk" } & InferenceChunk)
   | ({ type: "inference_complete" } & InferenceComplete)

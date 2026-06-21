@@ -122,6 +122,24 @@ def test_posture_gates_fail_closed():
     assert "no-known-good-set" in r2.codes()
 
 
+def test_require_code_attested_gate():
+    """The APNs code-identity gate (parity with verify-provider.ts). A minimal
+    attestation fails other gates, but we assert only on the code-not-attested
+    finding's presence/absence."""
+    att = {"publicKey": "AA=="}
+
+    def codes(r):
+        return [fd["code"] for fd in r.findings]
+
+    missing = verify_provider_for_seal(att, None, require_code_attested=True)
+    assert "code-not-attested" in codes(missing)
+    ok = verify_provider_for_seal(att, None, require_code_attested=True, code_attested=True)
+    assert "code-not-attested" not in codes(ok)
+    # Default (not required) never blocks on code-attestation.
+    off = verify_provider_for_seal(att, None)
+    assert "code-not-attested" not in codes(off)
+
+
 def test_freshness_binds_key_option_b():
     """Option-B binding parity with mda.rs::freshness_binds + verify-provider.ts.
     Uses the SAME vector as the Rust/TS tests (64 bytes of 0x07)."""

@@ -117,6 +117,34 @@ test("a self-attested provider (no MDA chain) is best-effort, not confidential",
   assert.equal(r.sealToKey, undefined);
 });
 
+test("requireCodeAttested gates on the advisor's APNs code-identity standing", async () => {
+  const { pubB64, signDerB64 } = makeSigner();
+  const att = mkAtt(pubB64, signDerB64);
+  const base = {
+    knownGoodCdHashes: [CDHASH],
+    nonce: NONCE,
+    attestationCid: ATT_CID,
+    sessionKey: freshSessionKey(signDerB64),
+    now: NOW,
+  };
+  // Required but not code-attested → the specific blocker appears.
+  const missing = await verifyProviderForSeal(att, undefined, {
+    ...base,
+    requireCodeAttested: true,
+  });
+  assert.ok(codes(missing.findings).includes("code-not-attested"));
+  // Required and code-attested → that blocker is gone.
+  const ok = await verifyProviderForSeal(att, undefined, {
+    ...base,
+    requireCodeAttested: true,
+    codeAttested: true,
+  });
+  assert.ok(!codes(ok.findings).includes("code-not-attested"));
+  // Not required (default) → never blocks even when not code-attested.
+  const off = await verifyProviderForSeal(att, undefined, base);
+  assert.ok(!codes(off.findings).includes("code-not-attested"));
+});
+
 test("requireConfidential fails closed when the chain is missing", async () => {
   const { pubB64, signDerB64 } = makeSigner();
   const r = await verifyProviderForSeal(mkAtt(pubB64, signDerB64), undefined, {

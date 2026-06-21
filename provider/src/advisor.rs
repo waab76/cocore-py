@@ -27,8 +27,9 @@ use crate::hypervisor;
 use crate::pds::PdsClient;
 use crate::pricing;
 use crate::protocol::{
-    AdvisorMessage, AttestationChallenge, AttestationResponse, HealthStanding, Heartbeat,
-    InferenceChunk, InferenceComplete, InferenceRequest, Pong, Register, SessionKey,
+    AdvisorMessage, AttestationChallenge, AttestationResponse, CodeAttestationResponse,
+    HealthStanding, Heartbeat, InferenceChunk, InferenceComplete, InferenceRequest, Pong, Register,
+    SessionKey,
 };
 use crate::receipt::{self, Money, ReceiptInputs, StrongRef};
 use crate::secure_enclave::SigningIdentity;
@@ -699,7 +700,11 @@ async fn handle_inbound(text: &str, ctx: &ServeContext<'_>) -> Result<Vec<Adviso
         | AdvisorMessage::RecoverResult(_)
         // SessionKey is a frame the provider EMITS for the confidential tier,
         // never one it receives.
-        | AdvisorMessage::SessionKey(_) => {
+        | AdvisorMessage::SessionKey(_)
+        // CodeAttestationResponse is likewise provider→advisor only; the APNs
+        // challenge arrives out-of-band over the push channel (see push_host),
+        // not on this socket.
+        | AdvisorMessage::CodeAttestationResponse(_) => {
             tracing::debug!("advisor sent a message we don't act on");
             Ok(Vec::new())
         }
@@ -1265,6 +1270,89 @@ pub fn build_session_key(
     ))
 }
 
+/// Recover an APNs code-identity challenge and produce the signed response.
+///
+/// The advisor seals a fresh nonce to the provider's X25519 key `K` with an
+/// ephemeral key (`nacl.box` / `crypto_box`) and ships `{ sealed, eph_pub }`
+/// in the push payload. Only the genuine binary can (a) receive that push at
+/// all — AMFI gates the topic to our code signature — and (b) open the
+/// envelope with `K`, which lives in this process's protected memory. We then
+/// SE-sign the recovered nonce so the advisor can tie the push receipt to the
+/// attested signing key. A failure here (wrong key, corrupt envelope, non-UTF-8
+/// nonce) is silent at the security layer: no response means no code-attested
+/// standing, which is the fail-closed default.
+pub fn recover_code_challenge(
+    encryption: &ProviderKeypair,
+    signer: &dyn SigningIdentity,
+    advisor_eph_pub_b64: &str,
+    sealed_b64: &str,
+) -> Result<CodeAttestationResponse> {
+    use base64::Engine as _;
+    let sealed = base64::engine::general_purpose::STANDARD
+        .decode(sealed_b64)
+        .map_err(|e| ProviderError::Advisor(format!("code challenge b64: {e}")))?;
+    let nonce_bytes = encryption
+        .open_from(advisor_eph_pub_b64, &sealed)
+        .map_err(|e| ProviderError::Advisor(format!("code challenge open: {e}")))?;
+    let nonce = String::from_utf8(nonce_bytes)
+        .map_err(|e| ProviderError::Advisor(format!("code challenge nonce utf8: {e}")))?;
+    build_code_attestation_response(signer, &nonce)
+}
+
+/// Extract the code-identity challenge from an APNs push payload (the raw JSON
+/// the push host hands us). The advisor packs the challenge under a top-level
+/// `cc` object: `{ "cc": { "epk": <b64 advisor ephemeral X25519 pub>, "n":
+/// <b64 nonce sealed to K> }, "aps": { "content-available": 1 } }`. Returns
+/// `(eph_pub_b64, sealed_b64)`, or `None` if this push isn't a code challenge.
+pub fn parse_code_challenge_payload(json_str: &str) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let cc = v.get("cc")?;
+    let epk = cc.get("epk")?.as_str()?.to_string();
+    let n = cc.get("n")?.as_str()?.to_string();
+    Some((epk, n))
+}
+
+/// Convenience: parse an APNs payload and, if it carries a code challenge,
+/// recover the nonce and produce the signed response. `Ok(None)` means the
+/// push wasn't a code challenge (ignore it); `Err` means it was but couldn't
+/// be opened (fail-closed — no response goes out).
+pub fn handle_code_challenge_payload(
+    encryption: &ProviderKeypair,
+    signer: &dyn SigningIdentity,
+    json_str: &str,
+) -> Result<Option<CodeAttestationResponse>> {
+    match parse_code_challenge_payload(json_str) {
+        Some((epk, sealed)) => {
+            recover_code_challenge(encryption, signer, &epk, &sealed).map(Some)
+        }
+        None => Ok(None),
+    }
+}
+
+/// Build the signed [`CodeAttestationResponse`] for an APNs code-identity
+/// challenge. `recovered_nonce` is the plaintext the agent obtained by
+/// decrypting the pushed challenge with its X25519 key `K`; we SE-sign the
+/// canonical bytes of `{ nonce }` (sorted-key, integer-only, no whitespace —
+/// the same rule `build_challenge_response` uses) so the advisor can verify
+/// the signature against the registered `attestationPubKey`. The fact that the
+/// agent could recover `recovered_nonce` at all is the load-bearing proof: the
+/// push was AMFI-gated to our code signature and sealed to `K`.
+pub fn build_code_attestation_response(
+    signer: &dyn SigningIdentity,
+    recovered_nonce: &str,
+) -> Result<CodeAttestationResponse> {
+    let payload = json!({ "nonce": recovered_nonce });
+    let canonical = to_canonical_bytes(&payload)
+        .map_err(|e| ProviderError::Advisor(format!("canonical: {e}")))?;
+    let sig = signer
+        .sign(&canonical)
+        .map_err(|e| ProviderError::Advisor(format!("sign: {e}")))?;
+    Ok(CodeAttestationResponse {
+        nonce: recovered_nonce.into(),
+        signature: sig,
+    })
+}
+
 /// Best-effort current SIP status. On non-macOS this is always
 /// `true` because there's no equivalent kill-switch; on macOS we
 /// optimistically return `true` because if SIP weren't enabled the
@@ -1295,7 +1383,7 @@ mod tests {
 
     use crate::engines::stub::StubEngine;
     use crate::oauth::Session;
-    use crate::secure_enclave::load_or_create_identity;
+    use crate::secure_enclave::{identity_lock, load_or_create_identity};
     use base64::{engine::general_purpose::STANDARD as B64, Engine};
     use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
     use p256::EncodedPoint;
@@ -1377,6 +1465,115 @@ mod tests {
         let sig = Signature::from_der(&resp.signature).unwrap();
         vk.verify(&canonical, &sig)
             .expect("challenge response must verify");
+    }
+
+    #[test]
+    fn code_attestation_response_signature_verifies() {
+        // The SE signature over {nonce} must verify against the signer's public
+        // key over the SAME canonical bytes the advisor's verifier reconstructs.
+        let _g = identity_lock();
+        let signer = load_or_create_identity().unwrap();
+        let resp = build_code_attestation_response(&*signer, "deadbeefcafe").unwrap();
+        assert_eq!(resp.nonce, "deadbeefcafe");
+
+        let canonical = to_canonical_bytes(&json!({ "nonce": resp.nonce })).unwrap();
+        let pub_raw = B64.decode(signer.public_key_b64()).unwrap();
+        let mut uncompressed = [0u8; 65];
+        uncompressed[0] = 0x04;
+        uncompressed[1..].copy_from_slice(&pub_raw);
+        let point = EncodedPoint::from_bytes(uncompressed).unwrap();
+        let vk = VerifyingKey::from_encoded_point(&point).unwrap();
+        let sig = Signature::from_der(&resp.signature).unwrap();
+        vk.verify(&canonical, &sig)
+            .expect("code attestation response must verify");
+    }
+
+    #[test]
+    fn code_challenge_round_trip_recovers_nonce_and_signs() {
+        // Simulate the advisor exactly: seal a fresh nonce to the provider's
+        // X25519 key `K` with an ephemeral key (the E_K(nonce) the push
+        // carries), then prove the agent recovers it and signs a response that
+        // verifies against its attestation key.
+        let _g = identity_lock();
+        let signer = load_or_create_identity().unwrap();
+        let k = fresh_keypair(); // the provider's registered encryption key
+        let advisor_eph = fresh_keypair();
+        let nonce = "a1b2c3d4e5f6a7b8"; // hex nonce, like makeChallenge()
+
+        let sealed = advisor_eph
+            .seal_to(&k.public_key_b64(), nonce.as_bytes())
+            .unwrap();
+        let sealed_b64 = B64.encode(&sealed);
+
+        let resp =
+            recover_code_challenge(&k, &*signer, &advisor_eph.public_key_b64(), &sealed_b64)
+                .unwrap();
+        assert_eq!(resp.nonce, nonce);
+
+        // Signature verifies against the attestation public key.
+        let canonical = to_canonical_bytes(&json!({ "nonce": resp.nonce })).unwrap();
+        let pub_raw = B64.decode(signer.public_key_b64()).unwrap();
+        let mut uncompressed = [0u8; 65];
+        uncompressed[0] = 0x04;
+        uncompressed[1..].copy_from_slice(&pub_raw);
+        let point = EncodedPoint::from_bytes(uncompressed).unwrap();
+        let vk = VerifyingKey::from_encoded_point(&point).unwrap();
+        let sig = Signature::from_der(&resp.signature).unwrap();
+        vk.verify(&canonical, &sig).expect("response must verify");
+    }
+
+    #[test]
+    fn parse_and_handle_code_challenge_payload_end_to_end() {
+        // The full agent path: a realistic APNs payload (aps + cc) → parse →
+        // recover → signed response that verifies.
+        let _g = identity_lock();
+        let signer = load_or_create_identity().unwrap();
+        let k = fresh_keypair();
+        let advisor_eph = fresh_keypair();
+        let nonce = "00112233445566778899aabbccddeeff";
+        let sealed = advisor_eph
+            .seal_to(&k.public_key_b64(), nonce.as_bytes())
+            .unwrap();
+        let payload = json!({
+            "aps": { "content-available": 1 },
+            "cc": { "epk": advisor_eph.public_key_b64(), "n": B64.encode(&sealed) },
+        })
+        .to_string();
+
+        assert!(parse_code_challenge_payload(&payload).is_some());
+        let resp = handle_code_challenge_payload(&k, &*signer, &payload)
+            .unwrap()
+            .expect("payload carries a code challenge");
+        assert_eq!(resp.nonce, nonce);
+
+        // A non-challenge push (plain aps) is ignored, not an error.
+        let plain = json!({ "aps": { "content-available": 1 } }).to_string();
+        assert!(parse_code_challenge_payload(&plain).is_none());
+        assert!(handle_code_challenge_payload(&k, &*signer, &plain)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn code_challenge_wrong_recipient_key_fails() {
+        // A fork that doesn't hold the registered `K` cannot open the envelope,
+        // so it can never produce a response — fail-closed.
+        let _g = identity_lock();
+        let signer = load_or_create_identity().unwrap();
+        let k = fresh_keypair();
+        let not_k = fresh_keypair(); // the fork's own, different key
+        let advisor_eph = fresh_keypair();
+        let sealed = advisor_eph
+            .seal_to(&k.public_key_b64(), b"deadbeef")
+            .unwrap();
+        let sealed_b64 = B64.encode(&sealed);
+        let err = recover_code_challenge(
+            &not_k,
+            &*signer,
+            &advisor_eph.public_key_b64(),
+            &sealed_b64,
+        );
+        assert!(err.is_err(), "opening with the wrong K must fail");
     }
 
     #[test]
