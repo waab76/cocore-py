@@ -17,6 +17,11 @@ struct StatusRows: View {
     /// just hides the button.
     var onEnableSecureMode: (() -> Void)? = nil
 
+    /// When provided, the Security section shows an Enable/Turn-off Confidential
+    /// toggle (writes the owner's `desiredTier`). The Bool is the desired state
+    /// (true = enable). Left `nil` to hide the control (read-only contexts).
+    var onSetConfidential: ((Bool) -> Void)? = nil
+
     var body: some View {
         Section("Identity") {
             if let s = state.session {
@@ -69,13 +74,24 @@ struct StatusRows: View {
                 Text(state.confidential ? "🔒 Confidential" : "Best-effort")
                     .foregroundStyle(state.confidential ? .green : .secondary)
             }
-            // Honest one-liner so nobody mistakes Secure Mode (genuine Mac, SIP
-            // verified) for confidential (operator can't read prompts).
+            // Whose data, and from whom: confidential seals the REQUESTOR's
+            // prompts against YOU (this Mac's operator) — not the other way
+            // round. Written from the operator's seat so "operator" isn't
+            // mistaken for some third party.
             Text(state.confidential
-                ? "Your prompts run inside the measured, signed agent — the operator can't read them."
-                : "Seals inference so the operator can't read your prompts. Enable per-machine from the console (\u{201C}Upgrade to confidential\u{201D}).")
+                ? "Requests run sealed inside the measured, signed agent, so not even you — this Mac's operator — can read what requestors send or receive. That unreadable-by-the-operator guarantee is what requestors get."
+                : "Requests run in a local helper process that you, this Mac's operator, could read — fine for non-sensitive work. Enable confidential to seal them so requestors get a no-snooping guarantee. The confidential engine serves Qwen2 / Qwen3 / Llama / Gemma / Phi-class models.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if let setConfidential = onSetConfidential {
+                Button(state.confidential ? "Turn off confidential" : "Enable confidential…") {
+                    setConfidential(!state.confidential)
+                }
+            }
+            if let url = URL(string: "\(Endpoints.consoleURL)/docs/security") {
+                Link("Learn more about Secure Mode & Confidential", destination: url)
+                    .font(.caption)
+            }
         }
         Section("Credits") {
             if let bal = state.balanceCredits {

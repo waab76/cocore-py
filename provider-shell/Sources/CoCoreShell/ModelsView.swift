@@ -468,6 +468,38 @@ final class ModelManager: ObservableObject {
         CatalogEntry(nsid: "mlx-community/Llama-3.3-70B-Instruct-4bit", label: "Llama 3.3 70B", minRamGB: 64, recommended: false, blurb: "Legacy flagship model."),
     ]
 
+    /// Whether a model's architecture can run in the confidential (in-process
+    /// native MLX) engine — the property that decides if this machine can offer
+    /// the attested-confidential tier while serving it.
+    enum ConfidentialCompat {
+        case capable  // a family the in-process engine loads → can serve confidentially
+        case incapable  // an arch the engine can't load → best-effort only, no confidential
+        case unknown  // can't tell from the id; agent faults at load if it can't run
+    }
+
+    /// Classify a model's confidential capability from its id. The confidential
+    /// engine is the vendored mlx-swift-examples LLM set, which loads
+    /// Qwen2 / Qwen3 / Llama(≤3) / Gemma(2,3) / Phi / Mistral-class archs — but
+    /// NOT the newer Qwen3.5+ / Gemma4 / Llama4 architectures. We assert
+    /// `incapable` only for archs we KNOW it can't load, `capable` for the
+    /// known-good families, and `unknown` otherwise (so we never over-claim — an
+    /// unknown that can't load surfaces honestly as an engineFault at serve).
+    static func confidentialCompat(_ nsid: String) -> ConfidentialCompat {
+        let id = nsid.lowercased()
+        // Newer than the vendored engine's arch set — definitionally best-effort.
+        let unsupported = [
+            "qwen3.5", "qwen3_5", "qwen3.6", "qwen3_6", "gemma-4", "gemma4", "llama-4", "llama4",
+        ]
+        if unsupported.contains(where: id.contains) { return .incapable }
+        // Families the in-process engine loads.
+        let supported = [
+            "qwen2", "qwen3", "gemma-2", "gemma2", "gemma-3", "gemma3", "llama-2", "llama2",
+            "llama-3", "llama3", "phi", "mistral",
+        ]
+        if supported.contains(where: id.contains) { return .capable }
+        return .unknown
+    }
+
     /// The recommended (latest & greatest) subset of the catalog mirror.
     static var recommendedCatalog: [CatalogEntry] { catalog.filter { $0.recommended } }
 
@@ -1109,7 +1141,7 @@ struct ModelsView: View {
                 Text("Add a model")
             } footer: {
                 sectionFooter(
-                    "Search any MLX model on HuggingFace, or pick a suggestion. co/core runs MLX weights (mlx-community/… or another 4-bit MLX conversion); a stock PyTorch repo won't load."
+                    "Search any MLX model on HuggingFace, or pick a suggestion. co/core runs MLX weights (mlx-community/… or another 4-bit MLX conversion); a stock PyTorch repo won't load.\n\nOnly “Confidential ✓” models can serve in the confidential engine (Qwen2/Qwen3/Llama/Gemma/Phi-class). A “Best-effort only” model (newer Qwen3.5+/Gemma4/Llama4 archs) runs in a helper the operator can read — choosing one means this machine can't offer confidential guarantees to requestors for it."
                 )
             }
             .onChange(of: searchQuery) { query in runSearch(query) }
@@ -1156,6 +1188,38 @@ struct ModelsView: View {
     /// A ready model: name + a red trash that frees the disk. No global
     /// `busy` disable — removal is optimistic (the row vanishes on click), so
     /// the other trashes stay live.
+    /// A small capsule marking whether a model can serve confidentially. Shown
+    /// in the picker + active list so the operator sees — before choosing — that
+    /// some models (the newer Qwen3.5+ / Gemma4 / Llama4 archs) can only serve
+    /// best-effort: picking one means this machine can't offer requestors the
+    /// confidential guarantee for it.
+    @ViewBuilder private func confidentialBadge(_ nsid: String) -> some View {
+        switch ModelManager.confidentialCompat(nsid) {
+        case .capable:
+            Text("Confidential ✓")
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(Brand.success.opacity(0.18))
+                .foregroundStyle(Brand.success)
+                .clipShape(Capsule())
+                .help(
+                    "Runs in the in-process confidential engine — this machine can serve it with the attested-confidential guarantee."
+                )
+        case .incapable:
+            Text("Best-effort only")
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(Color.orange.opacity(0.18))
+                .foregroundStyle(.orange)
+                .clipShape(Capsule())
+                .help(
+                    "This architecture can't run in the confidential engine. Serving it means this machine can't offer confidential guarantees to requestors for this model."
+                )
+        case .unknown:
+            EmptyView()
+        }
+    }
+
     @ViewBuilder private func activeRow(_ m: String) -> some View {
         let ram = ModelManager.minRamGB(for: m)
         HStack {
@@ -1175,6 +1239,7 @@ struct ModelsView: View {
                     .clipShape(Capsule())
                     .help("Approximate RAM this model needs while serving")
             }
+            confidentialBadge(m)
             Spacer()
             Button(role: .destructive) {
                 Task { await manager.remove(m) }
@@ -1341,6 +1406,7 @@ struct ModelsView: View {
                             .font(.caption)
                             .foregroundStyle(.tint)
                     }
+                    confidentialBadge(item.nsid)
                 }
                 if !item.blurb.isEmpty {
                     Text(item.blurb)
@@ -1379,9 +1445,12 @@ struct ModelsView: View {
             .compactMap { $0 }.joined(separator: " · ")
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(r.id)
-                    .font(.system(.callout, design: .monospaced))
-                    .lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 6) {
+                    Text(r.id)
+                        .font(.system(.callout, design: .monospaced))
+                        .lineLimit(1).truncationMode(.middle)
+                    confidentialBadge(r.id)
+                }
                 if let subtitle = r.subtitle {
                     Text(subtitle)
                         .font(.footnote).foregroundStyle(.secondary)

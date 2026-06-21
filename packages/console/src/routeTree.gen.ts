@@ -75,6 +75,7 @@ import { Route as HeaderLayoutMachinesRkeyRouteImport } from './routes/_header-l
 import { Route as HeaderLayoutDevicesNewRouteImport } from './routes/_header-layout.devices.new'
 import { Route as HeaderLayoutBlogSlugRouteImport } from './routes/_header-layout.blog.$slug'
 import { Route as HeaderLayoutAdminDisputesRouteImport } from './routes/_header-layout.admin.disputes'
+import { Route as DocsHeaderLayoutDocsSecurityRouteImport } from './routes/_docs-header-layout.docs.security'
 import { Route as DocsHeaderLayoutDocsLexiconsRouteImport } from './routes/_docs-header-layout.docs.lexicons'
 import { Route as DocsHeaderLayoutDocsInferenceRouteImport } from './routes/_docs-header-layout.docs.inference'
 import { Route as DocsHeaderLayoutDocsCommunityToolsRouteImport } from './routes/_docs-header-layout.docs.community-tools'
@@ -444,6 +445,12 @@ const HeaderLayoutAdminDisputesRoute =
     path: '/admin/disputes',
     getParentRoute: () => HeaderLayoutRoute,
   } as any)
+const DocsHeaderLayoutDocsSecurityRoute =
+  DocsHeaderLayoutDocsSecurityRouteImport.update({
+    id: '/docs/security',
+    path: '/docs/security',
+    getParentRoute: () => DocsHeaderLayoutRoute,
+  } as any)
 const DocsHeaderLayoutDocsLexiconsRoute =
   DocsHeaderLayoutDocsLexiconsRouteImport.update({
     id: '/docs/lexicons',
@@ -592,6 +599,7 @@ export interface FileRoutesByFullPath {
   '/docs/community-tools': typeof DocsHeaderLayoutDocsCommunityToolsRoute
   '/docs/inference': typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
   '/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
+  '/docs/security': typeof DocsHeaderLayoutDocsSecurityRoute
   '/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
   '/blog/$slug': typeof HeaderLayoutBlogSlugRoute
   '/devices/new': typeof HeaderLayoutDevicesNewRoute
@@ -676,6 +684,7 @@ export interface FileRoutesByTo {
   '/docs/api': typeof DocsHeaderLayoutDocsApiRoute
   '/docs/community-tools': typeof DocsHeaderLayoutDocsCommunityToolsRoute
   '/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
+  '/docs/security': typeof DocsHeaderLayoutDocsSecurityRoute
   '/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
   '/blog/$slug': typeof HeaderLayoutBlogSlugRoute
   '/devices/new': typeof HeaderLayoutDevicesNewRoute
@@ -764,6 +773,7 @@ export interface FileRoutesById {
   '/_docs-header-layout/docs/community-tools': typeof DocsHeaderLayoutDocsCommunityToolsRoute
   '/_docs-header-layout/docs/inference': typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
   '/_docs-header-layout/docs/lexicons': typeof DocsHeaderLayoutDocsLexiconsRoute
+  '/_docs-header-layout/docs/security': typeof DocsHeaderLayoutDocsSecurityRoute
   '/_header-layout/admin/disputes': typeof HeaderLayoutAdminDisputesRoute
   '/_header-layout/blog/$slug': typeof HeaderLayoutBlogSlugRoute
   '/_header-layout/devices/new': typeof HeaderLayoutDevicesNewRoute
@@ -851,6 +861,7 @@ export interface FileRouteTypes {
     | '/docs/community-tools'
     | '/docs/inference'
     | '/docs/lexicons'
+    | '/docs/security'
     | '/admin/disputes'
     | '/blog/$slug'
     | '/devices/new'
@@ -935,6 +946,7 @@ export interface FileRouteTypes {
     | '/docs/api'
     | '/docs/community-tools'
     | '/docs/lexicons'
+    | '/docs/security'
     | '/admin/disputes'
     | '/blog/$slug'
     | '/devices/new'
@@ -1022,6 +1034,7 @@ export interface FileRouteTypes {
     | '/_docs-header-layout/docs/community-tools'
     | '/_docs-header-layout/docs/inference'
     | '/_docs-header-layout/docs/lexicons'
+    | '/_docs-header-layout/docs/security'
     | '/_header-layout/admin/disputes'
     | '/_header-layout/blog/$slug'
     | '/_header-layout/devices/new'
@@ -1587,6 +1600,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HeaderLayoutAdminDisputesRouteImport
       parentRoute: typeof HeaderLayoutRoute
     }
+    '/_docs-header-layout/docs/security': {
+      id: '/_docs-header-layout/docs/security'
+      path: '/docs/security'
+      fullPath: '/docs/security'
+      preLoaderRoute: typeof DocsHeaderLayoutDocsSecurityRouteImport
+      parentRoute: typeof DocsHeaderLayoutRoute
+    }
     '/_docs-header-layout/docs/lexicons': {
       id: '/_docs-header-layout/docs/lexicons'
       path: '/docs/lexicons'
@@ -1749,6 +1769,7 @@ interface DocsHeaderLayoutRouteChildren {
   DocsHeaderLayoutDocsCommunityToolsRoute: typeof DocsHeaderLayoutDocsCommunityToolsRoute
   DocsHeaderLayoutDocsInferenceRoute: typeof DocsHeaderLayoutDocsInferenceRouteWithChildren
   DocsHeaderLayoutDocsLexiconsRoute: typeof DocsHeaderLayoutDocsLexiconsRoute
+  DocsHeaderLayoutDocsSecurityRoute: typeof DocsHeaderLayoutDocsSecurityRoute
   DocsHeaderLayoutDocsIndexRoute: typeof DocsHeaderLayoutDocsIndexRoute
 }
 
@@ -1759,6 +1780,7 @@ const DocsHeaderLayoutRouteChildren: DocsHeaderLayoutRouteChildren = {
   DocsHeaderLayoutDocsInferenceRoute:
     DocsHeaderLayoutDocsInferenceRouteWithChildren,
   DocsHeaderLayoutDocsLexiconsRoute: DocsHeaderLayoutDocsLexiconsRoute,
+  DocsHeaderLayoutDocsSecurityRoute: DocsHeaderLayoutDocsSecurityRoute,
   DocsHeaderLayoutDocsIndexRoute: DocsHeaderLayoutDocsIndexRoute,
 }
 
@@ -1908,12 +1930,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-  }
-}

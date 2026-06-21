@@ -457,6 +457,41 @@ final class MenuBarController {
         }
     }
 
+    /// Opt this machine in/out of the attested-confidential tier from the
+    /// Security section (Open co/core → Status). Writes the owner's
+    /// `desiredTier` via the bundled CLI — the same field the console's
+    /// "Upgrade to confidential" sets — then bounces the agent so the
+    /// supervisor re-selects the right worker (confidential ↔ default). Enabling
+    /// confirms first and warns about the native-engine model constraint.
+    @MainActor
+    func setConfidential(_ on: Bool) {
+        Task { @MainActor in
+            if on {
+                let alert = NSAlert()
+                alert.messageText = "Enable confidential serving?"
+                alert.informativeText =
+                    "Inference will run entirely inside the measured, signed agent, so this machine's operator can't read prompts.\n\nThe confidential engine serves Qwen2 / Llama / Gemma / Phi models — an incompatible model (e.g. a Qwen3 model) will show a fault, so pick a compatible one under Models. The agent will restart to switch over."
+                alert.addButton(withTitle: "Enable")
+                alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+            let args = on ? ["agent", "confidential"] : ["agent", "confidential", "--off"]
+            let (status, out) = await ModelManager.run(args)
+            guard status == 0 else {
+                NSLog("cocore: set confidential (%@) failed (status %d): %@", on ? "on" : "off", status, out)
+                presentServeSwitchError(
+                    action: on ? "enable confidential" : "turn off confidential", detail: out)
+                return
+            }
+            // Bounce so the fresh serve reads the new desiredTier and the
+            // supervisor selects the right worker (same as Restart serving).
+            await supervisor.stop()
+            await supervisor.start()
+            refreshServing()
+            rebuildMenu()
+        }
+    }
+
     /// Surface a failed Pause / Resume switch write so the user knows the
     /// menu state didn't change (and can retry) instead of silently desyncing
     /// from what the console believes about this machine.
@@ -554,6 +589,7 @@ final class MenuBarController {
         onOpenSetupGuide: { [weak self] in self?.openWelcome() },
         onSignOut: { [weak self] in self?.signOut() },
         onEnableSecureMode: { [weak self] in self?.secureModeWizard.show() },
+        onSetConfidential: { [weak self] on in self?.setConfidential(on) },
         onSendBugReport: { [weak self] in self?.sendBugReport() },
         onCheckUpdates: { [weak self] in self?.checkUpdates() },
         onInstallUpdate: { [weak self] in self?.installUpdate() },

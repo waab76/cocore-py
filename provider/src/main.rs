@@ -71,6 +71,16 @@ enum AgentCmd {
     /// CLI). Prints `best-effort` when not paired / no record yet / on a read
     /// error — the safe default.
     Tier,
+    /// Opt this machine IN to the attested-confidential tier (or out with
+    /// `--off`). Writes the owner's `desiredTier` on the provider record —
+    /// exactly what the console's "Upgrade to confidential" does — so the
+    /// serving agent restarts and re-selects the confidential worker. The tray's
+    /// Security section drives this; also runnable by hand.
+    Confidential {
+        /// Revert to best-effort instead of enabling confidential.
+        #[arg(long)]
+        off: bool,
+    },
     /// Diagnose this install end-to-end: LaunchAgent state,
     /// session.json, API key validity, and the console's view of
     /// whether the advisor sees us + a fresh provider record is
@@ -192,6 +202,7 @@ async fn main() -> Result<()> {
         Cmd::Agent(AgentCmd::Serve { advisor }) => cmd_serve_entry(advisor).await,
         Cmd::Agent(AgentCmd::Whoami) => cmd_whoami(),
         Cmd::Agent(AgentCmd::Tier) => cmd_print_tier().await,
+        Cmd::Agent(AgentCmd::Confidential { off }) => cmd_set_confidential(!off).await,
         Cmd::Agent(AgentCmd::Doctor { console, fix }) => doctor::run(&console, fix).await,
         Cmd::Agent(AgentCmd::Update { console, check }) => update::run(&console, check).await,
         Cmd::Agent(AgentCmd::Models(cmd)) => models_cli::run(cmd),
@@ -289,6 +300,78 @@ async fn cmd_set_active(active: bool) -> Result<()> {
                 tracing::warn!(
                     attempt,
                     "active-switch swap lost a race; re-reading and retrying"
+                );
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    unreachable!("loop returns on success, on the final attempt, or on a non-swap error")
+}
+
+/// Apply the desired confidential tier to a provider-record JSON value in
+/// place. `on` sets `desiredTier="attested-confidential"`; `off` removes the
+/// field entirely (absent ≡ best-effort, matching the console's downgrade).
+/// Returns true if the value actually changed.
+fn apply_desired_tier(value: &mut serde_json::Value, on: bool) -> bool {
+    let current = value.get("desiredTier").and_then(|v| v.as_str());
+    let already_set = matches!(current, Some("attested-confidential"));
+    if already_set == on {
+        return false;
+    }
+    if let Some(obj) = value.as_object_mut() {
+        if on {
+            obj.insert(
+                "desiredTier".to_string(),
+                serde_json::json!("attested-confidential"),
+            );
+        } else {
+            obj.remove("desiredTier");
+        }
+    }
+    true
+}
+
+/// `cocore agent confidential [--off]`: opt this machine in/out of the
+/// attested-confidential tier by writing the owner's `desiredTier` to its
+/// provider record — the same field the console's "Upgrade to confidential"
+/// sets. Source of truth is the owner's PDS, so the console + tray + CLI all
+/// converge. The serving agent's reconciler sees the change and restarts, and
+/// the supervisor re-selects the confidential worker. CAS on the CID with a
+/// bounded retry, exactly like `cmd_set_active`.
+async fn cmd_set_confidential(on: bool) -> Result<()> {
+    let (pds, pubkey) = open_pds()?;
+    let label = if on {
+        "attested-confidential"
+    } else {
+        "best-effort"
+    };
+    const MAX_ATTEMPTS: u32 = 4;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let find = find_my_provider_record(&pds, &pubkey).await;
+        if find.is_err() && !on {
+            // No provider record yet — an absent `desiredTier` already reads as
+            // best-effort, so disabling is a no-op.
+            println!("{label} (no change)");
+            return Ok(());
+        }
+        let (rkey, mut value, cid) = find?;
+        if !apply_desired_tier(&mut value, on) {
+            println!("{label} (no change)");
+            return Ok(());
+        }
+        match pds
+            .put_record("dev.cocore.compute.provider", &rkey, &value, Some(&cid))
+            .await
+        {
+            Ok(_) => {
+                println!("{label}");
+                return Ok(());
+            }
+            Err(e) if is_swap_conflict(&e) && attempt < MAX_ATTEMPTS => {
+                tracing::warn!(
+                    attempt,
+                    "desiredTier swap lost a race; re-reading and retrying"
                 );
                 continue;
             }
@@ -2148,6 +2231,37 @@ mod inference_models_action_tests {
             inference_models_action(false, &[]),
             InferenceModelsAction::Leave
         );
+    }
+}
+
+#[cfg(test)]
+mod apply_desired_tier_tests {
+    use super::*;
+
+    #[test]
+    fn enabling_sets_field_and_reports_change() {
+        let mut v = serde_json::json!({ "machineLabel": "Mac" });
+        assert!(apply_desired_tier(&mut v, true));
+        assert_eq!(v["desiredTier"], serde_json::json!("attested-confidential"));
+        // Idempotent: already on → no change.
+        assert!(!apply_desired_tier(&mut v, true));
+    }
+
+    #[test]
+    fn disabling_removes_field_and_reports_change() {
+        let mut v = serde_json::json!({ "desiredTier": "attested-confidential", "x": 1 });
+        assert!(apply_desired_tier(&mut v, false));
+        assert!(v.get("desiredTier").is_none());
+        assert_eq!(v["x"], serde_json::json!(1)); // other fields preserved
+                                                  // Idempotent: already off (absent) → no change.
+        assert!(!apply_desired_tier(&mut v, false));
+    }
+
+    #[test]
+    fn absent_field_is_best_effort() {
+        let mut v = serde_json::json!({});
+        assert!(!apply_desired_tier(&mut v, false)); // absent == off already
+        assert!(apply_desired_tier(&mut v, true)); // off -> on
     }
 }
 
