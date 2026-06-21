@@ -328,23 +328,25 @@ final class ModelManager: ObservableObject {
     struct CatalogResult: Identifiable, Equatable {
         let id: String       // the `org/name` NSID
         let downloads: Int
-        let repoBytes: UInt64?  // total repo storage (HF `usedStorage`); nil if unknown
+        let weightBytes: UInt64?  // exact weight size (HF tree LFS sum); nil if unknown
         let pipelineTag: String?  // raw HF pipeline tag (e.g. "text-generation")
         let quant: String?        // e.g. "4-bit" / "8-bit", parsed from tags
 
-        /// Estimated RAM to serve this model, GB. The resident weights are
-        /// ≈ the repo's storage; ~1.2× covers the KV cache + activations at a
-        /// modest context. nil when the size is unknown (we don't guess).
-        var estRamGB: Int? {
-            guard let b = repoBytes, b > 0 else { return nil }
-            return max(1, Int((Double(b) / 1_073_741_824.0 * 1.2).rounded(.up)))
+        /// The model's resident weight footprint in GB — the deterministic,
+        /// dominant term of its memory use (exact LFS bytes from the HF tree,
+        /// no fudge factor). The KV cache rides on top of this at serve time
+        /// and scales with context length. nil when the size is unknown (we
+        /// don't guess). Rounded up so we never under-report.
+        var weightGB: Int? {
+            guard let b = weightBytes, b > 0 else { return nil }
+            return max(1, Int((Double(b) / 1_073_741_824.0).rounded(.up)))
         }
 
-        /// True when this model runs within the resource budget — or when its
+        /// True when this model's weights fit the resource budget — or when its
         /// size is unknown (we can't prove it won't, so we don't disable it).
         var fitsBudget: Bool {
-            guard ModelManager.budgetGB > 0, let est = estRamGB else { return true }
-            return est <= ModelManager.budgetGB
+            guard ModelManager.budgetGB > 0, let w = weightGB else { return true }
+            return w <= ModelManager.budgetGB
         }
 
         /// A short human descriptor from the model's HF metadata: the friendly
@@ -368,26 +370,13 @@ final class ModelManager: ObservableObject {
         }
     }
 
-    /// Total repo storage (bytes) for a model via the HF model endpoint's
-    /// `usedStorage` field — our proxy for resident weight size. nil on any
-    /// failure or when the field is absent.
-    nonisolated static func fetchUsedStorage(_ model: String) async -> UInt64? {
-        guard let url = URL(string: "https://huggingface.co/api/models/\(model)") else { return nil }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 10
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-            (resp as? HTTPURLResponse)?.statusCode == 200,
-            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return (obj["usedStorage"] as? NSNumber)?.uint64Value
-    }
-
     /// Search HuggingFace for MLX models matching `query`, most-downloaded
     /// first. `filter=mlx` restricts to the MLX library tag so every hit is
     /// loadable by the agent. Each hit is then enriched (concurrently) with
-    /// its repo size so the row can show a RAM estimate; results that exceed
-    /// the resource budget are sorted to the bottom (the UI disables them)
-    /// rather than dropped. Empty on any error (the UI shows "no results").
+    /// its exact weight size (`fetchRepoSize`, the HF tree LFS sum) so the row
+    /// can show a real weight footprint; results whose weights exceed the
+    /// resource budget are sorted to the bottom (the UI disables them) rather
+    /// than dropped. Empty on any error (the UI shows "no results").
     nonisolated static func searchModels(_ query: String) async -> [CatalogResult] {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty,
@@ -416,14 +405,15 @@ final class ModelManager: ObservableObject {
                 quant: bitWidths.first { tags.contains($0) })
         }
 
-        // Enrich each hit with its repo size concurrently (one extra call per
-        // model). Order is non-deterministic from the group, so we re-sort.
+        // Enrich each hit with its exact weight size concurrently (one extra
+        // tree call per model). Order is non-deterministic from the group, so
+        // we re-sort.
         let enriched: [CatalogResult] = await withTaskGroup(of: CatalogResult.self) { group in
             for h in hits {
                 group.addTask {
-                    let bytes = await fetchUsedStorage(h.id)
+                    let bytes = await fetchRepoSize(h.id)
                     return CatalogResult(
-                        id: h.id, downloads: h.downloads, repoBytes: bytes,
+                        id: h.id, downloads: h.downloads, weightBytes: bytes,
                         pipelineTag: h.pipelineTag, quant: h.quant)
                 }
             }
@@ -1382,8 +1372,9 @@ struct ModelsView: View {
     /// One HuggingFace search result: the NSID, its download count, and Add.
     @ViewBuilder private func searchRow(_ r: ModelManager.CatalogResult) -> some View {
         let fits = r.fitsBudget
-        // "12.3K downloads · needs ~14 GB RAM" (RAM omitted when size unknown).
-        let ram: String? = r.estRamGB.map { "needs ~\($0) GB RAM" }
+        // "needs ~14 GB (weights) · 12.3K downloads" — weight footprint omitted
+        // when the size is unknown. KV cache rides on top at serve time.
+        let ram: String? = r.weightGB.map { "needs ~\($0) GB (weights)" }
         let stats = [ram, "\(Self.formatDownloads(r.downloads)) downloads"]
             .compactMap { $0 }.joined(separator: " · ")
         HStack {
