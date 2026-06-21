@@ -1,0 +1,16 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+
+# Operational endpoints — not content, no value in crawling.
+Disallow: /api/
+Disallow: /xrpc/
+Disallow: /v1/
+Disallow: /agent/
+Disallow: /admin/
+Disallow: /account
+Disallow: /accept-terms
+Disallow: /devices/
+Disallow: /chat
+Disallow: /chat-preview
+Disallow: /login
