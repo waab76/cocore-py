@@ -33,6 +33,15 @@ SERVICES_DID="did:web:services-$ENV.up.railway.app"
 # with RAILWAY_PROJECT_ID.
 PROJECT="${RAILWAY_PROJECT_ID:-a46692ef-f462-4801-9a64-0af69ea7143d}"
 
+# Railway SERVICE names the CLI resolves `--service` against. These are the
+# project's current display names — the AppView/Client services were renamed
+# from `services`/`console`, so the old lowercase names no longer resolve
+# ("Service 'services' not found"). Their PRIVATE-DNS hostnames did NOT change
+# (still `services.railway.internal`), so the internal URL below stays as-is.
+# Override if a project renames them again.
+APPVIEW_SVC="${COCORE_APPVIEW_SERVICE:-AppView}"
+CLIENT_SVC="${COCORE_CLIENT_SERVICE:-Client}"
+
 note() { printf '  %s\n' "$*"; }
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
 
@@ -52,7 +61,7 @@ bold "==> configuring $ENV"
 # configured — skip (no var writes, no redeploy). Lets the CI workflow run on
 # every push harmlessly; it only acts on a freshly cloned env. Override with
 # FORCE=1 to reconfigure regardless.
-if [[ "${FORCE:-0}" != "1" && "$(get services COCORE_APPVIEW_DID)" == "$SERVICES_DID" ]]; then
+if [[ "${FORCE:-0}" != "1" && "$(get "$APPVIEW_SVC" COCORE_APPVIEW_DID)" == "$SERVICES_DID" ]]; then
   bold "==> $ENV already configured (services COCORE_APPVIEW_DID == $SERVICES_DID) — nothing to do"
   exit 0
 fi
@@ -61,15 +70,15 @@ fi
 # The AppView OAuth key is cloned from prod (present on console); copy it to
 # services. The internal secret isn't cloned — reuse the console's if it has
 # one, else mint a fresh one for this env.
-KEY="$(get console ATPROTO_PRIVATE_KEY_JWK)"
-[[ -n "$KEY" ]] || { echo "ERROR: $ENV console has no ATPROTO_PRIVATE_KEY_JWK (clone incomplete)" >&2; exit 1; }
-SECRET="$(get console COCORE_INTERNAL_SECRET)"
-[[ -n "$SECRET" ]] || SECRET="$(get services COCORE_INTERNAL_SECRET)"
+KEY="$(get "$CLIENT_SVC" ATPROTO_PRIVATE_KEY_JWK)"
+[[ -n "$KEY" ]] || { echo "ERROR: $ENV $CLIENT_SVC has no ATPROTO_PRIVATE_KEY_JWK (clone incomplete)" >&2; exit 1; }
+SECRET="$(get "$CLIENT_SVC" COCORE_INTERNAL_SECRET)"
+[[ -n "$SECRET" ]] || SECRET="$(get "$APPVIEW_SVC" COCORE_INTERNAL_SECRET)"
 [[ -n "$SECRET" ]] || SECRET="$(openssl rand -hex 32)"
 note "secrets resolved (OAuth key + internal secret)"
 
 # Console: own public URLs + the services DID it service-auths against.
-railway variables --project "$PROJECT" --service console --environment "$ENV" --skip-deploys \
+railway variables --project "$PROJECT" --service "$CLIENT_SVC" --environment "$ENV" --skip-deploys \
   --set "COCORE_ADVISOR_URL=$ADVISOR_URL" \
   --set "COCORE_APPVIEW_DID=$SERVICES_DID" \
   --set "COCORE_APPVIEW_INTERNAL_URL=http://services.railway.internal:8081" \
@@ -80,7 +89,7 @@ railway variables --project "$PROJECT" --service console --environment "$ENV" --
 note "console vars set"
 
 # Services (AppView): own DID, the console it points back at, OAuth key, advisor.
-railway variables --project "$PROJECT" --service services --environment "$ENV" --skip-deploys \
+railway variables --project "$PROJECT" --service "$APPVIEW_SVC" --environment "$ENV" --skip-deploys \
   --set "ATPROTO_BASE_URL=$CONSOLE_URL" \
   --set "ATPROTO_PRIVATE_KEY_JWK=$KEY" \
   --set "COCORE_ACCOUNT_DB=/data/account.db" \
@@ -91,10 +100,10 @@ railway variables --project "$PROJECT" --service services --environment "$ENV" -
 note "services vars set"
 
 # Redeploy both so the new vars take effect.
-railway redeploy --project "$PROJECT" --service services --environment "$ENV" --yes >/dev/null \
-  || echo "WARN: services redeploy failed; new vars apply on the next deploy" >&2
-railway redeploy --project "$PROJECT" --service console --environment "$ENV" --yes >/dev/null \
-  || echo "WARN: console redeploy failed; new vars apply on the next deploy" >&2
+railway redeploy --project "$PROJECT" --service "$APPVIEW_SVC" --environment "$ENV" --yes >/dev/null \
+  || echo "WARN: $APPVIEW_SVC redeploy failed; new vars apply on the next deploy" >&2
+railway redeploy --project "$PROJECT" --service "$CLIENT_SVC" --environment "$ENV" --yes >/dev/null \
+  || echo "WARN: $CLIENT_SVC redeploy failed; new vars apply on the next deploy" >&2
 bold "==> $ENV configured + redeploying"
 note "console:  $CONSOLE_URL"
 note "advisor:  $ADVISOR_URL"
