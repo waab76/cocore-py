@@ -103,10 +103,22 @@ final class MainWindowController {
         let root =
             content
             .environmentObject(state)
-            .frame(width: 540, height: 600)
+            // Fill the host's bounds rather than pinning a hard 540×600 frame.
+            // A grouped Form is itself a scroll container: when it merely fills
+            // the pane it scrolls its overflow natively, but a hard `.frame`
+            // equal-or-smaller than its content makes it overflow and clip
+            // instead (the top section header and bottom buttons disappear with
+            // no way to scroll to them). The pane size is pinned below via the
+            // hosting controller's preferredContentSize, so panes stay a
+            // consistent size without the clipping.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .brandStyled()
         let host = NSHostingController(rootView: root)
+        // Don't let SwiftUI drive the controller's size (the content is now
+        // size-flexible); pin a constant pane size instead, so every tab — and
+        // thus the window — stays 540×600 with no per-tab resize jank.
         host.sizingOptions = []
+        host.preferredContentSize = NSSize(width: 540, height: 600)
         // NSTabViewController titles the window from the selected pane's
         // controller — leaving it nil reads "Untitled", and using the tab
         // label makes the title flip per tab. Pin every pane to "co/core" so
@@ -137,8 +149,13 @@ private struct StatusTab: View {
                     .disabled(state.session == nil)
                 Button("Setup guide…", action: onOpenSetupGuide)
                 Button("Sign out", action: onSignOut)
+                    .foregroundStyle(.red)
                     .disabled(state.session == nil)
             }
+            // Plain accent-text actions read as native macOS settings rows —
+            // the default Form button style rendered them as tinted bordered
+            // pills, which looked off. `.link` drops the border/fill.
+            .buttonStyle(.link)
         }
         .formStyle(.grouped)
     }
@@ -199,8 +216,12 @@ private struct AboutTab: View {
             }
             Section {
                 Button("Uninstall co/core…", role: .destructive, action: onUninstall)
+                    .foregroundStyle(.red)
             }
         }
         .formStyle(.grouped)
+        // Match the Status tab: these housekeeping actions read as native
+        // accent-text rows rather than tinted bordered pills.
+        .buttonStyle(.link)
     }
 }

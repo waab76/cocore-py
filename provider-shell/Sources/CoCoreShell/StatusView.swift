@@ -67,7 +67,7 @@ struct StatusRows: View {
         if let p = MenuBarController.provisionStatus() {
             if p.phase == "provisioning" {
                 return p.bytesDownloaded > 0
-                    ? "Provisioning… (\(MenuBarController.provisionMB(p.bytesDownloaded)) downloaded)"
+                    ? "Provisioning… (\(MenuBarController.humanBytes(p.bytesDownloaded)) downloaded)"
                     : "Provisioning…"
             }
             if p.phase == "failed" { return "Provisioning failed" }

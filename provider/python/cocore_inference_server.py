@@ -65,6 +65,22 @@ for _noisy in (
 ):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
+# Faster, more reliable weight downloads: enable huggingface_hub's
+# hf_transfer backend (parallel, byte-range, Rust-based) when the package is
+# present. Without it, huggingface_hub falls back to a single-connection
+# downloader that stalls and bursts on large weights. Must be set BEFORE
+# huggingface_hub is first imported (it reads the flag at import), i.e. before
+# the vllm_mlx import below. Silently no-ops on older venvs that predate the
+# hf_transfer dependency, so they keep working (just without the speedup).
+import os  # noqa: E402
+
+try:
+    import hf_transfer  # noqa: E402,F401
+
+    os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+except Exception:
+    pass
+
 import uvicorn  # noqa: E402  (after logging config — intentional)
 import vllm_mlx.server as srv  # noqa: E402
 

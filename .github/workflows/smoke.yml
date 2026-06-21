@@ -68,6 +68,6 @@ jobs:
       - name: Run stack smoke
         run: node --experimental-strip-types infra/smoke.ts
 
-      - name: Services log on failure
+      - name: AppView log on failure
         if: failure()
         run: cat /tmp/services.log

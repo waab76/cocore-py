@@ -152,7 +152,7 @@ final class MenuBarController {
             let bytes = provision?.bytesDownloaded ?? 0
             atAGlance =
                 bytes > 0
-                ? "⏳ Provisioning… downloading model (\(Self.provisionMB(bytes)))"
+                ? "⏳ Provisioning… downloading model (\(Self.humanBytes(bytes)))"
                 : "⏳ Provisioning a model… (not earning yet)"
         } else if provision?.phase == "failed" {
             atAGlance = "⚠ Provisioning failed — not serving"
@@ -783,6 +783,7 @@ final class MenuBarController {
     /// agent can't pin "Provisioning…" on forever.
     struct ProvisionStatus {
         let phase: String  // "provisioning" | "failed"
+        let models: [String]
         let bytesDownloaded: UInt64
         let faultMessage: String?
     }
@@ -797,13 +798,34 @@ final class MenuBarController {
             let phase = obj["phase"] as? String
         else { return nil }
         let bytes = (obj["bytesDownloaded"] as? NSNumber)?.uint64Value ?? 0
+        let models = (obj["models"] as? [String]) ?? []
         let fault = (obj["fault"] as? [String: Any])?["message"] as? String
-        return ProvisionStatus(phase: phase, bytesDownloaded: bytes, faultMessage: fault)
+        return ProvisionStatus(phase: phase, models: models, bytesDownloaded: bytes, faultMessage: fault)
     }
 
-    /// Content-safe human download size for the provisioning line.
-    static func provisionMB(_ bytes: UInt64) -> String {
-        String(format: "%.0f MB", Double(bytes) / (1024 * 1024))
+    /// Content-safe adaptive byte size (B/KB/MB/GB/TB) — bytes only, never
+    /// any prompt/token data. Keeps GB/TB to one decimal so a 4.2 GB weight
+    /// download doesn't read as "4301 MB".
+    static func humanBytes(_ bytes: UInt64) -> String {
+        let units = ["B", "KB", "MB", "GB", "TB"]
+        var value = Double(bytes)
+        var i = 0
+        while value >= 1024, i < units.count - 1 {
+            value /= 1024
+            i += 1
+        }
+        let decimals = i >= 3 ? 1 : 0  // GB/TB: one decimal; MB and below: whole
+        return String(format: "%.\(decimals)f %@", value, units[i])
+    }
+
+    /// Compact human duration for download ETAs ("45s", "3m 20s", "1h 5m").
+    static func humanDuration(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds.rounded()))
+        if s < 60 { return "\(s)s" }
+        let m = s / 60, rs = s % 60
+        if m < 60 { return rs == 0 ? "\(m)m" : "\(m)m \(rs)s" }
+        let h = m / 60, rm = m % 60
+        return rm == 0 ? "\(h)h" : "\(h)h \(rm)m"
     }
 
     /// Map the marker's reason to a one-line, operator-facing remediation.

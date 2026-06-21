@@ -112,14 +112,18 @@ install_packages() {
   if [[ -n "$COCORE_VLLM_MLX_VERSION" ]]; then
     pkg="vllm-mlx==$COCORE_VLLM_MLX_VERSION"
   fi
+  # hf_transfer is the accelerated (parallel, byte-range, Rust-based)
+  # HuggingFace downloader. Without it, large weight downloads stall and
+  # burst on a single connection; the engine enables it via
+  # HF_HUB_ENABLE_HF_TRANSFER when the package is importable.
   # uv pip install needs the venv activated; we pass --python pointing
   # at the venv's interpreter to make it scope to that venv.
   if ! "$COCORE_UV" pip install --python "$COCORE_PYTHON_VENV/bin/python" \
-        "$pkg" mlx-lm uvicorn >&2; then
+        "$pkg" mlx-lm uvicorn hf_transfer >&2; then
     err "uv pip install $pkg failed"
     exit 3
   fi
-  note "vllm-mlx + uvicorn installed at $COCORE_PYTHON_VENV"
+  note "vllm-mlx + uvicorn + hf_transfer installed at $COCORE_PYTHON_VENV"
 }
 
 verify() {

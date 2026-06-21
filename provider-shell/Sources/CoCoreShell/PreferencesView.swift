@@ -74,6 +74,10 @@ struct PreferencesView: View {
                             nameApplied = true
                         }
                     }
+                    // Standard macOS push button: override the pane's bronze
+                    // tint so these primary actions read as normal gray buttons
+                    // with a primary-colored label, not tinted links/pills.
+                    .tint(Color.primary)
                     if nameApplied {
                         Text("Renamed — agent restarted")
                             .font(.footnote)
@@ -95,6 +99,7 @@ struct PreferencesView: View {
                             networkApplied = true
                         }
                     }
+                    .tint(Color.primary)
                     if networkApplied {
                         Text("Applied — agent restarted")
                             .font(.footnote)
@@ -140,6 +145,7 @@ struct PreferencesView: View {
                             scheduleApplied = true
                         }
                     }
+                    .tint(Color.primary)
                     if scheduleApplied {
                         Text("Applied — agent restarted")
                             .font(.footnote)

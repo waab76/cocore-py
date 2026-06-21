@@ -171,10 +171,19 @@ fn dir_size_bytes(dir: &Path) -> u64 {
     total
 }
 
-/// Content-safe human size for progress logs (bytes only, never any
-/// prompt/token data).
-fn human_mb(bytes: u64) -> String {
-    format!("{:.0} MB", bytes as f64 / (1024.0 * 1024.0))
+/// Content-safe adaptive human size for progress logs (bytes only, never
+/// any prompt/token data). Scales B → TB so a multi-GB weight download
+/// doesn't read as "20480 MB"; GB/TB keep one decimal.
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut i = 0;
+    while value >= 1024.0 && i < UNITS.len() - 1 {
+        value /= 1024.0;
+        i += 1;
+    }
+    let decimals = if i >= 3 { 1 } else { 0 };
+    format!("{value:.decimals$} {}", UNITS[i])
 }
 
 /// Embedded Python wrapper. Written to disk once at first spawn so the
@@ -495,7 +504,7 @@ impl SubprocessEngine {
             if last_bytes > 0 && now.duration_since(last_log) >= Duration::from_secs(15) {
                 tracing::info!(
                     model = %self.model_id,
-                    downloaded = %human_mb(last_bytes),
+                    downloaded = %human_bytes(last_bytes),
                     "provisioning: model weights downloading"
                 );
                 last_log = now;
@@ -509,7 +518,7 @@ impl SubprocessEngine {
                      Recent engine output (no request has been served yet — content-safe to share):\n{}\n{}",
                     self.model_id,
                     READY_STALL_TIMEOUT.as_secs(),
-                    human_mb(last_bytes),
+                    human_bytes(last_bytes),
                     render_ring("stdout", &stdout_buf),
                     render_ring("stderr", &stderr_buf),
                 );
@@ -521,7 +530,7 @@ impl SubprocessEngine {
                      Recent engine output (content-safe):\n{}\n{}",
                     self.model_id,
                     READY_HARD_CAP.as_secs() / 3600,
-                    human_mb(last_bytes),
+                    human_bytes(last_bytes),
                     render_ring("stdout", &stdout_buf),
                     render_ring("stderr", &stderr_buf),
                 );

@@ -45,10 +45,23 @@ OPEN="${OPEN:-0}"
 # Opt-in secure/native build (WS-A). When 1, the bundled cocore CLI is built
 # with the in-process MLX engine so it can serve the confidential tier.
 COCORE_BUILD_NATIVE="${COCORE_BUILD_NATIVE:-0}"
-readonly APP_NAME="cocore"
+# DEV=1 builds a side-by-side dev identity: a distinct bundle id, app name,
+# and display name so the local build never collides with a prod cocore.app
+# already installed in /Applications (same bundle id = they fight over the one
+# status item and the SMAppService login-item registration). Defaults on for
+# debug builds, since those are always local dev. Output: cocore-dev.app.
+DEV="${DEV:-$([[ "$CONFIG" == "debug" ]] && echo 1 || echo 0)}"
 readonly EXEC_NAME="CoCoreShell"
-readonly BUNDLE_ID="dev.cocore.shell"
 readonly OUT_DIR="$SHELL_DIR/build"
+if [[ "$DEV" == "1" ]]; then
+  readonly APP_NAME="cocore-dev"
+  readonly BUNDLE_ID="dev.cocore.shell.dev"
+  readonly DISPLAY_NAME="co/core (dev)"
+else
+  readonly APP_NAME="cocore"
+  readonly BUNDLE_ID="dev.cocore.shell"
+  readonly DISPLAY_NAME="co/core"
+fi
 readonly APP="$OUT_DIR/$APP_NAME.app"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -77,6 +90,13 @@ pb() { /usr/libexec/PlistBuddy -c "$1" "$APP/Contents/Info.plist" >/dev/null 2>&
 pb "Add :CFBundleExecutable string $EXEC_NAME" || pb "Set :CFBundleExecutable $EXEC_NAME"
 pb "Add :CFBundlePackageType string APPL"      || pb "Set :CFBundlePackageType APPL"
 pb "Add :CFBundleIconFile string AppIcon"      || pb "Set :CFBundleIconFile AppIcon"
+# Override the identity for a DEV build so it lives alongside (not on top of) a
+# prod install: distinct bundle id (separate LaunchServices registration +
+# login item) and a "(dev)" display name to tell the two apart.
+pb "Set :CFBundleIdentifier $BUNDLE_ID"   || pb "Add :CFBundleIdentifier string $BUNDLE_ID"
+pb "Set :CFBundleName $DISPLAY_NAME"      || pb "Add :CFBundleName string $DISPLAY_NAME"
+pb "Set :CFBundleDisplayName $DISPLAY_NAME" || pb "Add :CFBundleDisplayName string $DISPLAY_NAME"
+note "identity: $BUNDLE_ID ($DISPLAY_NAME)"
 
 # Build-time endpoint targeting. When COCORE_CONSOLE_URL / COCORE_ADVISOR_URL
 # are set (a PR build wired to its stack, or a dev build), bake them into the
