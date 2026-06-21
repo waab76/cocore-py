@@ -136,7 +136,12 @@ describe("confidential gate requires code-attestation when enforced", () => {
 
   it("gated false until code-attested, true after (enforcement on)", () => {
     const r = new ProviderRegistry(new KnownGoodSet([cd]), true);
-    r.upsert(reg, () => {}, () => {}, async () => true);
+    r.upsert(
+      reg,
+      () => {},
+      () => {},
+      async () => true,
+    );
     r.recordChallengeSip(reg.provider_did, reg.machine_id!, true);
     expect(r.get(reg.provider_did, reg.machine_id!)!.confidentialEligible).toBe(false);
     r.markCodeAttested(reg.provider_did, reg.machine_id!);
@@ -148,7 +153,12 @@ describe("confidential gate requires code-attestation when enforced", () => {
 
   it("not gated on code-attestation when enforcement off (rollout safety)", () => {
     const r = new ProviderRegistry(new KnownGoodSet([cd]), false);
-    r.upsert(reg, () => {}, () => {}, async () => true);
+    r.upsert(
+      reg,
+      () => {},
+      () => {},
+      async () => true,
+    );
     r.recordChallengeSip(reg.provider_did, reg.machine_id!, true);
     // Confidential without any code-attestation — preserves pre-APNs behavior.
     expect(r.get(reg.provider_did, reg.machine_id!)!.confidentialEligible).toBe(true);
