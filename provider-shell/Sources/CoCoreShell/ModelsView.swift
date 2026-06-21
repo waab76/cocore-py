@@ -745,6 +745,17 @@ struct ModelsView: View {
     }
 
 
+    /// Grouped Form footnotes: footnote-sized and secondary-colored like
+    /// Settings explanatory text. Let the Form place the footer so its leading
+    /// edge matches the section header above (custom insets break that).
+    private func sectionFooter(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     var body: some View {
         // A native grouped Form — the same shape as the Status/Settings/About
         // tabs — so the Models tab reads as standard macOS settings: section
@@ -781,35 +792,52 @@ struct ModelsView: View {
             } header: {
                 Text("Active models")
             } footer: {
-                Text("Models this machine loads and advertises. Changes bounce the agent and re-publish your provider record within seconds.")
+                sectionFooter(
+                    "Models this machine loads and advertises. Changes bounce the agent and re-publish your provider record within seconds."
+                )
             }
 
             if let items = manager.download?.items, !items.isEmpty {
                 Section {
-                    ForEach(items) { downloadRow($0) }
+                    VStack(spacing: 0) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                            if index > 0 { Divider().padding(.vertical, 9) }
+                            downloadRow(item)
+                        }
+                    }
                 } header: {
                     Text("Downloading")
                 } footer: {
-                    Text("First-time downloads can take a while — you can close this window; it keeps going in the background.")
+                    sectionFooter(
+                        "First-time downloads can take a while — you can close this window; it keeps going in the background."
+                    )
                 }
             }
 
             Section {
-                if let warn = ModelManager.overprovisionWarning(models: manager.models, schedules: schedules) {
-                    Text("⚠ \(warn)")
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if manager.models.isEmpty {
-                    Text("Add a model above to schedule it.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(manager.models, id: \.self) { m in scheduleRow(m) }
+                VStack(alignment: .leading, spacing: 0) {
+                    if let warn = ModelManager.overprovisionWarning(models: manager.models, schedules: schedules) {
+                        Text("⚠ \(warn)")
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.bottom, manager.models.isEmpty ? 0 : 9)
+                    }
+                    if manager.models.isEmpty {
+                        Text("Add a model above to schedule it.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(manager.models.enumerated()), id: \.element) { index, m in
+                            if index > 0 { Divider().padding(.vertical, 9) }
+                            scheduleRow(m)
+                        }
+                    }
                 }
             } header: {
                 Text("Per-model schedule")
             } footer: {
-                Text("Give a model its own hours so it only loads (and uses RAM) part of the day. A model with no schedule is always on while the agent serves.")
+                sectionFooter(
+                    "Give a model its own hours so it only loads (and uses RAM) part of the day. A model with no schedule is always on while the agent serves."
+                )
             }
 
             Section {
@@ -852,7 +880,9 @@ struct ModelsView: View {
             } header: {
                 Text("Add a model")
             } footer: {
-                Text("Search any MLX model on HuggingFace, or pick a suggestion. co/core runs MLX weights (mlx-community/… or another 4-bit MLX conversion); a stock PyTorch repo won't load.")
+                sectionFooter(
+                    "Search any MLX model on HuggingFace, or pick a suggestion. co/core runs MLX weights (mlx-community/… or another 4-bit MLX conversion); a stock PyTorch repo won't load."
+                )
             }
             .onChange(of: searchQuery) { query in runSearch(query) }
 
@@ -945,6 +975,7 @@ struct ModelsView: View {
             .tint(.red)
             .help("Cancel download and remove this model")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The per-model size label shown on the name row: "1.2 GB of 1.6 GB · 73%"
