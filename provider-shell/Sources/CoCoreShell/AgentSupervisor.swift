@@ -363,18 +363,30 @@ final class AgentSupervisor {
         }
     }
 
-    /// SIGTERM any `cocore agent serve` process owned by this user that we
-    /// aren't currently tracking. Best-effort and synchronous (it runs
-    /// before a spawn, where a ~half-second wait is acceptable). Uses
-    /// `pgrep`/`kill` rather than `pkill` so we can exclude our own PID and
-    /// log what we reaped.
+    /// SIGTERM any launchd-orphaned `cocore agent serve` process — one whose
+    /// parent is pid 1, i.e. a previous app session's agent that was
+    /// reparented to launchd when its shell quit without reaping it. Scoped
+    /// to ppid==1 deliberately: a worker parented to a LIVE supervisor is
+    /// that supervisor's to manage, never ours to kill. Without the `-P 1`
+    /// scope, two coexisting tray instances (a botched relaunch, or an
+    /// in-place update where the old instance hadn't quit yet) each reaped
+    /// the OTHER's live worker on every pre-spawn pass — the worker
+    /// respawned and ~30s later got reaped again, the "⚠ the agent keeps
+    /// crashing N×" war that hit the confidential nested worker most
+    /// visibly. `pgrep -P 1 -f <pattern>` is AND semantics on macOS, so we
+    /// catch genuine orphans while leaving live supervised workers alone.
+    /// Best-effort and synchronous (it runs before a spawn, where a
+    /// ~half-second wait is acceptable). Uses `pgrep`/`kill` rather than
+    /// `pkill` so we can exclude our own PID and log what we reaped.
     private static func killStrayAgents() {
         let pgrep = Process()
         pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
         // Match both the default CLI (`cocore agent serve`) and the nested
         // confidential worker (`cocore-provider agent serve`) — a confidential
         // machine runs the latter, and an orphan of either kind must be reaped.
-        pgrep.arguments = ["-f", "cocore(-provider)? agent serve"]
+        // `-P 1` restricts to launchd orphans (ppid==1); a worker parented to
+        // a running supervisor is left alone.
+        pgrep.arguments = ["-P", "1", "-f", "cocore(-provider)? agent serve"]
         let pipe = Pipe()
         pgrep.standardOutput = pipe
         pgrep.standardError = FileHandle.nullDevice
@@ -388,7 +400,7 @@ final class AgentSupervisor {
                 .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
                 .filter { $0 != mine }
             guard !pids.isEmpty else { return }
-            NSLog("cocore: reaping %d stray agent process(es) before spawn: %@",
+            NSLog("cocore: reaping %d orphaned agent process(es) before spawn: %@",
                   pids.count, pids.map(String.init).joined(separator: ","))
             for pid in pids { kill(pid, SIGTERM) }
             // Give them a moment to unwind (their Drop SIGTERMs the Python
