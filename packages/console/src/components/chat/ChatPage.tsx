@@ -1596,6 +1596,14 @@ export function ChatPage(): ReactElement {
                       {m.text}
                     </div>
                   ) : (
+                    (() => {
+                      const streaming = m.id === streamingId;
+                      // "Thinking" is active only while reasoning is arriving and
+                      // the answer hasn't started; once content begins the caret
+                      // (and the disclosure) move to the answer.
+                      const thinkingActive = streaming && !!m.reasoning && !m.text;
+                      const answerActive = streaming && !thinkingActive;
+                      return (
                     <div key={m.id} {...stylex.props(styles.msgAssistant)}>
                       <div {...stylex.props(styles.msgGutter)}>
                         <span {...stylex.props(styles.msgGutterModel)}>{m.modelId ?? modelId}</span>
@@ -1608,12 +1616,9 @@ export function ChatPage(): ReactElement {
                       </div>
                       <div {...stylex.props(styles.msgBody)}>
                         {m.reasoning ? (
-                          <ThinkingDisclosure
-                            reasoning={m.reasoning}
-                            streaming={m.id === streamingId}
-                          />
+                          <ThinkingDisclosure reasoning={m.reasoning} active={thinkingActive} />
                         ) : null}
-                        <ChatMarkdown streaming={m.id === streamingId} text={m.text} />
+                        <ChatMarkdown streaming={answerActive} text={m.text} />
                       </div>
                       {m.meta ? (
                         <div {...stylex.props(styles.msgMeta)}>
@@ -1641,6 +1646,8 @@ export function ChatPage(): ReactElement {
                         </div>
                       ) : null}
                     </div>
+                      );
+                    })()
                   ),
                 )}
               </div>

@@ -9,7 +9,8 @@
 import * as stylex from "@stylexjs/stylex";
 import { ChevronRight } from "lucide-react";
 import type { ReactElement } from "react";
-import { Button, Disclosure, DisclosurePanel, Heading } from "react-aria-components";
+import { useEffect, useRef, useState } from "react";
+import { Button, Disclosure, DisclosurePanel } from "react-aria-components";
 
 import { uiColor } from "@/design-system/theme/color.stylex";
 import { mediaQueries } from "@/design-system/theme/media-queries.stylex";
@@ -23,7 +24,9 @@ const styles = stylex.create({
   root: {
     display: "flex",
     flexDirection: "column",
-    marginBottom: sizeSpace.sm,
+    // Small, intentional gap to the answer below — the answer's own leading
+    // adds the rest. (The oversized `size` scale read as too much when open.)
+    marginBottom: gap.xs,
   },
   trigger: {
     display: "flex",
@@ -50,7 +53,7 @@ const styles = stylex.create({
   },
   panel: {
     overflow: "hidden",
-    marginTop: sizeSpace.xs,
+    marginTop: gap.xs,
     paddingLeft: sizeSpace.sm,
     // A subtle left rail visually nests the reasoning under its toggle and
     // distinguishes it from the answer below.
@@ -65,25 +68,45 @@ const styles = stylex.create({
 
 export interface ThinkingDisclosureProps {
   reasoning: string;
-  /** True while this turn is the one currently streaming — auto-expands the
-   *  block so the user watches the model think in real time. */
-  streaming: boolean;
+  /** True only while the model is ACTIVELY producing reasoning (this turn is
+   *  streaming and the answer hasn't started). Drives the auto-expand and the
+   *  streaming caret; once it flips false the block auto-collapses (the user
+   *  can still reopen it to read the trace). */
+  active: boolean;
 }
 
 export function ThinkingDisclosure({
   reasoning,
-  streaming,
+  active,
 }: ThinkingDisclosureProps): ReactElement {
+  // Controlled expansion: expand while thinking, collapse when it ends — but
+  // leave the user free to toggle it afterward. We only force the state on the
+  // active→inactive (or inactive→active) transition, not on every render.
+  const [expanded, setExpanded] = useState(active);
+  const prevActive = useRef(active);
+  useEffect(() => {
+    if (active !== prevActive.current) {
+      setExpanded(active);
+      prevActive.current = active;
+    }
+  }, [active]);
+
   return (
-    <Disclosure defaultExpanded={streaming} {...stylex.props(styles.root)}>
-      <Heading>
-        <Button slot="trigger" {...stylex.props(styles.trigger)}>
-          <ChevronRight size={14} {...stylex.props(styles.chevron)} aria-hidden />
-          <span>Thinking</span>
-        </Button>
-      </Heading>
+    <Disclosure
+      isExpanded={expanded}
+      onExpandedChange={setExpanded}
+      {...stylex.props(styles.root)}
+    >
+      {/* No <Heading> wrapper: react-aria allows the trigger button as a
+          direct child, and an <h3> brings large default margins that double
+          the gap under the toggle (the design-system disclosure omits it too). */}
+      <Button slot="trigger" {...stylex.props(styles.trigger)}>
+        <ChevronRight size={14} {...stylex.props(styles.chevron)} aria-hidden />
+        <span>Thinking</span>
+      </Button>
       <DisclosurePanel {...stylex.props(styles.panel)}>
-        <ChatMarkdown streaming={streaming} text={reasoning} />
+        {/* Caret only while actively thinking — the answer shows its own. */}
+        <ChatMarkdown streaming={active} text={reasoning} />
       </DisclosurePanel>
     </Disclosure>
   );
