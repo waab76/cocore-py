@@ -982,6 +982,10 @@ final class MenuBarController {
         let phase: String  // "provisioning" | "failed"
         let models: [String]
         let bytesDownloaded: UInt64
+        /// True while provisioning when nothing is actively downloading — the
+        /// weights are on disk and a model is loading into memory. Lets the UI
+        /// show "loading…" instead of a download bar (or a false "complete").
+        let loading: Bool
         let faultMessage: String?
     }
     static func provisionStatus() -> ProvisionStatus? {
@@ -996,8 +1000,11 @@ final class MenuBarController {
         else { return nil }
         let bytes = (obj["bytesDownloaded"] as? NSNumber)?.uint64Value ?? 0
         let models = (obj["models"] as? [String]) ?? []
+        let loading = (obj["loading"] as? Bool) ?? false
         let fault = (obj["fault"] as? [String: Any])?["message"] as? String
-        return ProvisionStatus(phase: phase, models: models, bytesDownloaded: bytes, faultMessage: fault)
+        return ProvisionStatus(
+            phase: phase, models: models, bytesDownloaded: bytes, loading: loading,
+            faultMessage: fault)
     }
 
     /// Content-safe adaptive byte size (B/KB/MB/GB/TB) — bytes only, never

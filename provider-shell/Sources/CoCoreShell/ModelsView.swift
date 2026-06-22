@@ -34,6 +34,11 @@ final class ModelManager: ObservableObject {
     /// glitch its grouped-Form row backgrounds — twice a second as `download`
     /// republishes progress.
     @Published var downloadingModels: Set<String> = [] { didSet { recomputeActive() } }
+    /// True while provisioning but nothing is actively downloading — the
+    /// weights are on disk and a model is loading into memory (or we're between
+    /// a finished download and the next). Drives a "loading…" row so the tab
+    /// never reads as "everything complete" while the agent is still working.
+    @Published var loadingIntoMemory: Bool = false
 
     private func recomputeActive() {
         let next = models.filter { !downloadingModels.contains($0) }
@@ -164,6 +169,7 @@ final class ModelManager: ObservableObject {
         smoothedRate = nil
         download = nil
         downloadingModels = []
+        loadingIntoMemory = false
     }
 
     /// One poll tick: read the marker, update the smoothed rate, and publish
@@ -177,6 +183,7 @@ final class ModelManager: ObservableObject {
             // grouped section backgrounds).
             if download != nil { download = nil }
             if !downloadingModels.isEmpty { downloadingModels = [] }
+            if loadingIntoMemory { loadingIntoMemory = false }
             lastSample = nil
             smoothedRate = nil
             return
@@ -212,11 +219,18 @@ final class ModelManager: ObservableObject {
             items.append(DownloadInfo.Item(model: m, downloaded: got, total: repoSizes[m]))
         }
         guard !items.isEmpty else {
-            // Nothing has an in-flight download right now.
+            // Nothing has an in-flight download right now, but the marker still
+            // says provisioning — the weights are on disk and a model is loading
+            // into memory (or we're between downloads). Surface that as a
+            // loading state instead of clearing to a bare "complete" look.
             if download != nil { download = nil }
             if !downloadingModels.isEmpty { downloadingModels = [] }
+            if !loadingIntoMemory { loadingIntoMemory = true }
             return
         }
+
+        // Actively downloading — not (yet) in the load-into-memory phase.
+        if loadingIntoMemory { loadingIntoMemory = false }
 
         // Publish the downloading set only when it actually changes, so the
         // Active list (which excludes these) stays stable across progress ticks.
@@ -1059,6 +1073,26 @@ struct ModelsView: View {
                 } footer: {
                     sectionFooter(
                         "First-time downloads can take a while — you can close this window; it keeps going in the background."
+                    )
+                }
+            }
+
+            // Provisioning but nothing actively downloading → the weights are
+            // on disk and a model is loading into memory. Show that rather than
+            // letting the tab read as "everything complete" (which it did
+            // during the gap between/after downloads).
+            if manager.loadingIntoMemory && manager.download == nil {
+                Section {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Finishing setup — loading model into memory…")
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Loading")
+                } footer: {
+                    sectionFooter(
+                        "Large models take a moment to load into memory after downloading. The machine starts serving once it's ready."
                     )
                 }
             }
