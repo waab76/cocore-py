@@ -7,6 +7,11 @@ import {
   resolveAppSessionToken,
   revokeAppSession,
 } from "@/integrations/auth/app-session-store.server.ts";
+import {
+  appviewBackedSession,
+  appviewSessionInfo,
+} from "@/lib/appview-backed-session.server.ts";
+import { isAppviewForwardConfigured } from "@/lib/appview-pds-forward.server.ts";
 import { runTraced } from "@/lib/o11y.server.ts";
 import { readAllAuthSessionTokens } from "@/integrations/auth/cookie-parse.ts";
 
@@ -33,6 +38,22 @@ export function atprotoSessionForRequestEffect(
 
       const { did } = app;
       if (!isDid(did)) continue;
+
+      // Single-owner cutover: when forwarding is configured the AppView owns
+      // (and solely refreshes) this DID's session. Restoring locally here
+      // would refresh in parallel and cannibalize the single-use refresh
+      // token, so instead hand back an AppView-backed session and ask the
+      // AppView — the owner — whether a live session exists. Only a
+      // DEFINITIVE "absent" (not a transient AppView blip) drops the app
+      // session for re-auth.
+      if (isAppviewForwardConfigured()) {
+        const info = yield* Effect.promise(() => appviewSessionInfo(did));
+        if (info.checked && !info.present) {
+          revokeAppSession(sessionToken);
+          continue;
+        }
+        return { did, oauthSession: appviewBackedSession(did) };
+      }
 
       const oauthSession = yield* restoreAtprotoSessionEffect(did);
       if (!oauthSession) {

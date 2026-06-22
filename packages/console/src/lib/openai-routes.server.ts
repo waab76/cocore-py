@@ -7,7 +7,7 @@
 //                    older openapi versions; still honored).
 //   * `/v1/*`      — the canonical OpenAI layout. Point any OpenAI
 //                    SDK / LiteLLM / etc. at
-//                    `base_url="https://console.cocore.dev/v1"` and
+//                    `base_url="https://cocore.dev/v1"` and
 //                    it appends `/chat/completions`, `/models`, … the
 //                    way it appends them to `https://api.openai.com/v1`.
 //
@@ -22,6 +22,11 @@ import type { OAuthSession } from "@atcute/oauth-node-client";
 import { runTraced } from "@/lib/o11y.server.ts";
 
 import { restoreAtprotoSessionEffect } from "@/integrations/auth/atproto.server.ts";
+import {
+  appviewBackedSession,
+  appviewSessionInfo,
+} from "@/lib/appview-backed-session.server.ts";
+import { isAppviewForwardConfigured } from "@/lib/appview-pds-forward.server.ts";
 import { type DispatchInputs, runDispatch } from "@/lib/inference-dispatch.server.ts";
 import { listMyFriendDids } from "@/lib/friends.server.ts";
 import {
@@ -66,6 +71,24 @@ async function authenticate(
   }
   if (!isDid(resolved.did)) {
     return jsonError(500, "Stored DID is malformed", "server_error");
+  }
+
+  // Single-owner cutover: when forwarding is configured the AppView owns and
+  // solely refreshes this DID's session. Restoring locally here would
+  // refresh in parallel and cannibalize the single-use refresh token, so
+  // hand back an AppView-backed session (every PDS call + service-auth mint
+  // is replayed by the AppView). Only a DEFINITIVE "session absent" 401s;
+  // a transient AppView blip doesn't (the session likely still exists).
+  if (isAppviewForwardConfigured()) {
+    const info = await appviewSessionInfo(resolved.did);
+    if (info.checked && !info.present) {
+      return jsonError(
+        401,
+        "API key's underlying ATProto session is no longer valid; mint a new key after re-authenticating",
+        "authentication_error",
+      );
+    }
+    return { did: resolved.did, oauthSession: appviewBackedSession(resolved.did as Did) };
   }
 
   // Restore the OAuth session for this DID. The session store is

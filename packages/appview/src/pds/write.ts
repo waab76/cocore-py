@@ -40,7 +40,7 @@ import {
   type RestoredSession,
   restoreSession,
 } from "../auth/oauth-client.ts";
-import { bearer, err, header, jsonBody, ok } from "../api/http-app.ts";
+import { bearer, err, header, jsonBody, ok, searchParams } from "../api/http-app.ts";
 
 const COLLECTION_PREFIX = "dev.cocore.";
 
@@ -484,6 +484,166 @@ function internalRoute<A extends { collection: string }>(
   }).pipe(Effect.withSpan(`appview.internal.pds.${op}`));
 }
 
+// ---- internal single-owner session proxy ----------------------------
+//
+// At login the console hands every user OAuth session here, making the
+// AppView the SOLE owner/refresher (refresh tokens are single-use; two
+// refreshers cannibalize one token — see the module header). But the
+// console UI still needs to read/write the user's PDS (profile, provider
+// records, friends, terms, avatar) and mint service-auth JWTs. Rather than
+// the console holding a live session and refreshing in parallel, it wraps a
+// thin `AppviewBackedSession` whose every `.handle()` lands here. We
+// restore the owned session and replay the exact request, returning the
+// upstream status + body verbatim — so the console refreshes NOTHING.
+//
+// The path is allowlisted to the operations the console legitimately
+// performs as the user: `com.atproto.repo.*` (record CRUD + uploadBlob)
+// and `com.atproto.server.getServiceAuth` (scoped service-auth minting).
+// The internal secret is the trust boundary (private-network only), same
+// as the write endpoints; the allowlist keeps this from becoming a
+// god-mode XRPC proxy.
+
+const ALLOWED_PROXY_PREFIXES = [
+  "/xrpc/com.atproto.repo.",
+  "/xrpc/com.atproto.server.getServiceAuth",
+];
+
+function isAllowedProxyPath(p: string): boolean {
+  return ALLOWED_PROXY_PREFIXES.some((pre) => p.startsWith(pre));
+}
+
+interface ProxyEnvelope {
+  did: string;
+  path: string;
+  method: string;
+  /** Request body forwarded verbatim (already serialized by the console).
+   *  Mutually exclusive with `blobB64`. */
+  bodyText?: string;
+  /** base64 request body for binary ops (uploadBlob). */
+  blobB64?: string;
+  /** Upstream Content-Type for the request body. */
+  contentType?: string;
+}
+
+function parseProxy(b: Record<string, unknown>): ProxyEnvelope | string {
+  if (typeof b.did !== "string" || !b.did.startsWith("did:")) return "did required";
+  if (typeof b.path !== "string") return "path required";
+  if (!isAllowedProxyPath(b.path)) return "path not allowed";
+  const method = typeof b.method === "string" ? b.method.toUpperCase() : "GET";
+  if (b.bodyText !== undefined && typeof b.bodyText !== "string") return "bodyText must be a string";
+  if (b.blobB64 !== undefined && typeof b.blobB64 !== "string") return "blobB64 must be a string";
+  if (b.contentType !== undefined && typeof b.contentType !== "string")
+    return "contentType must be a string";
+  return {
+    did: b.did,
+    path: b.path,
+    method,
+    ...(typeof b.bodyText === "string" ? { bodyText: b.bodyText } : {}),
+    ...(typeof b.blobB64 === "string" ? { blobB64: b.blobB64 } : {}),
+    ...(typeof b.contentType === "string" ? { contentType: b.contentType } : {}),
+  };
+}
+
+/** `POST /internal/pds/proxy` — replay a single allowlisted XRPC call using
+ *  the AppView-owned session for the asserted DID. The response is an
+ *  internal-200 envelope `{ status, bodyText, contentType }` carrying the
+ *  UPSTREAM PDS status, so the console shim can reconstruct the exact
+ *  `Response` the local session would have produced (incl. a 401 for a dead
+ *  session). A restore throw — not an upstream 4xx/5xx — is the only thing
+ *  that surfaces as an internal non-2xx. */
+function internalProxyRoute(ctx: PdsWriteContext, secret: string) {
+  return Effect.gen(function* () {
+    if (yield* methodNotPost) return err(405, { error: "MethodNotAllowed" });
+
+    const presented = yield* header("x-cocore-internal-secret");
+    if (typeof presented !== "string" || !secretEquals(presented, secret))
+      return err(403, { error: "Forbidden" });
+
+    const parsed = yield* Effect.either(jsonBody);
+    if (parsed._tag === "Left")
+      return err(400, { error: "InvalidRequest", message: parsed.left.message });
+    const a = parseProxy(parsed.right as Record<string, unknown>);
+    if (typeof a === "string") return err(400, { error: "InvalidRequest", message: a });
+
+    const restored = yield* Effect.tryPromise({
+      try: () => restoreSession(ctx.oauth, a.did as Did),
+      catch: (e) => e,
+    }).pipe(Effect.either);
+    if (restored._tag === "Left") {
+      const e = restored.left;
+      return err(502, {
+        error: "SessionRestoreFailed",
+        message: `restore session for ${a.did}: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+    if (!restored.right)
+      return ok({
+        status: 401,
+        bodyText: JSON.stringify({
+          error: "AuthRequired",
+          message: "underlying ATProto session no longer valid; re-authenticate",
+        }),
+        contentType: "application/json",
+      });
+    const session = restored.right;
+
+    yield* Effect.annotateCurrentSpan("pds.did", a.did);
+    const meta: PdsMeta = {};
+    return yield* runCore("proxy", meta, async () => {
+      const init = {
+        method: a.method,
+        headers: a.contentType ? { "content-type": a.contentType } : {},
+        body:
+          a.blobB64 !== undefined
+            ? Buffer.from(a.blobB64, "base64")
+            : a.bodyText !== undefined
+              ? a.bodyText
+              : undefined,
+      } as Parameters<RestoredSession["handle"]>[1];
+      const r = await pdsCall(session, a.path, init, meta);
+      const bodyText = await r.text().catch(() => "");
+      return ok({
+        status: r.status,
+        bodyText,
+        contentType: r.headers?.get?.("content-type") ?? "application/json",
+      });
+    });
+  }).pipe(Effect.withSpan("appview.internal.pds.proxy"));
+}
+
+/** `GET /internal/pds/session-info?did=` — NON-refreshing read of the owned
+ *  session blob. `present` is true only when a stored session still carries
+ *  a refresh token (the honest "is the user logged in" signal without
+ *  rotating anything); `aud` is the user's PDS URL for display. Lets the
+ *  console decide auth without ever calling restore(). */
+function internalSessionInfoRoute(ctx: PdsWriteContext, secret: string) {
+  return Effect.gen(function* () {
+    const presented = yield* header("x-cocore-internal-secret");
+    if (typeof presented !== "string" || !secretEquals(presented, secret))
+      return err(403, { error: "Forbidden" });
+
+    const sp = yield* searchParams;
+    const did = sp.get("did");
+    if (!did || !did.startsWith("did:"))
+      return err(400, { error: "InvalidRequest", message: "did required" });
+
+    const raw = ctx.accounts.getOAuthSession(did);
+    if (!raw) return ok({ present: false, aud: null });
+    let aud: string | null = null;
+    let hasRefresh = false;
+    try {
+      const parsed = JSON.parse(raw) as {
+        tokenSet?: { aud?: string; refresh_token?: string };
+      };
+      aud = typeof parsed.tokenSet?.aud === "string" ? parsed.tokenSet.aud : null;
+      hasRefresh = Boolean(parsed.tokenSet?.refresh_token);
+    } catch {
+      /* malformed blob → treat as absent */
+    }
+    return ok({ present: hasRefresh, aud });
+  }).pipe(Effect.withSpan("appview.internal.pds.sessionInfo"));
+}
+
 // ---- router builders ------------------------------------------------
 
 /** Public, bearer-key-authed `/pds/*` write endpoints. Canonical paths
@@ -547,5 +707,10 @@ export function buildInternalPdsRouter(
       "/internal/pds/deleteRecord",
       internalRoute(ctx, secret, "deleteRecord", parseDelete, doDelete),
     ),
+    // Single-owner session proxy + non-refreshing liveness read: let the
+    // console run its UI/inference PDS ops and check session liveness
+    // through the AppView's owned session, so it never refreshes itself.
+    HttpRouter.all("/internal/pds/proxy", internalProxyRoute(ctx, secret)),
+    HttpRouter.get("/internal/pds/session-info", internalSessionInfoRoute(ctx, secret)),
   );
 }
