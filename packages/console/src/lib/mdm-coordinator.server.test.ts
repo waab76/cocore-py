@@ -124,7 +124,9 @@ describe("buildEnrollmentProfile", () => {
 
     // MDM payload, least-privilege + signed check-ins.
     expect(p).toContain("com.apple.mdm");
-    expect(p).toContain("<key>AccessRights</key><integer>3</integer>");
+    // 19 = 1|2|16: profile inspect/install + Device Information query (bit 16),
+    // which DevicePropertiesAttestation requires. No lock/erase/app rights.
+    expect(p).toContain("<key>AccessRights</key><integer>19</integer>");
     expect(p).toContain("<key>SignMessage</key><true/>");
     // Newer macOS requires the MDM payload to advertise the user channel.
     expect(p).toContain("com.apple.mdm.per-user-connections");

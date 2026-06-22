@@ -13,7 +13,7 @@
 //   2. enrolls a device identity via SCEP against step-ca's `cocore-scep`
 //      provisioner (each device generates its own key; no CA-issuing
 //      secret ever lives in the console, no PKCS12 packing),
-//   3. enrolls the Mac into NanoMDM (`com.apple.mdm`, AccessRights=3,
+//   3. enrolls the Mac into NanoMDM (`com.apple.mdm`, AccessRights=19 —
 //      SignMessage=true — the device signs check-ins via Mdm-Signature
 //      since Railway's TLS-terminating edge strips client certs), and
 //   4. (when COCORE_MDM_ACME_URL is set) runs ACME `device-attest-01`
@@ -307,7 +307,14 @@ function mdmPayload(
       <key>Topic</key><string>${xmlEscape(c.topic)}</string>
       <key>ServerURL</key><string>${xmlEscape(c.mdmServerUrl)}</string>
       <key>CheckInURL</key><string>${xmlEscape(c.checkInUrl)}</string>
-      <key>AccessRights</key><integer>3</integer>
+      <!-- AccessRights bitmask: 1 (inspect config profiles) + 2 (install/remove
+           config profiles) + 16 (query Device Information). Bit 16 is REQUIRED
+           for the DeviceInformation attestation — without it the device
+           Acknowledges the command but silently omits DevicePropertiesAttestation
+           (and even SerialNumber), returning only UDID. We intentionally do NOT
+           grant device-lock/erase/app-management rights: cocore's MDM only needs
+           to query the device for its hardware attestation. -->
+      <key>AccessRights</key><integer>19</integer>
       <key>SignMessage</key><true/>
       <key>CheckOutWhenRemoved</key><true/>
       <!-- Newer macOS rejects an MDM payload that doesn't declare it supports
