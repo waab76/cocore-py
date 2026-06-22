@@ -26,7 +26,7 @@ call (secrets stay on your machine + the dashboard).
   chain store persists for free.
 
 > ⚠️ Re-initialising step-ca changes its **root fingerprint**, which
-> breaks NanoMDM's baked `-ca` *and* any Mac already trusting the old
+> breaks NanoMDM's baked `-ca` _and_ any Mac already trusting the old
 > root. Do steps 1→2→3 as one sequence, then enroll. Don't redeploy
 > step-ca after step 1.
 
@@ -71,18 +71,20 @@ call (secrets stay on your machine + the dashboard).
 5. **Wire the attestation webhook** on the `cocore-attest` provisioner so a
    successful `device-attest-01` posts the captured Apple x5c chain to the
    console ingest endpoint:
+
    ```sh
    STEPPATH=~/cocore-mdm/stepca-client step ca provisioner webhook add cocore-attest \
      cocore-chain --url https://console.cocore.dev/api/agent/mdm/attestation-chain \
      --kind ENRICHING \
      --bearer-token "$COCORE_MDM_CHAIN_INGEST_KEY"
    ```
+
    The webhook body must be `{ "serial": "<permanent-identifier>", "chain":
-   ["<b64-DER-leaf>", …] }` (leaf-first Apple x5c). **Validate the payload
+["<b64-DER-leaf>", …] }` (leaf-first Apple x5c). **Validate the payload
    shape** against your step-ca version — if it doesn't surface the Apple
    x5c directly, use the fallback shim below.
 
-   *Fallback if the webhook can't carry the x5c:* a 20-line poller that
+   _Fallback if the webhook can't carry the x5c:_ a 20-line poller that
    reads the issued order's attestation off step-ca's admin API by
    permanent-identifier (= serial) and `POST`s it to the same ingest URL.
    The console side is already done; only the source differs.
@@ -135,11 +137,13 @@ Redeploy the console. (The `/data` volume already backs the new
 ## Step 4 — Smoke test (no Mac required for 4a–4b)
 
 **4a. Coordinator is live (not 503).** With any valid agent API key:
+
 ```sh
 curl -s -X POST https://console.cocore.dev/api/agent/mdm/enroll-profile \
   -H "Authorization: Bearer $COCORE_API_KEY" -H 'content-type: application/json' \
   -d '{"serial":"H2WHW38LQ6NV","udid":"00008103-001869192E20801E"}' | jq '{enrollmentId, signed, len: (.profile|length)}'
 ```
+
 Expect a JSON envelope with `enrollmentId` + a base64 `profile`. Decode it
 and confirm it carries `com.apple.security.scep`, `com.apple.mdm`
 (AccessRights 3, SignMessage), and `com.apple.security.acme` (Attest) — and
@@ -147,6 +151,7 @@ and confirm it carries `com.apple.security.scep`, `com.apple.mdm`
 from step 3 is unset.
 
 **4b. push-attestation no longer 400s:**
+
 ```sh
 curl -s -X POST https://console.cocore.dev/api/agent/mdm/push-attestation \
   -H "Authorization: Bearer $COCORE_API_KEY" -H 'content-type: application/json' \
@@ -161,6 +166,7 @@ chain poll (`GET …/attestation-chain?serial=H2WHW38LQ6NV`) returns
 `status:"captured"` → provider flips to **hardware-attested**.
 
 Watch:
+
 - NanoMDM logs: `Authenticate serial_number=H2WHW38LQ6NV` + `TokenUpdate`.
 - step-ca logs: `challenge device-attest-01 status=valid`.
 - `curl …/attestation-chain?serial=H2WHW38LQ6NV` (with the agent key) →
@@ -172,7 +178,7 @@ Watch:
 
 - ✅ **Code (this branch):** SCEP/MDM/ACME enrollment profile, fail-closed
   503, wizard-400 fix (JSON envelope), push tolerance, durable chain store
-  + authenticated ingest endpoint, unit tests.
+  - authenticated ingest endpoint, unit tests.
 - ⏳ **Infra (you, dashboard / `step` CLI):** steps 1–3 above, plus the one
   judgment call in 1.5 (does your step-ca's webhook surface the Apple x5c,
   or do you need the poller shim?).

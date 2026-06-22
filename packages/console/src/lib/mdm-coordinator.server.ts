@@ -164,7 +164,7 @@ function pemBodyB64(pem: string | undefined): string {
 // Secure Mode config — resolved from env, fail-closed when incomplete.
 // ---------------------------------------------------------------------------
 
-export interface SecureMdmConfig {
+interface SecureMdmConfig {
   scepUrl: string;
   scepName: string;
   scepChallenge: string;
