@@ -1243,10 +1243,18 @@ async fn cmd_serve(
     // native engine serves under a hardened-attested posture.
     let mut attestation_inputs =
         attestation::build_stub_inputs(&session.did, &enc.public_key_b64());
+    // MDA option-B (the live macOS hardware-attested path): if the Secure Mode
+    // wizard wired the request env (URL + serial + UDID), ask the coordinator to
+    // trigger a key-bound DeviceInformation attestation (DeviceAttestationNonce =
+    // sha256(pubkey)) before we read the chain. Best-effort + fail-soft;
+    // Apple-rate-limited to ~weekly, so repeats are harmless. No-op unless wired.
+    cocore_provider::mda_loader::request_attestation(&signer.public_key_b64());
     let mda_cert_chain = cocore_provider::mda_loader::try_load();
     attestation_inputs.mda_cert_chain = mda_cert_chain;
-    // App Attest evidence (MDM-free hardware-attested path), bound to this
-    // machine's signing key. `build` re-verifies + only embeds it if it binds.
+    // App Attest evidence — bound to this signing key; `build` re-verifies + only
+    // embeds it if it binds. NB: App Attest is iOS-only (non-functional on macOS,
+    // DCAppAttestService.isSupported=false); this stays a no-op on the Mac and is
+    // retained for a future iOS companion. macOS binds via the MDA chain above.
     attestation_inputs.app_attest =
         cocore_provider::mda_loader::load_appattest(&signer.public_key_b64());
     attestation_inputs.in_process_backend = engines.entries().iter().any(|(_, e)| e.in_process());
