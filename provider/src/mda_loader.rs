@@ -687,6 +687,9 @@ mod tests {
             for line in pem.lines() {
                 writeln!(f, "printf '%s\\n' {}", shell_escape(line)).unwrap();
             }
+            // Flush + fsync so the bytes are on disk and this write fd is fully
+            // released before we exec — shrinks the ETXTBSY window on Linux.
+            f.sync_all().unwrap();
         }
         let script_path = script.into_temp_path();
 
@@ -696,7 +699,34 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&script_path, perms).unwrap();
 
-        let chain = load_from_binary(&script_path).unwrap();
+        // Linux can transiently return ETXTBSY ("Text file busy") when exec'ing
+        // a file whose write fd the kernel only just released — even after the
+        // sync + drop above. `load_from_binary` surfaces that as an `Err` (from
+        // `Command::spawn`), so retry a few times to keep the test hermetic on
+        // CI. Normally succeeds on the first attempt; the loop only spins on the
+        // rare race (≤ ~0.5s worst case).
+        let chain = {
+            let mut got = None;
+            let mut last_err = None;
+            for _ in 0..25 {
+                match load_from_binary(&script_path) {
+                    Ok(c) => {
+                        got = Some(c);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e);
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
+            }
+            got.unwrap_or_else(|| {
+                panic!(
+                    "load_from_binary failed after retries: {:#}",
+                    last_err.unwrap()
+                )
+            })
+        };
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0], bodies[0]);
     }
