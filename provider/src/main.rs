@@ -64,6 +64,11 @@ enum AgentCmd {
     },
     /// Print the active session's identity for debugging.
     Whoami,
+    /// Print this machine's receipt-signing P-256 public key (base64 of the
+    /// raw 64-byte X‖Y point — the value published as `attestation.publicKey`).
+    /// The App Attest helper hashes this for its clientDataHash binding; the
+    /// spike runner reads it via this command.
+    Pubkey,
     /// Print this machine's owner-chosen trust tier from its PDS provider
     /// record: `attested-confidential` or `best-effort`. The macOS tray's
     /// agent supervisor runs this to decide which worker binary to spawn (the
@@ -201,6 +206,7 @@ async fn main() -> Result<()> {
         Cmd::Agent(AgentCmd::Pair { console }) => cmd_pair(&console).await,
         Cmd::Agent(AgentCmd::Serve { advisor }) => cmd_serve_entry(advisor).await,
         Cmd::Agent(AgentCmd::Whoami) => cmd_whoami(),
+        Cmd::Agent(AgentCmd::Pubkey) => cmd_pubkey(),
         Cmd::Agent(AgentCmd::Tier) => cmd_print_tier().await,
         Cmd::Agent(AgentCmd::Confidential { off }) => cmd_set_confidential(!off).await,
         Cmd::Agent(AgentCmd::Doctor { console, fix }) => doctor::run(&console, fix).await,
@@ -1238,8 +1244,11 @@ async fn cmd_serve(
     let mut attestation_inputs =
         attestation::build_stub_inputs(&session.did, &enc.public_key_b64());
     let mda_cert_chain = cocore_provider::mda_loader::try_load();
-    let has_mda_chain = !mda_cert_chain.is_empty();
     attestation_inputs.mda_cert_chain = mda_cert_chain;
+    // App Attest evidence (MDM-free hardware-attested path), bound to this
+    // machine's signing key. `build` re-verifies + only embeds it if it binds.
+    attestation_inputs.app_attest =
+        cocore_provider::mda_loader::load_appattest(&signer.public_key_b64());
     attestation_inputs.in_process_backend = engines.entries().iter().any(|(_, e)| e.in_process());
     attestation_inputs.metallib_hash = engines
         .entries()
@@ -1252,7 +1261,11 @@ async fn cmd_serve(
     let built_attestation = attestation::build(attestation_inputs, &*signer);
     let (achieved_trust_level, achieved_tier) = match &built_attestation {
         Ok(rec) => (
-            if has_mda_chain {
+            // Derive from what the attestation ACTUALLY embedded, not from what
+            // was loaded: `build` drops any MDA chain / App Attest object that
+            // doesn't verify Apple-rooted AND bind to our signing key. Either a
+            // bound MDA chain or bound App Attest earns hardware-attested.
+            if !rec.mdaCertChain.is_empty() || rec.appAttest.is_some() {
                 TrustLevel::HardwareAttested
             } else {
                 TrustLevel::SelfAttested
@@ -2190,6 +2203,15 @@ fn cmd_whoami() -> Result<()> {
         }
         None => println!("not paired; run `cocore agent pair`"),
     }
+    Ok(())
+}
+
+/// `cocore agent pubkey`: print the base64 receipt-signing public key. Loads
+/// (or creates) the Secure Enclave identity, same as the serve loop, so the
+/// printed key matches what attestations publish.
+fn cmd_pubkey() -> Result<()> {
+    let signer = secure_enclave::load_or_create_identity()?;
+    println!("{}", signer.public_key_b64());
     Ok(())
 }
 

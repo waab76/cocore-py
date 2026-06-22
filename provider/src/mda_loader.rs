@@ -100,6 +100,12 @@ pub const ENV_CHAIN_PATH: &str = "COCORE_MDA_CERT_CHAIN_PATH";
 pub const ENV_CHAIN_URL: &str = "COCORE_MDA_CHAIN_URL";
 pub const ENV_ATTEST_BINARY: &str = "COCORE_MDA_ATTEST_BINARY";
 
+/// Path to the signed App Attest helper (`cocore-appattest`). Distinct from
+/// `ENV_ATTEST_BINARY` (which yields a PEM MDA chain): this helper is invoked
+/// with the signing pubkey as argv[1] and emits JSON `{object, keyId}` for the
+/// App Attest path to hardware-attested. See `provider/spikes/app-attest`.
+pub const ENV_APPATTEST_BINARY: &str = "COCORE_APPATTEST_BINARY";
+
 /// Max time the attest-binary subprocess may run before we give
 /// up. Apple's DeviceCheck call typically resolves in well under
 /// a second; a 10-second ceiling is generous-but-bounded so a
@@ -189,6 +195,95 @@ pub fn try_load() -> Vec<Vec<u8>> {
     }
 
     Vec::new()
+}
+
+/// Acquire Apple App Attest evidence bound to `signing_pubkey_b64`.
+///
+/// Runs the helper named by `COCORE_APPATTEST_BINARY` with the base64 signing
+/// public key as argv[1]; the helper sets `clientDataHash = sha256(pubkey)` and
+/// emits JSON `{ "object": "<b64 CBOR>", "keyId": "<b64>", ... }` on stdout.
+///
+/// Returns `None` when the env var is unset, the helper fails / times out, or
+/// the output is malformed — the agent stays self-attested on the App Attest
+/// path rather than refusing to boot (same fail-soft posture as `try_load`).
+/// Note the caller (`attestation::build`) still re-verifies the evidence
+/// locally before embedding it, so a buggy helper can never elevate trust.
+pub fn load_appattest(signing_pubkey_b64: &str) -> Option<crate::attestation::AppAttestEvidence> {
+    let bin = std::env::var(ENV_APPATTEST_BINARY).ok()?;
+    match run_appattest_binary(Path::new(&bin), signing_pubkey_b64) {
+        Ok(ev) => {
+            tracing::info!(binary = %bin, "acquired App Attest evidence");
+            Some(ev)
+        }
+        Err(e) => {
+            tracing::warn!(binary = %bin, error = %e, "App Attest helper invocation failed; staying self-attested");
+            None
+        }
+    }
+}
+
+/// Invoke the App Attest helper with the signing pubkey and parse its JSON.
+fn run_appattest_binary(
+    binary: &Path,
+    signing_pubkey_b64: &str,
+) -> Result<crate::attestation::AppAttestEvidence> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    let mut child = Command::new(binary)
+        .arg(signing_pubkey_b64)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped()) // captured but never logged (may carry device IDs)
+        .spawn()
+        .with_context(|| format!("spawning {}", binary.display()))?;
+
+    let deadline = Instant::now() + ATTEST_BINARY_TIMEOUT;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if !status.success() {
+                bail!("App Attest helper exited with {status}");
+            }
+            break;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            bail!(
+                "App Attest helper did not exit within {}s; killed",
+                ATTEST_BINARY_TIMEOUT.as_secs()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let mut stdout_buf = Vec::new();
+    if let Some(mut s) = child.stdout.take() {
+        s.read_to_end(&mut stdout_buf)
+            .context("reading App Attest helper stdout")?;
+    }
+    parse_appattest_json(&stdout_buf)
+}
+
+/// Parse the helper's stdout JSON into an [`AppAttestEvidence`]. Only `object`
+/// and `keyId` are consumed; the helper's other fields (clientDataHashHex,
+/// appId, environment) are diagnostic and ignored here.
+pub fn parse_appattest_json(stdout: &[u8]) -> Result<crate::attestation::AppAttestEvidence> {
+    #[derive(serde::Deserialize)]
+    struct Out {
+        object: String,
+        #[serde(rename = "keyId")]
+        key_id: String,
+    }
+    let s = std::str::from_utf8(stdout).context("App Attest helper stdout is not UTF-8")?;
+    let out: Out = serde_json::from_str(s.trim()).context("parsing App Attest helper JSON")?;
+    if out.object.is_empty() || out.key_id.is_empty() {
+        bail!("App Attest helper returned empty object or keyId");
+    }
+    Ok(crate::attestation::AppAttestEvidence {
+        object: out.object,
+        keyId: out.key_id,
+    })
 }
 
 /// Read a PEM file and return one DER blob per CERTIFICATE block,
