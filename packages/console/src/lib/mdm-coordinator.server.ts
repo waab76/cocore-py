@@ -911,7 +911,7 @@ function extractSerialFromPlist(plistXml: string): string | null {
  *  `chain` field holds `[base64(rawBody)]`). Alphanumeric so it passes
  *  isValidSerial. Leave the env UNSET in production — MDM payloads carry device
  *  info; this is a debug-only seam for bringing up a new device. */
-export const WEBHOOK_DEBUG_SERIAL = "zzwebhookdebuglast";
+const WEBHOOK_DEBUG_SERIAL = "zzwebhookdebuglast";
 
 /** Persist the raw webhook body for inspection when COCORE_MDM_WEBHOOK_DEBUG is
  *  set; no-op otherwise. Returns whether it stashed. */
