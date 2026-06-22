@@ -913,16 +913,24 @@ function extractSerialFromPlist(plistXml: string): string | null {
  *  info; this is a debug-only seam for bringing up a new device. */
 const WEBHOOK_DEBUG_SERIAL = "zzwebhookdebuglast";
 
-/** Persist the raw webhook body for inspection when COCORE_MDM_WEBHOOK_DEBUG is
- *  set; no-op otherwise. Returns whether it stashed. */
+/** Newest-N webhook bodies kept by the debug stash. A device's command result
+ *  arrives immediately before a trailing `Status: Idle` poll, and the stash is
+ *  one row keyed by WEBHOOK_DEBUG_SERIAL — so a single-slot stash lets Idle
+ *  clobber the result we care about. Keep a small ring so the result survives. */
+const WEBHOOK_DEBUG_KEEP = 20;
+
+/** Append the raw webhook body to a capped ring for inspection when
+ *  COCORE_MDM_WEBHOOK_DEBUG is set; no-op otherwise. Exposed via
+ *  `GET attestation-chain?serial=zzwebhookdebuglast` (the `chain` field is the
+ *  base64 bodies, oldest→newest). Returns whether it stashed. */
 export function maybeStashWebhookDebug(rawBody: string, nowIso: string): boolean {
   if (!env("COCORE_MDM_WEBHOOK_DEBUG")) return false;
   try {
-    putAttestationChain(
-      WEBHOOK_DEBUG_SERIAL,
-      [Buffer.from(rawBody, "utf8").toString("base64")],
-      nowIso,
+    const prior = getAttestationChain(WEBHOOK_DEBUG_SERIAL)?.chain ?? [];
+    const next = [...prior, Buffer.from(rawBody, "utf8").toString("base64")].slice(
+      -WEBHOOK_DEBUG_KEEP,
     );
+    putAttestationChain(WEBHOOK_DEBUG_SERIAL, next, nowIso);
     return true;
   } catch {
     return false;
