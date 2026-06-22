@@ -226,9 +226,33 @@ function oauthRestoreSessionEffect(did: Did): Effect.Effect<RestoredSession, unk
   });
 }
 
+// DIAGNOSTIC: restore historically swallowed ANY error into `null`, so a dead
+// session was indistinguishable from a refresh-failure / store-miss / DPoP
+// problem. Capture the last failure reason per DID (logged + surfaced in the
+// 401 body) so we can finally see WHY a freshly-authed session won't restore.
+const lastRestoreErrorByDid = new Map<string, string>();
+
+export function lastRestoreError(did: string): string | undefined {
+  return lastRestoreErrorByDid.get(did);
+}
+
 export const restoreAtprotoSessionEffect = (did: Did): Effect.Effect<RestoredSession | null> =>
   Effect.gen(function* () {
     const outcome = yield* Effect.either(oauthRestoreSessionEffect(did));
-    if (Either.isLeft(outcome)) return null;
+    if (Either.isLeft(outcome)) {
+      const reason =
+        outcome.left instanceof Error
+          ? `${outcome.left.name}: ${outcome.left.message}`
+          : String(outcome.left);
+      lastRestoreErrorByDid.set(did, reason.slice(0, 300));
+      console.error(`[atproto.restore] FAILED did=${did} reason=${reason}`);
+      return null;
+    }
+    if (outcome.right == null) {
+      lastRestoreErrorByDid.set(did, "restore returned null (no stored session)");
+      console.error(`[atproto.restore] null session did=${did} (no stored session)`);
+      return null;
+    }
+    lastRestoreErrorByDid.delete(did);
     return outcome.right;
   });

@@ -19,7 +19,10 @@ import { Duration, Effect, Schedule } from "effect";
 
 import { runTraced } from "@/lib/o11y.server.ts";
 
-import { restoreAtprotoSessionEffect } from "@/integrations/auth/atproto.server.ts";
+import {
+  lastRestoreError,
+  restoreAtprotoSessionEffect,
+} from "@/integrations/auth/atproto.server.ts";
 import { resolveBearerKey } from "@/lib/api-keys.server.ts";
 import { forwardPdsWrite, isAppviewForwardConfigured } from "@/lib/appview-pds-forward.server.ts";
 import { cocoreConfig } from "@/lib/cocore-config.ts";
@@ -117,7 +120,14 @@ function resolveCallerDid(request: Request): { did: Did } | Response {
 async function restoreSessionOr401(did: Did) {
   const session = await runTraced("auth.restoreSession", restoreAtprotoSessionEffect(did));
   if (!session) {
-    return jsonError(401, "underlying ATProto session no longer valid; re-authenticate");
+    // DIAGNOSTIC: include the captured restore-failure reason so the cause is
+    // visible without server log access (refresh invalid_grant vs no stored
+    // session vs DPoP/keyset mismatch). See atproto.server.ts lastRestoreError.
+    const reason = lastRestoreError(did) ?? "unknown";
+    return jsonError(
+      401,
+      `underlying ATProto session no longer valid; re-authenticate (${reason})`,
+    );
   }
   return session;
 }
