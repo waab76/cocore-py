@@ -363,6 +363,20 @@ final class ModelManager: ObservableObject {
             return w <= ModelManager.budgetGB
         }
 
+        /// True for vision / multimodal (image-input) models — identified by the
+        /// HF `pipeline_tag`, the authoritative signal. The agent's inference
+        /// path is text-only (vllm-mlx serves text LLMs; the chat sends no
+        /// images), so these can't be served and adding one fails provisioning.
+        var isVision: Bool {
+            guard let tag = pipelineTag else { return false }
+            return [
+                "image-text-to-text",
+                "image-to-text",
+                "visual-question-answering",
+                "video-text-to-text",
+            ].contains(tag)
+        }
+
         /// A short human descriptor from the model's HF metadata: the friendly
         /// task name plus the quantization (e.g. "Text generation · 4-bit").
         var subtitle: String? {
@@ -1487,7 +1501,11 @@ struct ModelsView: View {
 
     /// One HuggingFace search result: the NSID, its download count, and Add.
     @ViewBuilder private func searchRow(_ r: ModelManager.CatalogResult) -> some View {
+        let vision = r.isVision
+        // Vision models can't be served at all, so they take precedence over the
+        // budget check for the row's disabled/dimmed state.
         let fits = r.fitsBudget
+        let addable = fits && !vision
         // "needs ~14 GB (weights) · 12.3K downloads" — weight footprint omitted
         // when the size is unknown. KV cache rides on top at serve time.
         let ram: String? = r.weightGB.map { "needs ~\($0) GB (weights)" }
@@ -1506,17 +1524,24 @@ struct ModelsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.tail)
                 }
+                if vision {
+                    // Authoritative HF pipeline_tag says this is multimodal —
+                    // the text-only path can't serve it, so say so plainly.
+                    Text("Vision model — co/core serves text only")
+                        .font(.footnote).foregroundStyle(.orange)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
                 Text(stats)
                     .font(.footnote)
-                    .foregroundStyle(fits ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
+                    .foregroundStyle(addable ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
             }
             Spacer()
             Button("Add") { Task { await manager.add(r.id) } }
                 .buttonStyle(.bordered)
                 .tint(Color(nsColor: .controlAccentColor))
-                .disabled(manager.busy || !fits || manager.models.contains(r.id))
+                .disabled(manager.busy || !addable || manager.models.contains(r.id))
         }
-        .opacity(fits ? 1 : 0.65)
+        .opacity(addable ? 1 : 0.65)
     }
 
     /// Compact download count, e.g. 1_234_567 → "1.2M", 9_400 → "9.4K".
