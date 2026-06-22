@@ -266,3 +266,68 @@ scripts/inspect-mda-freshness.sh leaf.pem "$(cocore agent pubkey)"
   verifiers (all 4), and `inspect-mda-freshness.sh`.
 - ⏳ **Infra/ops (you):** NanoMDM `-webhook-url` + `COCORE_NANOMDM_WEBHOOK_KEY`,
   the agent env wiring, and the one-capture freshness-bytes confirmation above.
+
+---
+
+## Option-B bring-up — corrected procedure (live-validated 2026-06-22)
+
+Standing up the MDM backend durably surfaced several gotchas. This is the
+working sequence; it supersedes the optimistic notes above.
+
+**A. step-ca must be DURABLE + REMOTE-MANAGED.** The throwaway ephemeral
+instance re-inits a new root + admin password on every redeploy and has no
+admin API (`/admin/*` → 404), so provisioners can't be managed. On
+`cocore-step-ca`: attach the volume at `/home/step` and set
+`DOCKER_STEPCA_INIT_REMOTE_MANAGEMENT=true`, `RAILWAY_RUN_UID=0`,
+`DOCKER_STEPCA_INIT_DNS_NAMES=reseau.proxy.rlwy.net,cocore-step-ca-production.up.railway.app,localhost`.
+First boot prints the **root fingerprint** + **admin password** (capture both,
+once). Bootstrap a context: `step ca bootstrap --ca-url <CA> --fingerprint <fp>`.
+
+**B. SCEP needs an RSA decrypter (EC CA can't do SCEP key transport).** Symptom:
+macOS profile install fails _"Unable to generate certificate signing request for
+SCEP server"_; `GetCACert` returns the bare EC intermediate. Fix: an RSA
+recipient cert the device encrypts the pkcsPKIEnvelope to.
+
+```sh
+openssl req -x509 -newkey rsa:2048 -keyout decrypter.key -out decrypter.crt -days 3650 -nodes \
+  -subj "/CN=cocore-scep-decrypter" -addext "keyUsage=critical,keyEncipherment,digitalSignature"
+ADMIN=(--admin-provisioner admin --admin-subject step --admin-password-file admin-pw.txt --ca-url <CA> --root root.pem)
+step ca provisioner add cocore-attest --type ACME --challenge device-attest-01 --attestation-format apple "${ADMIN[@]}"
+step ca provisioner add cocore-scep --type SCEP --challenge "$(cat scep-challenge.txt)" \
+  --encryption-algorithm-identifier 2 --include-root \
+  --scep-decrypter-certificate-file decrypter.crt --scep-decrypter-key-file decrypter.key "${ADMIN[@]}"
+```
+
+Verify: `GetCACert` now returns a 3-cert bundle led by `CN=cocore-scep-decrypter`
+(key=RSA). ACME routes mount at runtime, but the **SCEP route only mounts at
+boot — RESTART step-ca** after adding `cocore-scep` (a plain restart; the volume
+means no re-init, root preserved).
+
+**C. Re-sync the (new) root everywhere.** A fresh init mints a new root, so:
+Client env `COCORE_MDM_ROOT_CA_PEM` + `COCORE_MDM_INTERMEDIATE_CA_PEM` = new
+PEMs (redeploy Client); and re-bake NanoMDM `-ca` = intermediate+root
+(`nanomdm-deploy/ca.pem`, then `railway up`). NanoMDM uses **file storage**
+(ephemeral) — every redeploy wipes the push cert + enrollments, so **re-upload
+the push cert after any NanoMDM deploy** (`…/v1/pushcert`) and enroll only after.
+(Persist NanoMDM on Postgres — Step 2 — to stop this churn.)
+
+**D. NanoMDM webhook.** `-webhook-url 'https://cocore.dev/api/agent/mdm/nanomdm-webhook?key=<SECRET>'`
+
+- Client env `COCORE_NANOMDM_WEBHOOK_KEY=<SECRET>`. NanoMDM POSTs the URL
+  verbatim (no query mangling), so the `?key=` secret survives; the event shape is
+  `{topic, acknowledge_event:{udid, raw_payload:<base64 plist>}}`.
+
+**E. The DeviceInformation command (the binding).** `DeviceAttestationNonce` is
+`<data>` (raw 32 bytes = sha256(pubkey)); `Queries` must include BOTH
+`DevicePropertiesAttestation` (the leaf chain) AND `SerialNumber` (the event only
+carries the UDID, but the chain store is keyed by serial). Apple rate-limits this
+to ~1/device/7 days.
+
+**F. End-to-end (proven up to enrollment 2026-06-22).** `enroll-profile`
+(use the Hardware UUID as the udid) → install the profile (Touch ID; SCEP now
+succeeds) → `request-attestation {serial, udid, publicKey}` → NanoMDM pushes →
+device returns the attestation → webhook stores by serial → agent polls
+`attestation-chain?serial=…` → `scripts/inspect-mda-freshness.sh` confirms
+`freshness == sha256(pubkey)`. Debug seam: set `COCORE_MDM_WEBHOOK_DEBUG=1` on
+the Client and read the raw webhook payload via
+`GET attestation-chain?serial=zzwebhookdebuglast`.

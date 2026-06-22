@@ -121,10 +121,13 @@ export function authenticateChainIngest(request: Request): boolean {
  *  profile. */
 const SERIAL_RE = /^[A-Za-z0-9]{8,24}$/;
 
-/** A UDID is a 40-hex string (legacy) or a UUID-shaped string on newer
- *  hardware. Accept both forms. */
+/** A UDID is one of: a 40-hex string (legacy); a UUID-shaped string (the
+ *  Hardware UUID macOS reports as its MDM enrollment id); or the Apple-silicon
+ *  Provisioning-UDID form `8hex-16hex` (e.g. 00008103-001869192E20801E). Accept
+ *  all three — the 8-16 form was previously rejected, which blocked real M-series
+ *  devices from enroll-profile / request-attestation. */
 const UDID_RE =
-  /^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+  /^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{8}-[0-9a-fA-F]{16})$/;
 
 export function isValidSerial(v: unknown): v is string {
   return typeof v === "string" && SERIAL_RE.test(v);
@@ -682,14 +685,23 @@ export function attestationNonceBytes(publicKeyB64: string): Buffer {
 }
 
 /** Build the MDM `DeviceInformation` command that requests a fresh hardware
- *  attestation bound to `nonceBytes`. `Queries: [DevicePropertiesAttestation]`
- *  asks for the attestation; `DeviceAttestationNonce` forces a fresh one whose
- *  freshness OID equals the nonce. */
+ *  attestation bound to `nonceBytes`.
+ *
+ *  Per Apple's device-management schema (mdm/commands/information.device.yaml):
+ *   - `DeviceAttestationNonce` is type **`<data>`** (NOT `<string>`) — the raw
+ *     nonce bytes; sending a string makes the command malformed and the device
+ *     returns no attestation. Because we carry the 32 raw bytes here, the leaf's
+ *     freshness OID equals exactly `sha256(pubkey)` — what the verifiers check.
+ *   - `Queries` requests `DevicePropertiesAttestation` (the attestation, an
+ *     array of DER certs in the response) AND `SerialNumber` — the response only
+ *     includes fields you query, and the NanoMDM webhook event identifies the
+ *     device by UDID, so we need the serial in the response to key the chain
+ *     store (which the agent polls by serial). */
 export function buildDeviceInformationAttestationCommand(
   commandUuid: string,
   nonceBytes: Buffer,
 ): string {
-  const nonceB64 = nonceBytes.toString("base64");
+  const nonceB64 = nonceBytes.toString("base64"); // plist <data> content is base64
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -703,9 +715,10 @@ export function buildDeviceInformationAttestationCommand(
     <key>Queries</key>
     <array>
       <string>DevicePropertiesAttestation</string>
+      <string>SerialNumber</string>
     </array>
     <key>DeviceAttestationNonce</key>
-    <string>${nonceB64}</string>
+    <data>${nonceB64}</data>
   </dict>
 </dict>
 </plist>
@@ -890,4 +903,28 @@ function extractDevicePropertiesAttestation(plistXml: string): string[] | null {
 function extractSerialFromPlist(plistXml: string): string | null {
   const m = plistXml.match(/<key>\s*SerialNumber\s*<\/key>\s*<string>([^<]+)<\/string>/i);
   return m ? m[1]!.trim() : null;
+}
+
+/** A reserved serial under which the webhook stashes the last raw payload when
+ *  COCORE_MDM_WEBHOOK_DEBUG is set, so an operator can inspect exactly what
+ *  NanoMDM posts via `GET attestation-chain?serial=zzwebhookdebuglast` (the
+ *  `chain` field holds `[base64(rawBody)]`). Alphanumeric so it passes
+ *  isValidSerial. Leave the env UNSET in production — MDM payloads carry device
+ *  info; this is a debug-only seam for bringing up a new device. */
+export const WEBHOOK_DEBUG_SERIAL = "zzwebhookdebuglast";
+
+/** Persist the raw webhook body for inspection when COCORE_MDM_WEBHOOK_DEBUG is
+ *  set; no-op otherwise. Returns whether it stashed. */
+export function maybeStashWebhookDebug(rawBody: string, nowIso: string): boolean {
+  if (!env("COCORE_MDM_WEBHOOK_DEBUG")) return false;
+  try {
+    putAttestationChain(
+      WEBHOOK_DEBUG_SERIAL,
+      [Buffer.from(rawBody, "utf8").toString("base64")],
+      nowIso,
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }

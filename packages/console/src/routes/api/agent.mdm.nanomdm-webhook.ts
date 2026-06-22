@@ -21,6 +21,7 @@ import {
   authenticateNanomdmWebhook,
   ingestAttestationChain,
   isValidSerial,
+  maybeStashWebhookDebug,
   mdmJson,
   parseNanomdmAttestationWebhook,
 } from "@/lib/mdm-coordinator.server.ts";
@@ -32,9 +33,14 @@ export const Route = createFileRoute("/api/agent/mdm/nanomdm-webhook")({
         if (!authenticateNanomdmWebhook(request)) {
           return mdmJson({ error: "invalid or missing nanomdm-webhook bearer" }, 401);
         }
+        const rawBody = await request.text();
+        // Debug seam (COCORE_MDM_WEBHOOK_DEBUG): stash the raw payload so a new
+        // device's exact webhook shape is inspectable via
+        // GET attestation-chain?serial=zzwebhookdebuglast. No-op in prod.
+        maybeStashWebhookDebug(rawBody, new Date().toISOString());
         let body: unknown;
         try {
-          body = await request.json();
+          body = JSON.parse(rawBody);
         } catch {
           return mdmJson({ error: "body must be JSON" }, 400);
         }

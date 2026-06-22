@@ -34,8 +34,8 @@ const SCEP_KEYS = [
 ];
 
 const SERIAL = "H2WHW38LQ6NV";
-const UDID = "00008103-001869192E20801E"; // not a valid UDID_RE form on its own
-const REAL_UDID = "A1B2C3D4-1111-2222-3333-444455556666";
+const UDID = "00008103-001869192E20801E"; // Apple-silicon Provisioning UDID (8hex-16hex)
+const REAL_UDID = "A1B2C3D4-1111-2222-3333-444455556666"; // Hardware UUID form
 
 function clearEnv(): void {
   for (const k of SCEP_KEYS) delete process.env[k];
@@ -67,11 +67,14 @@ afterEach(() => {
 });
 
 describe("validation", () => {
-  it("accepts real Apple serials and UUID-form UDIDs, rejects garbage", () => {
+  it("accepts real Apple serials + UUID and Apple-silicon UDID forms, rejects garbage", () => {
     expect(isValidSerial(SERIAL)).toBe(true);
     expect(isValidSerial("no-dashes-allowed")).toBe(false);
-    expect(isValidUdid(REAL_UDID)).toBe(true);
-    expect(isValidUdid(UDID)).toBe(false); // hyphenated but wrong group sizes
+    expect(isValidUdid(REAL_UDID)).toBe(true); // Hardware UUID form
+    expect(isValidUdid(UDID)).toBe(true); // Apple-silicon Provisioning UDID (8hex-16hex)
+    expect(isValidUdid("0123456789abcdef0123456789abcdef01234567")).toBe(true); // 40-hex legacy
+    expect(isValidUdid("not-a-udid")).toBe(false);
+    expect(isValidUdid("00008103-ZZZZ69192E20801E")).toBe(false); // non-hex
   });
 });
 
@@ -192,7 +195,7 @@ describe("option-B DeviceInformation attestation (freshness binding)", () => {
     expect(nonce.equals(expected)).toBe(true);
   });
 
-  it("builds a DeviceInformation command carrying DevicePropertiesAttestation + the nonce", () => {
+  it("builds a DeviceInformation command: nonce as <data>, queries attestation + serial", () => {
     const nonce = attestationNonceBytes(PUBKEY_B64);
     const cmd = buildDeviceInformationAttestationCommand(
       "ABCDEF01-2345-6789-ABCD-EF0123456789",
@@ -200,9 +203,15 @@ describe("option-B DeviceInformation attestation (freshness binding)", () => {
     );
     expect(cmd).toContain("<string>DeviceInformation</string>");
     expect(cmd).toContain("<string>DevicePropertiesAttestation</string>");
-    expect(cmd).toContain("<key>DeviceAttestationNonce</key>");
-    // The nonce rides as base64 in the command.
-    expect(cmd).toContain(nonce.toString("base64"));
+    // Must query SerialNumber too — the webhook event has only the UDID, and the
+    // chain store is keyed by serial, so the response must carry the serial.
+    expect(cmd).toContain("<string>SerialNumber</string>");
+    // DeviceAttestationNonce MUST be <data> (Apple schema), carrying the raw
+    // 32-byte sha256(pubkey) as base64 — so freshness == sha256(pubkey) exactly.
+    expect(cmd).toContain(
+      `<key>DeviceAttestationNonce</key>\n    <data>${nonce.toString("base64")}</data>`,
+    );
+    expect(cmd).not.toContain(`<string>${nonce.toString("base64")}</string>`);
   });
 
   it("requestDeviceInformationAttestation errors without an MDM target", async () => {
@@ -256,26 +265,33 @@ describe("option-B DeviceInformation attestation (freshness binding)", () => {
     expect(parseNanomdmAttestationWebhook("nope")).toBeNull();
   });
 
-  it("parses a NanoMDM acknowledge_event.raw_payload (the live webhook shape)", () => {
-    const responsePlist = `<?xml version="1.0"?>
+  it("parses the REAL NanoMDM event: acknowledge_event.raw_payload, serial from QueryResponses", () => {
+    // Mirrors micromdm/nanomdm testdata/DeviceInformation.1.json: the event has
+    // NO top-level serial (only acknowledge_event.udid); the queried SerialNumber
+    // + DevicePropertiesAttestation land inside the response's QueryResponses.
+    const responsePlist = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
-  <key>SerialNumber</key><string>H2WHW38LQ6NV</string>
+  <key>CommandUUID</key><string>76eda240-5488-4989-8339-f2ae160113c4</string>
   <key>QueryResponses</key><dict>
     <key>DevicePropertiesAttestation</key>
     <array><data>bGVhZg==</data><data>aW50ZXI=</data></array>
+    <key>SerialNumber</key><string>H2WHW38LQ6NV</string>
   </dict>
+  <key>Status</key><string>Acknowledged</string>
 </dict></plist>`;
     const payload = {
       topic: "mdm.Connect",
+      event_id: "e1",
       acknowledge_event: {
-        udid: "00008103-001869192E20801E",
+        command_uuid: "76eda240-5488-4989-8339-f2ae160113c4",
+        udid: "376AF848-8EC9-5336-AB51-0801857F726D",
         status: "Acknowledged",
         raw_payload: Buffer.from(responsePlist, "utf8").toString("base64"),
       },
     };
     const parsed = parseNanomdmAttestationWebhook(payload);
     expect(parsed).not.toBeNull();
-    expect(parsed!.serial).toBe("H2WHW38LQ6NV");
+    expect(parsed!.serial).toBe("H2WHW38LQ6NV"); // pulled from the plist, not the event
     expect(parsed!.chain).toEqual(["bGVhZg==", "aW50ZXI="]);
   });
 
