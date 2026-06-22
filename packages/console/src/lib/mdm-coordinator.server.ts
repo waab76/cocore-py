@@ -793,12 +793,24 @@ export async function requestDeviceInformationAttestation(
   }
 }
 
-/** Authenticate a NanoMDM webhook POST (the device's command results). Bearer
- *  COCORE_NANOMDM_WEBHOOK_KEY, constant-time, fail-closed when unset. */
+/** Authenticate a NanoMDM webhook POST (the device's command results).
+ *
+ *  Secret = COCORE_NANOMDM_WEBHOOK_KEY, constant-time, fail-closed when unset.
+ *  NanoMDM's `-webhook-url` does NOT send an Authorization header, so the
+ *  operator embeds the secret in the URL as `?key=<secret>` — that's the
+ *  primary check. A Bearer header is also accepted (e.g. for manual posts /
+ *  a future webhook proxy that adds one). */
 export function authenticateNanomdmWebhook(request: Request): boolean {
   const expected = env("COCORE_NANOMDM_WEBHOOK_KEY");
   if (!expected) return false;
-  const got = readBearer(request);
+  const fromQuery = (() => {
+    try {
+      return new URL(request.url).searchParams.get("key");
+    } catch {
+      return null;
+    }
+  })();
+  const got = fromQuery ?? readBearer(request);
   if (!got || got.length !== expected.length) return false;
   let diff = 0;
   for (let i = 0; i < expected.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);

@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import {
   attestationIsBundled,
   attestationNonceBytes,
+  authenticateNanomdmWebhook,
   buildDeviceInformationAttestationCommand,
   buildEnrollmentProfile,
   isValidSerial,
@@ -248,5 +249,45 @@ describe("option-B DeviceInformation attestation (freshness binding)", () => {
     expect(parseNanomdmAttestationWebhook({ topic: "mdm.TokenUpdate", serial: "H2WHW38LQ6NV" })).toBeNull();
     expect(parseNanomdmAttestationWebhook(null)).toBeNull();
     expect(parseNanomdmAttestationWebhook("nope")).toBeNull();
+  });
+
+  it("parses a NanoMDM acknowledge_event.raw_payload (the live webhook shape)", () => {
+    const responsePlist = `<?xml version="1.0"?>
+<plist version="1.0"><dict>
+  <key>SerialNumber</key><string>H2WHW38LQ6NV</string>
+  <key>QueryResponses</key><dict>
+    <key>DevicePropertiesAttestation</key>
+    <array><data>bGVhZg==</data><data>aW50ZXI=</data></array>
+  </dict>
+</dict></plist>`;
+    const payload = {
+      topic: "mdm.Connect",
+      acknowledge_event: {
+        udid: "00008103-001869192E20801E",
+        status: "Acknowledged",
+        raw_payload: Buffer.from(responsePlist, "utf8").toString("base64"),
+      },
+    };
+    const parsed = parseNanomdmAttestationWebhook(payload);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.serial).toBe("H2WHW38LQ6NV");
+    expect(parsed!.chain).toEqual(["bGVhZg==", "aW50ZXI="]);
+  });
+
+  it("authenticateNanomdmWebhook accepts the ?key= URL secret and a bearer; rejects wrong/unset", () => {
+    process.env["COCORE_NANOMDM_WEBHOOK_KEY"] = "s3cr3t-webhook-key-value";
+    const viaQuery = new Request("https://c.test/api/agent/mdm/nanomdm-webhook?key=s3cr3t-webhook-key-value", {
+      method: "POST",
+    });
+    const viaBearer = new Request("https://c.test/api/agent/mdm/nanomdm-webhook", {
+      method: "POST",
+      headers: { authorization: "Bearer s3cr3t-webhook-key-value" },
+    });
+    const wrong = new Request("https://c.test/api/agent/mdm/nanomdm-webhook?key=nope", { method: "POST" });
+    expect(authenticateNanomdmWebhook(viaQuery)).toBe(true);
+    expect(authenticateNanomdmWebhook(viaBearer)).toBe(true);
+    expect(authenticateNanomdmWebhook(wrong)).toBe(false);
+    delete process.env["COCORE_NANOMDM_WEBHOOK_KEY"];
+    expect(authenticateNanomdmWebhook(viaQuery)).toBe(false); // fail-closed when unset
   });
 });

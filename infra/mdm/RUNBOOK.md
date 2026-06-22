@@ -216,9 +216,11 @@ publishes while the signing key is stable.
 ### Wire-up (code is done; these are the config/ops steps)
 
 1. **NanoMDM → console webhook.** Run NanoMDM with
-   `-webhook-url https://console.cocore.dev/api/agent/mdm/nanomdm-webhook` and set
-   the console env `COCORE_NANOMDM_WEBHOOK_KEY` (a fresh 32+ char secret; NanoMDM
-   presents it as the bearer). The webhook captures the device's
+   `-webhook-url 'https://console.cocore.dev/api/agent/mdm/nanomdm-webhook?key=<SECRET>'`
+   and set the console env `COCORE_NANOMDM_WEBHOOK_KEY=<SECRET>` to the same
+   value (NanoMDM doesn't send an Authorization header, so the secret rides in
+   the URL `?key=`; a Bearer header is also accepted). The webhook captures the
+   device's
    `DevicePropertiesAttestation` result and stores the chain keyed by serial —
    the same store the agent polls.
 2. **Agent env** (set by the Secure Mode wizard / installer next to the existing
