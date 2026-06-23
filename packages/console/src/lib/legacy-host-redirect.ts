@@ -52,7 +52,7 @@ export function canonicalConsoleRedirectUrl(
  * route files (the import-protection plugin blocks it), so the page routes
  * call this instead of touching `getRequest` directly.
  */
-export const legacyConsoleHostRedirectFn = createServerFn({ method: "GET" }).handler(async () => {
+const legacyConsoleHostRedirectFn = createServerFn({ method: "GET" }).handler(async () => {
   const { getRequest } = await import("@tanstack/react-start/server");
   const request = getRequest();
   return canonicalConsoleRedirectUrl(
