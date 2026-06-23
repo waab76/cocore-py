@@ -94,6 +94,26 @@ export function parseEnvelope(bytes: Uint8Array): MultimodalEnvelope {
   return { v: ENVELOPE_VERSION, messages };
 }
 
+/** Validate + coerce an untrusted `messages` value (e.g. a JSON request
+ *  body) into `EnvelopeMessage[]`. Returns null when it isn't a valid
+ *  non-empty array of `{ role, content }` with recognized content parts —
+ *  callers turn that into a 400. Unlike {@link parseEnvelope} this takes the
+ *  bare messages array (no `{ v, messages }` wrapper), which is the shape a
+ *  client sends alongside a flattened prompt. */
+export function coerceEnvelopeMessages(value: unknown): EnvelopeMessage[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  try {
+    return value.map((m, i) => {
+      if (!m || typeof m !== "object") throw new Error(`message ${i} is not an object`);
+      const msg = m as Record<string, unknown>;
+      if (typeof msg.role !== "string") throw new Error(`message ${i} role must be a string`);
+      return { role: msg.role, content: parseContent(msg.content, i) };
+    });
+  } catch {
+    return null;
+  }
+}
+
 function parseContent(content: unknown, i: number): EnvelopeContent {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) throw new Error(`message ${i} content must be string or array`);

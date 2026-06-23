@@ -25,6 +25,13 @@ import {
   type RestoredSession,
   restoreSession,
 } from "../auth/oauth-client.ts";
+import {
+  buildEnvelopeBytes,
+  coerceEnvelopeMessages,
+  hasImageParts,
+  MESSAGES_V1,
+} from "@cocore/sdk/multimodal-envelope";
+
 import { verifyServiceAuthToken } from "../auth/service-auth.ts";
 import type { Store } from "../store.ts";
 import { type DispatchInputs, type ProfileForCredit, runDispatch } from "./dispatch.ts";
@@ -50,6 +57,10 @@ export interface InferenceContext {
 interface DispatchBody {
   model?: unknown;
   prompt?: unknown;
+  /** Optional structured multimodal turns (forwarded by the console). When
+   *  present with any image part, the dispatch seals the canonical
+   *  messages-v1 envelope instead of the flattened prompt. */
+  messages?: unknown;
   maxTokensOut?: unknown;
   priceCeiling?: unknown;
   targetProviderDid?: unknown;
@@ -81,9 +92,19 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
   if (body.targetProviderDid !== undefined && typeof body.targetProviderDid !== "string") {
     return "targetProviderDid must be a string when provided";
   }
+  // Build the messages-v1 envelope when the client sent images.
+  let envelope: Pick<DispatchInputs, "payloadBytes" | "inputFormat"> = {};
+  if (body.messages !== undefined) {
+    const coerced = coerceEnvelopeMessages(body.messages);
+    if (!coerced) return "messages must be an array of { role, content } turns";
+    if (hasImageParts(coerced)) {
+      envelope = { payloadBytes: buildEnvelopeBytes(coerced), inputFormat: MESSAGES_V1 };
+    }
+  }
   return {
     model: body.model,
     prompt: body.prompt,
+    ...envelope,
     maxTokensOut: body.maxTokensOut,
     priceCeiling: { amount: pc.amount, currency: pc.currency },
     ...(typeof body.targetProviderDid === "string"

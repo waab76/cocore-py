@@ -18,6 +18,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import {
+  buildEnvelopeBytes,
+  coerceEnvelopeMessages,
+  type EnvelopeMessage,
+  hasImageParts,
+  MESSAGES_V1,
+} from "@cocore/sdk/multimodal-envelope";
+
+import {
   forwardDispatch,
   isDispatchForwardConfigured,
 } from "@/lib/inference-dispatch-forward.server.ts";
@@ -27,6 +35,10 @@ import { getAtprotoSessionForRequest } from "@/middleware/auth.server.ts";
 interface DispatchBody {
   model?: unknown;
   prompt?: unknown;
+  /** Optional structured multimodal turns. When present and carrying any
+   *  image part, the dispatch seals the canonical messages-v1 envelope
+   *  instead of the flattened `prompt`. */
+  messages?: unknown;
   maxTokensOut?: unknown;
   priceCeiling?: unknown;
   targetProviderDid?: unknown;
@@ -35,6 +47,8 @@ interface DispatchBody {
 interface ParsedDispatch {
   model: string;
   prompt: string;
+  /** Validated multimodal turns, only set when the client sent images. */
+  messages?: EnvelopeMessage[];
   maxTokensOut: number;
   priceCeiling: { amount: number; currency: string };
   targetProviderDid?: string;
@@ -64,9 +78,18 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
   if (body.targetProviderDid !== undefined && typeof body.targetProviderDid !== "string") {
     return "targetProviderDid must be a string when provided";
   }
+  // `messages` is optional; only validated (and only matters) when images
+  // ride along. An explicitly-present-but-malformed value is a 400.
+  let messages: EnvelopeMessage[] | undefined;
+  if (body.messages !== undefined) {
+    const coerced = coerceEnvelopeMessages(body.messages);
+    if (!coerced) return "messages must be an array of { role, content } turns";
+    if (hasImageParts(coerced)) messages = coerced;
+  }
   return {
     model: body.model,
     prompt: body.prompt,
+    ...(messages ? { messages } : {}),
     maxTokensOut: body.maxTokensOut,
     priceCeiling: { amount: pc.amount, currency: pc.currency },
     ...(typeof body.targetProviderDid === "string"
@@ -104,15 +127,24 @@ export const Route = createFileRoute("/api/xrpc/dev.cocore.inference.dispatch")(
 
         // Forward to the AppView when configured (it owns the dispatch core +
         // the requester's OAuth session); otherwise run the legacy in-process
-        // core below. Both yield the same SSE shape.
+        // core below. Both yield the same SSE shape. The forwarded body carries
+        // the RAW `messages` (JSON-serializable) — the AppView route rebuilds
+        // the envelope on its side; we don't ship binary payloadBytes.
         if (isDispatchForwardConfigured()) {
           return forwardDispatch({ oauthSession: session.oauthSession, body: { ...parsed } });
         }
 
+        // Local in-process core: seal the canonical multimodal envelope when
+        // images are present, else the flattened prompt.
+        const { messages, ...textInputs } = parsed;
+        const envelope = messages
+          ? { payloadBytes: buildEnvelopeBytes(messages), inputFormat: MESSAGES_V1 }
+          : {};
         const events = runDispatch({
           did: session.did,
           oauthSession: session.oauthSession,
-          ...parsed,
+          ...textInputs,
+          ...envelope,
         });
 
         const stream = new ReadableStream<Uint8Array>({

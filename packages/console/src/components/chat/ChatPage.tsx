@@ -13,11 +13,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createLink } from "@tanstack/react-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button as AriaButton } from "react-aria-components";
-import { Square } from "lucide-react";
+import { ImagePlus, Square, X } from "lucide-react";
 import type { ReactElement } from "react";
 
 import { getMyBalanceQueryOptions } from "@/components/account/token-balance.functions.ts";
 import {
+  type ChatDispatchImage,
   ChatDispatchError,
   dispatchChatTurn,
   flattenTranscript,
@@ -61,6 +62,38 @@ import { Heading1 } from "@/design-system/typography";
 import { Text } from "@/design-system/typography/text";
 
 const ButtonLink = createLink(Button);
+
+/** A staged image in the composer, before send. `data` is the base64 of the
+ *  raw bytes (no data: prefix) — sent to the provider; `url` is the full data
+ *  URI used only for the thumbnail preview. */
+interface PendingImage {
+  id: string;
+  mime: string;
+  data: string;
+  url: string;
+}
+
+// Composer image limits. The provider/advisor cap inline image bytes at
+// ~20-32 MiB total; keep the chat composer well under that and bounded.
+const MAX_CHAT_IMAGES = 6;
+const MAX_CHAT_IMAGE_BYTES = 10 * 1024 * 1024; // per image, decoded
+
+/** Read an image File into a PendingImage (base64 + preview data URI), or
+ *  null if it isn't an image or is too large. */
+async function readImageFile(file: File): Promise<PendingImage | null> {
+  if (!file.type.startsWith("image/")) return null;
+  if (file.size > MAX_CHAT_IMAGE_BYTES) return null;
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let bin = "";
+  for (const b of buf) bin += String.fromCharCode(b);
+  const data = btoa(bin);
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    mime: file.type,
+    data,
+    url: `data:${file.type};base64,${data}`,
+  };
+}
 
 const CHAT_SUGGESTIONS = [
   "explain this rust lifetime error",
@@ -256,6 +289,29 @@ const styles = stylex.create({
     flexDirection: "column",
     flexGrow: 1,
     minWidth: 0,
+    position: "relative",
+  },
+  dropOverlay: {
+    alignItems: "center",
+    backgroundColor: uiColor.bgSubtle,
+    borderColor: uiColor.text2,
+    borderRadius: radius.md,
+    borderStyle: "dashed",
+    borderWidth: 2,
+    bottom: verticalSpace.md,
+    color: uiColor.text2,
+    display: "flex",
+    flexDirection: "column",
+    fontSize: fontSize.sm,
+    gap: gap.sm,
+    justifyContent: "center",
+    left: horizontalSpace.md,
+    opacity: 0.96,
+    pointerEvents: "none",
+    position: "absolute",
+    right: horizontalSpace.md,
+    top: verticalSpace.md,
+    zIndex: 20,
   },
   chatHead: {
     alignItems: {
@@ -600,6 +656,45 @@ const styles = stylex.create({
     padding: 0,
     resize: "none",
     width: "100%",
+  },
+  imageRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: gap.sm,
+    marginBottom: verticalSpace.sm,
+  },
+  imageThumb: {
+    borderColor: uiColor.border2,
+    borderRadius: radius.sm,
+    borderStyle: "solid",
+    borderWidth: 1,
+    height: "48px",
+    overflow: "visible",
+    position: "relative",
+    width: "48px",
+  },
+  imageThumbImg: {
+    borderRadius: radius.sm,
+    display: "block",
+    height: "100%",
+    objectFit: "cover",
+    width: "100%",
+  },
+  imageThumbRemove: {
+    alignItems: "center",
+    backgroundColor: uiColor.text2,
+    borderRadius: "9999px",
+    borderWidth: 0,
+    color: uiColor.bg,
+    cursor: "pointer",
+    display: "flex",
+    height: "16px",
+    justifyContent: "center",
+    padding: 0,
+    position: "absolute",
+    right: "-6px",
+    top: "-6px",
+    width: "16px",
   },
   composerBar: {
     alignItems: "center",
@@ -1113,6 +1208,12 @@ export function ChatPage(): ReactElement {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
+  // Images staged in the composer (drag-drop or paste), sent with the next
+  // turn then cleared. Kept out of the persisted session store (base64 would
+  // blow the localStorage quota).
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  // True while a file is dragged over the chat area (drives the drop overlay).
+  const [dragActive, setDragActive] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
 
   // Settings for the not-yet-created session shown by "new chat".
@@ -1318,10 +1419,67 @@ export function ChatPage(): ReactElement {
     abortRef.current?.abort();
   }, []);
 
+  /** Stage image files in the composer, capping the total count. Silently
+   *  skips non-images and oversized files. */
+  const addImageFiles = useCallback(async (files: Iterable<File>) => {
+    const read = await Promise.all([...files].map(readImageFile));
+    const ok = read.filter((r): r is PendingImage => r !== null);
+    if (ok.length === 0) return;
+    setPendingImages((prev) => [...prev, ...ok].slice(0, MAX_CHAT_IMAGES));
+  }, []);
+
+  const removePendingImage = useCallback((id: string) => {
+    setPendingImages((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
+  const onChatDragOver = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+    e.preventDefault();
+    setDragActive(true);
+  }, []);
+
+  const onChatDragLeave = useCallback((e: React.DragEvent) => {
+    // Only clear when the cursor actually leaves the drop region, not when it
+    // crosses into a child element.
+    if (e.currentTarget === e.target) setDragActive(false);
+  }, []);
+
+  const onChatDrop = useCallback(
+    (e: React.DragEvent) => {
+      const files = e.dataTransfer.files;
+      if (!files || files.length === 0) return;
+      e.preventDefault();
+      setDragActive(false);
+      void addImageFiles(files);
+    },
+    [addImageFiles],
+  );
+
+  const onComposerPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const files = [...e.clipboardData.items]
+        .filter((it) => it.kind === "file")
+        .map((it) => it.getAsFile())
+        .filter((f): f is File => f !== null && f.type.startsWith("image/"));
+      if (files.length > 0) {
+        e.preventDefault();
+        void addImageFiles(files);
+      }
+    },
+    [addImageFiles],
+  );
+
   const send = async () => {
     const text = draft.trim();
-    if (!text || streamingId || !modelId || !did) return;
+    // A turn is sendable with text OR images (an image-only "what is this?"
+    // is valid). Snapshot + clear the staged images up front.
+    const turnImages: ChatDispatchImage[] = pendingImages.map((p) => ({
+      mime: p.mime,
+      data: p.data,
+    }));
+    if ((!text && turnImages.length === 0) || streamingId || !modelId || !did) return;
     setDraft("");
+    setPendingImages([]);
     forceScrollRef.current = true;
     pinnedToBottomRef.current = true;
 
@@ -1334,7 +1492,14 @@ export function ChatPage(): ReactElement {
     }
     const sessionId = target.id;
     const now = new Date().toISOString();
-    const userMsg: ChatMessage = { id: newSessionId(), role: "user", text, createdAt: now };
+    const userMsg: ChatMessage = {
+      id: newSessionId(),
+      role: "user",
+      // For an image-only turn keep a short marker so the bubble + title
+      // aren't blank (the images themselves aren't persisted).
+      text: text || (turnImages.length === 1 ? "(image)" : `(${turnImages.length} images)`),
+      createdAt: now,
+    };
     const assistantMsg: ChatMessage = {
       id: newSessionId(),
       role: "assistant",
@@ -1343,11 +1508,16 @@ export function ChatPage(): ReactElement {
       modelId,
       createdAt: now,
     };
-    const transcript = [...target.messages, userMsg].map((m) => ({ role: m.role, text: m.text }));
+    // Transcript carries the REAL input text (empty for an image-only turn),
+    // not the display marker, so the sealed envelope/prompt is faithful.
+    const transcript = [
+      ...target.messages.map((m) => ({ role: m.role, text: m.text })),
+      { role: "user", text },
+    ];
 
     updateSession(sessionId, (s) => ({
       ...s,
-      title: s.messages.length === 0 ? titleFromText(text) : s.title,
+      title: s.messages.length === 0 ? titleFromText(userMsg.text) : s.title,
       updatedAt: now,
       messages: [...s.messages, userMsg, assistantMsg],
     }));
@@ -1359,6 +1529,7 @@ export function ChatPage(): ReactElement {
       const result = await dispatchChatTurn({
         model: modelId,
         prompt: flattenTranscript(transcript),
+        ...(turnImages.length > 0 ? { transcript, images: turnImages } : {}),
         maxTokensOut,
         targetProviderDid,
         signal: abort.signal,
@@ -1472,7 +1643,18 @@ export function ChatPage(): ReactElement {
           />
         </aside>
 
-        <section {...stylex.props(styles.main)}>
+        <section
+          {...stylex.props(styles.main)}
+          onDragOver={onChatDragOver}
+          onDragLeave={onChatDragLeave}
+          onDrop={onChatDrop}
+        >
+          {dragActive ? (
+            <div {...stylex.props(styles.dropOverlay)}>
+              <ImagePlus size={28} aria-hidden />
+              <span>drop images to attach</span>
+            </div>
+          ) : null}
           <div {...stylex.props(styles.chatHead)}>
             <div {...stylex.props(styles.chatHeadTop)}>
               <div {...stylex.props(styles.chatHeadMain)}>
@@ -1684,6 +1866,22 @@ export function ChatPage(): ReactElement {
 
           <div {...stylex.props(styles.composer)}>
             <div {...stylex.props(styles.composerBox)}>
+              {pendingImages.length > 0 ? (
+                <div {...stylex.props(styles.imageRow)}>
+                  {pendingImages.map((img) => (
+                    <div key={img.id} {...stylex.props(styles.imageThumb)}>
+                      <img src={img.url} alt="" {...stylex.props(styles.imageThumbImg)} />
+                      <AriaButton
+                        aria-label="remove image"
+                        onPress={() => removePendingImage(img.id)}
+                        {...stylex.props(styles.imageThumbRemove)}
+                      >
+                        <X size={11} aria-hidden />
+                      </AriaButton>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <textarea
                 ref={taRef}
                 rows={2}
@@ -1695,6 +1893,7 @@ export function ChatPage(): ReactElement {
                 }
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onComposerKeyDown}
+                onPaste={onComposerPaste}
                 {...stylex.props(styles.textarea)}
               />
               <div {...stylex.props(styles.composerBar)}>
@@ -1728,7 +1927,7 @@ export function ChatPage(): ReactElement {
                     variant="primary"
                     size="sm"
                     style={styles.composerSend}
-                    isDisabled={!draft.trim() || !modelId}
+                    isDisabled={(!draft.trim() && pendingImages.length === 0) || !modelId}
                     onPress={() => void send()}
                   >
                     send <Kbd>⏎</Kbd>

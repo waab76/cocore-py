@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildEnvelopeBytes,
+  coerceEnvelopeMessages,
   type EnvelopeMessage,
   hasImageParts,
   MESSAGES_V1,
@@ -63,5 +64,29 @@ describe("multimodal envelope", () => {
 
   it("exports the wire constant", () => {
     expect(MESSAGES_V1).toBe("messages-v1");
+  });
+});
+
+describe("coerceEnvelopeMessages", () => {
+  it("accepts well-formed multimodal turns", () => {
+    const out = coerceEnvelopeMessages([
+      { role: "user", content: "hi" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "what is this?" },
+          { type: "image", mime: "image/png", data: "aGVsbG8=" },
+        ],
+      },
+    ]);
+    expect(out).not.toBeNull();
+    expect(hasImageParts(out!)).toBe(true);
+  });
+
+  it("rejects non-arrays, empty arrays, and bad parts", () => {
+    expect(coerceEnvelopeMessages("nope")).toBeNull();
+    expect(coerceEnvelopeMessages([])).toBeNull();
+    expect(coerceEnvelopeMessages([{ role: "user", content: [{ type: "audio" }] }])).toBeNull();
+    expect(coerceEnvelopeMessages([{ content: "no role" }])).toBeNull();
   });
 });

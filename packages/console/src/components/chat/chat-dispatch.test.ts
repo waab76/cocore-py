@@ -56,6 +56,46 @@ describe("dispatchChatTurn channel routing", () => {
     assert.equal(result.tokensOut, 4);
   });
 
+  test("attaches images as structured messages on the latest user turn", async () => {
+    const sse = `event: complete\ndata: ${JSON.stringify({ tokensIn: 1, tokensOut: 1, receiptUri: "" })}\n\n`;
+    let sentBody: Record<string, unknown> = {};
+    globalThis.fetch = async (_url, init) => {
+      sentBody = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
+      return sseResponse(sse);
+    };
+
+    await dispatchChatTurn({
+      model: "vlm",
+      prompt: "user: describe this",
+      transcript: [{ role: "user", text: "describe this" }],
+      images: [{ mime: "image/png", data: "aGVsbG8=" }],
+      maxTokensOut: 16,
+    });
+
+    // The body carries structured messages; the last turn has the image part.
+    const messages = sentBody["messages"] as Array<{ role: string; content: unknown }>;
+    assert.ok(Array.isArray(messages), "expected messages in the body");
+    assert.deepEqual(messages[messages.length - 1], {
+      role: "user",
+      content: [
+        { type: "text", text: "describe this" },
+        { type: "image", mime: "image/png", data: "aGVsbG8=" },
+      ],
+    });
+  });
+
+  test("no messages field when there are no images (text path)", async () => {
+    const sse = `event: complete\ndata: ${JSON.stringify({ tokensIn: 1, tokensOut: 1, receiptUri: "" })}\n\n`;
+    let sentBody: Record<string, unknown> = {};
+    globalThis.fetch = async (_url, init) => {
+      sentBody = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>;
+      return sseResponse(sse);
+    };
+    await dispatchChatTurn({ model: "stub", prompt: "hi", maxTokensOut: 16 });
+    assert.equal(sentBody["messages"], undefined);
+    assert.equal(sentBody["prompt"], "hi");
+  });
+
   test("a chunk with no channel defaults to the answer (content)", async () => {
     const sse =
       `event: chunk\ndata: ${JSON.stringify({ seq: 0, text: "plain" })}\n\n` +
