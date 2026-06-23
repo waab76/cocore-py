@@ -76,9 +76,13 @@ jobs:
         # first open (the PR comment explains how to get past it).
         # COCORE_CONSOLE_URL / COCORE_ADVISOR_URL bake this PR's stack into the
         # app's Info.plist (empty on workflow_dispatch → the app defaults to prod).
+        # COCORE_PR_BUILD=1 gives the app a PR-only bundle id so it gets its own
+        # UserDefaults suite — otherwise it inherits a prod install's persisted
+        # console/advisor override and ignores the baked PR URLs (talks to prod).
         env:
           COCORE_CONSOLE_URL: ${{ steps.stack.outputs.console_url }}
           COCORE_ADVISOR_URL: ${{ steps.stack.outputs.advisor_url }}
+          COCORE_PR_BUILD: "1"
         run: COCORE_SIGN_ID=- bash scripts/build-mac-app.sh
 
       - name: Verify the CLI has no Python linkage

@@ -62,12 +62,27 @@ COCORE_BUILD_APNS="${COCORE_BUILD_APNS:-0}"
 # status item and the SMAppService login-item registration). Defaults on for
 # debug builds, since those are always local dev. Output: cocore-dev.app.
 DEV="${DEV:-$([[ "$CONFIG" == "debug" ]] && echo 1 || echo 0)}"
+# COCORE_PR_BUILD=1 (set by provider-pr-build.yml) builds a per-PR-test
+# identity: same as a prod release EXCEPT a distinct bundle id + display name.
+# Without this a PR build reuses prod's bundle id (dev.cocore.menubar), so it
+# shares prod's LaunchServices registration AND prod's UserDefaults — including
+# the Settings → Network "consoleBaseUrl"/"advisorUrl" overrides, which win over
+# the baked CocoreConsoleURL (see Endpoints.swift). The result: a PR build
+# silently talks to PROD instead of the PR's baked Railway stack. A distinct
+# bundle id gives the PR build its own defaults suite, so the baked PR URLs
+# actually take effect. The .app file stays cocore.app (one PR build at a time,
+# installed alongside-or-over prod by its own bundle id).
+PR="${COCORE_PR_BUILD:-0}"
 readonly EXEC_NAME="CoCoreShell"
 readonly OUT_DIR="$SHELL_DIR/build"
 if [[ "$DEV" == "1" ]]; then
   readonly APP_NAME="cocore-dev"
   readonly BUNDLE_ID="dev.cocore.shell.dev"
   readonly DISPLAY_NAME="co/core (dev)"
+elif [[ "$PR" == "1" ]]; then
+  readonly APP_NAME="cocore"
+  readonly BUNDLE_ID="dev.cocore.menubar.pr"
+  readonly DISPLAY_NAME="co/core (PR)"
 else
   readonly APP_NAME="cocore"
   readonly BUNDLE_ID="dev.cocore.menubar"
