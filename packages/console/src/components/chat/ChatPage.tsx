@@ -146,6 +146,7 @@ const styles = stylex.create({
     backgroundColor: uiColor.bg,
     borderColor: uiColor.border1,
     borderRadius: radius.md,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     boxSizing: "border-box",
@@ -195,6 +196,7 @@ const styles = stylex.create({
     backgroundColor: { default: "transparent", ":hover": uiColor.bg },
     borderColor: "transparent",
     borderRadius: radius.xs,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     boxSizing: "border-box",
@@ -297,6 +299,7 @@ const styles = stylex.create({
     backgroundColor: uiColor.bgSubtle,
     borderColor: uiColor.text2,
     borderRadius: radius.md,
+    cornerShape: "squircle",
     borderStyle: "dashed",
     borderWidth: 2,
     bottom: verticalSpace.md,
@@ -414,6 +417,7 @@ const styles = stylex.create({
     backgroundColor: uiColor.bgSubtle,
     borderColor: uiColor.border1,
     borderRadius: radius.xs,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     color: uiColor.text2,
@@ -467,20 +471,32 @@ const styles = stylex.create({
     paddingRight: horizontalSpace["2xl"],
     width: "100%",
   },
+  // One user turn: image attachments stacked ABOVE the text bubble, the
+  // whole group right-aligned (iMessage style).
+  userTurn: {
+    alignItems: "flex-end",
+    alignSelf: "flex-end",
+    display: "flex",
+    flexDirection: "column",
+    gap: verticalSpace.sm,
+    maxWidth: "78%",
+    minWidth: 0,
+  },
   msgUser: {
     alignSelf: "flex-end",
     backgroundColor: uiColor.bgSubtle,
-    borderBottomLeftRadius: "8px",
-    borderBottomRightRadius: "2px",
+    borderBottomLeftRadius: radius.md,
+    borderBottomRightRadius: radius.xs,
     borderColor: uiColor.border1,
     borderStyle: "solid",
-    borderTopLeftRadius: "8px",
-    borderTopRightRadius: "8px",
+    borderTopLeftRadius: radius.md,
+    borderTopRightRadius: radius.md,
     borderWidth: 1,
+    cornerShape: "squircle",
     fontFamily: fontFamily.sans,
     fontSize: fontSize.sm,
     lineHeight: 1.55,
-    maxWidth: "78%",
+    maxWidth: "100%",
     overflowWrap: "break-word",
     paddingBottom: verticalSpace.md,
     paddingLeft: horizontalSpace.lg,
@@ -492,14 +508,15 @@ const styles = stylex.create({
     display: "flex",
     flexWrap: "wrap",
     gap: gap.sm,
-    marginBottom: verticalSpace.sm,
+    justifyContent: "flex-end",
   },
   bubbleImage: {
     borderColor: uiColor.border2,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
-    height: "120px",
+    height: "160px",
     maxWidth: "100%",
     objectFit: "cover",
     width: "auto",
@@ -510,7 +527,6 @@ const styles = stylex.create({
     display: "flex",
     fontSize: MICRO,
     gap: gap.xs,
-    marginBottom: verticalSpace.sm,
   },
   msgAssistant: {
     alignSelf: "stretch",
@@ -647,6 +663,7 @@ const styles = stylex.create({
     backgroundColor: uiColor.bg,
     borderColor: { default: uiColor.border2, ":focus-within": uiColor.text2 },
     borderRadius: radius.sm,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     boxSizing: "border-box",
@@ -691,6 +708,7 @@ const styles = stylex.create({
   imageThumb: {
     borderColor: uiColor.border2,
     borderRadius: radius.sm,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     height: "48px",
@@ -700,6 +718,7 @@ const styles = stylex.create({
   },
   imageThumbImg: {
     borderRadius: radius.sm,
+    cornerShape: "squircle",
     display: "block",
     height: "100%",
     objectFit: "cover",
@@ -749,6 +768,7 @@ const styles = stylex.create({
     backgroundColor: uiColor.bgSubtle,
     borderColor: uiColor.border1,
     borderRadius: radius.xs,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     boxSizing: "border-box",
@@ -861,6 +881,7 @@ const styles = stylex.create({
     backgroundColor: { default: "transparent", ":hover": uiColor.bg },
     borderColor: "transparent",
     borderRadius: radius.xs,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     cursor: "pointer",
@@ -1895,9 +1916,9 @@ export function ChatPage(): ReactElement {
               <div {...stylex.props(styles.msgCol)}>
                 {messages.map((m) =>
                   m.role === "user" ? (
-                    <div key={m.id} {...stylex.props(styles.msgUser)}>
+                    <div key={m.id} {...stylex.props(styles.userTurn)}>
                       {m.imageCount ? renderUserImages(m.id, m.imageCount, msgImages[m.id]) : null}
-                      {m.text}
+                      <div {...stylex.props(styles.msgUser)}>{m.text}</div>
                     </div>
                   ) : (
                     (() => {

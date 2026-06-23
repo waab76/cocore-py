@@ -124,6 +124,7 @@ const styles = stylex.create({
     backgroundColor: uiColor.bgSubtle,
     borderColor: uiColor.border1,
     borderRadius: radius.xs,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     fontFamily: fontFamily.mono,
@@ -135,6 +136,7 @@ const styles = stylex.create({
     backgroundColor: uiInverted.bg,
     borderColor: uiInverted.border1,
     borderRadius: radius.xs,
+    cornerShape: "squircle",
     borderStyle: "solid",
     borderWidth: 1,
     boxSizing: "border-box",
@@ -195,6 +197,7 @@ const styles = stylex.create({
   },
   image: {
     borderRadius: radius.xs,
+    cornerShape: "squircle",
     display: "block",
     height: "auto",
     marginBottom: verticalSpace.md,

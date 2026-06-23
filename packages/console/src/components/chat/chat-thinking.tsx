@@ -61,6 +61,7 @@ const styles = stylex.create({
     borderLeftStyle: "solid",
     borderLeftColor: uiColor.border1,
     borderTopLeftRadius: radius.xs,
+    cornerShape: "squircle",
     color: uiColor.text2,
     fontSize: fontSize.sm,
   },
