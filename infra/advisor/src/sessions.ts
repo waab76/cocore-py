@@ -55,14 +55,25 @@ export interface SessionEntry {
 }
 
 export interface SessionManagerOpts {
-  /** How long without any frame from the provider before we kill
-   *  the SSE connection and remove the session. */
+  /** How long without any frame from the provider, once it has started
+   *  streaming, before we kill the SSE connection and remove the session.
+   *  An `inference_chunk` OR an `inference_keepalive` resets this. */
   idleTimeoutMs?: number;
+  /** Grace for the FIRST sign of life (chunk or keepalive). Time-to-first-
+   *  token can be long on a big model / slow machine — prompt prefill alone
+   *  can exceed the steady-state idle budget — so a session that hasn't
+   *  produced anything yet gets this (typically larger) window. Defaults to
+   *  `idleTimeoutMs` when unset. */
+  firstChunkTimeoutMs?: number;
   /** Fired when a session is torn down by the idle timer (the provider
    *  accepted the job but went silent). Lets the advisor flag that specific
    *  machine's standing so it stops getting routed to + the operator is
-   *  notified. Not called on a clean complete or a client disconnect. */
-  onIdleTimeout?: (providerDid: string, providerMachineId: string) => void;
+   *  notified. Not called on a clean complete or a client disconnect.
+   *  `streamed` is true when the provider had already sent ≥1 real chunk
+   *  before stalling — a slow-then-stalled job, distinct from one that
+   *  accepted work and went completely silent; the advisor uses this to
+   *  avoid penalizing a merely-slow machine. */
+  onIdleTimeout?: (providerDid: string, providerMachineId: string, streamed: boolean) => void;
   /** Fired once per session, when its FIRST `inference_chunk` arrives, with
    *  the time-to-first-token in ms (firstChunk − requestReceivedAt). The
    *  advisor records these into a rolling window for the public "time to
@@ -73,11 +84,19 @@ export interface SessionManagerOpts {
 export class SessionManager {
   private bySessionId = new Map<string, SessionEntry>();
   private idleTimeoutMs: number;
-  private onIdleTimeout?: (providerDid: string, providerMachineId: string) => void;
+  private firstChunkTimeoutMs: number;
+  private onIdleTimeout?: (
+    providerDid: string,
+    providerMachineId: string,
+    streamed: boolean,
+  ) => void;
   private onFirstChunk?: (ttftMs: number) => void;
 
   constructor(opts: SessionManagerOpts = {}) {
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 60_000;
+    // Prefill grace defaults to the steady-state budget when unset, so
+    // existing callers (and tests) keep their single-timeout behavior.
+    this.firstChunkTimeoutMs = opts.firstChunkTimeoutMs ?? this.idleTimeoutMs;
     this.onIdleTimeout = opts.onIdleTimeout;
     this.onFirstChunk = opts.onFirstChunk;
   }
@@ -223,19 +242,39 @@ export class SessionManager {
     this.bySessionId.delete(sessionId);
   }
 
+  /** A provider "still working" signal during a long generation (slow
+   *  prefill, or a slow patch with no user-visible token yet). Resets the
+   *  idle timer so a slow-but-alive job isn't mistaken for a silent one —
+   *  WITHOUT counting as a chunk: no TTFT record, nothing relayed to the
+   *  requester, and `lastChunkAt` stays put so the streamed-vs-silent
+   *  distinction (and the first-chunk budget) is unaffected. No-op for an
+   *  unknown/closed session. */
+  keepalive(sessionId: string): void {
+    const entry = this.bySessionId.get(sessionId);
+    if (!entry) return;
+    this.armIdle(sessionId, entry);
+  }
+
   private armIdle(sessionId: string, entry: SessionEntry): void {
     if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    // Before the first chunk, allow the (typically longer) prefill/TTFT
+    // budget; once streaming has started, hold to the tighter steady-state
+    // idle budget. A keepalive resets whichever is active.
+    const budget = entry.lastChunkAt === null ? this.firstChunkTimeoutMs : this.idleTimeoutMs;
     entry.idleTimer = setTimeout(() => {
       const tracked = this.bySessionId.get(sessionId);
       const providerDid = tracked?.providerDid;
       const providerMachineId = tracked?.providerMachineId;
+      const streamed = (tracked?.lastChunkAt ?? null) !== null;
       this.close(sessionId, "idle-timeout");
-      // The machine took the job and then went silent — flag it so the
-      // advisor stops routing here and the operator gets pinged.
+      // The machine took the job and went silent — flag it so the advisor
+      // stops routing here and the operator gets pinged. `streamed` lets the
+      // advisor soften that for a machine that was producing tokens and
+      // merely slowed (vs one that never sent a thing).
       if (providerDid && providerMachineId) {
-        this.onIdleTimeout?.(providerDid, providerMachineId);
+        this.onIdleTimeout?.(providerDid, providerMachineId, streamed);
       }
-    }, this.idleTimeoutMs);
+    }, budget);
     entry.idleTimer.unref?.();
   }
 }

@@ -457,6 +457,15 @@ export function handleConnection(
         });
         return;
       }
+      case "inference_keepalive": {
+        // "Still generating" — reset the session idle timer so a slow-but-
+        // alive job (long prefill / slow decode) isn't killed as silent.
+        // Not relayed to the requester; doesn't count as a token.
+        if (sessions.has(msg.session_id)) {
+          sessions.keepalive(msg.session_id);
+        }
+        return;
+      }
       case "inference_complete": {
         // A completion proves this machine isn't silently dropping work —
         // record it so the silent-failure detector clears, bad standing is

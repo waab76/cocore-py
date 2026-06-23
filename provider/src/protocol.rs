@@ -20,6 +20,12 @@ pub enum AdvisorMessage {
     InferenceRequest(InferenceRequest),
     /// Provider → advisor: streaming response chunk.
     InferenceChunk(InferenceChunk),
+    /// Provider → advisor: "still generating" signal sent during a long job
+    /// when no user-visible token has gone out for a while (slow prefill or
+    /// a slow decode patch). Resets the advisor's session idle timer without
+    /// being a token, so a slow-but-alive job isn't killed as silent.
+    /// Additive — an old advisor ignores the unknown frame.
+    InferenceKeepalive(InferenceKeepalive),
     /// Provider → advisor: terminal completion notice.
     InferenceComplete(InferenceComplete),
     /// Advisor → provider: nonce-based attestation challenge.
@@ -274,6 +280,11 @@ pub struct InferenceChunk {
 /// answer chunks are unchanged; only `reasoning` chunks carry the field.
 fn is_content_channel(c: &ChunkChannel) -> bool {
     matches!(c, ChunkChannel::Content)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceKeepalive {
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

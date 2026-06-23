@@ -64,8 +64,11 @@ const CONFIG = Effect.runSync(
       Config.withDefault(60_000),
     ),
     sessionIdleTimeoutMs: Config.integer("COCORE_ADVISOR_SESSION_IDLE_TIMEOUT_MS").pipe(
-      Config.withDefault(30_000),
+      Config.withDefault(90_000),
     ),
+    sessionFirstChunkTimeoutMs: Config.integer(
+      "COCORE_ADVISOR_SESSION_FIRST_CHUNK_TIMEOUT_MS",
+    ).pipe(Config.withDefault(120_000)),
     preflightTimeoutMs: Config.integer("COCORE_ADVISOR_PREFLIGHT_TIMEOUT_MS").pipe(
       Config.withDefault(1500),
     ),
@@ -106,13 +109,20 @@ const CHALLENGE_RESPONSE_TIMEOUT_MS = CONFIG.challengeResponseTimeoutMs;
  *  fails (e.g. the WS library swallowed an error). One full
  *  rechallenge round plus a generous buffer. */
 const ATTESTATION_MAX_AGE_MS = RECHALLENGE_INTERVAL_MS + CHALLENGE_RESPONSE_TIMEOUT_MS + 30_000;
-/** How long a dispatched job may go without ANY frame from the provider
- *  before the advisor gives up, returns a clean error to the requester,
- *  and flags the provider. Shorter than the old 60s: the chosen provider
- *  just answered a preflight ping, so a healthy one starts streaming
- *  within seconds — a 30s silence means it wedged after accepting, and we
- *  shouldn't make the requester wait a full minute to find out. */
+/** How long a dispatched job may go without ANY frame (chunk OR keepalive)
+ *  from the provider, once it has started streaming, before the advisor
+ *  gives up and flags it. Updated providers send an `inference_keepalive`
+ *  every ~10s while generating, so this only fires on a genuinely wedged
+ *  machine. Raised from 30s so a slow decode patch (a big model on a
+ *  laptop, growing KV cache) on an OLD provider that only emits real tokens
+ *  isn't mistaken for silence. */
 const SESSION_IDLE_TIMEOUT_MS = CONFIG.sessionIdleTimeoutMs;
+/** Grace for the FIRST sign of life (chunk or keepalive). Prompt prefill /
+ *  time-to-first-token on a large model on modest hardware can take well
+ *  over the steady-state idle budget before a single token appears, so the
+ *  pre-first-chunk window is larger. Keepalives from updated providers
+ *  cover this too; the larger window is the safety net for old providers. */
+const SESSION_FIRST_CHUNK_TIMEOUT_MS = CONFIG.sessionFirstChunkTimeoutMs;
 /** Per-job preflight budget: how long to wait for the chosen provider to
  *  answer an app-level `ping` before failing over to the next candidate.
  *  A healthy serve loop answers in a few ms; this only needs to clear
@@ -181,16 +191,28 @@ async function main(): Promise<void> {
   const ttft = new TtftWindow(TTFT_WINDOW_SAMPLES);
   const sessions = new SessionManager({
     idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
+    firstChunkTimeoutMs: SESSION_FIRST_CHUNK_TIMEOUT_MS,
     onFirstChunk: (ms) => {
       ttft.record(ms);
       // Mirror the TTFT sample into a histogram for OTLP export (the
       // /ttft route keeps serving the rolling in-memory window).
       record(runtime, Metric.update(ttftMs, ms));
     },
-    // A machine that accepted a job and then went silent is in bad
-    // standing: stop routing to it, tell it so (red tray ping), and ask it
-    // to self-right now.
-    onIdleTimeout: (providerDid, providerMachineId) => {
+    onIdleTimeout: (providerDid, providerMachineId, streamed) => {
+      // The requester's SSE already got a clean `idle-timeout` error. How we
+      // treat the MACHINE depends on what it did:
+      if (streamed) {
+        // It produced real tokens and then stalled (a slow machine on a long
+        // job, not a silent one). Don't mark it unhealthy or bounce its
+        // engine — that punishes a merely-slow provider and yanks it from
+        // routing. Just note it; the failed job is penalty enough.
+        console.error(
+          `[sessions] idle-timeout did=${providerDid} machine=${providerMachineId}; had streamed — slow job, NOT flagging`,
+        );
+        return;
+      }
+      // It accepted the job and never sent a thing: genuinely wedged. Stop
+      // routing to it, tell it so (red tray ping), and ask it to self-right.
       registry.markUnhealthy(providerDid, providerMachineId, "job-idle-timeout");
       try {
         const entry = registry.get(providerDid, providerMachineId);
@@ -200,7 +222,7 @@ async function main(): Promise<void> {
         // socket gone; the sweeper will evict it
       }
       console.error(
-        `[sessions] idle-timeout did=${providerDid} machine=${providerMachineId}; marked unhealthy, requested self-right`,
+        `[sessions] idle-timeout did=${providerDid} machine=${providerMachineId}; silent — marked unhealthy, requested self-right`,
       );
     },
   });
@@ -386,7 +408,7 @@ async function main(): Promise<void> {
 
   await new Promise<void>((r) => http.listen(PORT, r));
   console.error(
-    `advisor: http+ws on :${PORT} (heartbeat-timeout=${HEARTBEAT_TIMEOUT_MS}ms, rechallenge=${RECHALLENGE_INTERVAL_MS}ms, challenge-response-timeout=${CHALLENGE_RESPONSE_TIMEOUT_MS}ms, attestation-max-age=${ATTESTATION_MAX_AGE_MS}ms, ws-keepalive=${WS_KEEPALIVE_INTERVAL_MS}ms, ws-keepalive-max-missed=${WS_KEEPALIVE_MAX_MISSED}, ws-max-connection=${WS_MAX_CONNECTION_MS}ms, perMessageDeflate=off)`,
+    `advisor: http+ws on :${PORT} (heartbeat-timeout=${HEARTBEAT_TIMEOUT_MS}ms, session-idle=${SESSION_IDLE_TIMEOUT_MS}ms, session-first-chunk=${SESSION_FIRST_CHUNK_TIMEOUT_MS}ms, rechallenge=${RECHALLENGE_INTERVAL_MS}ms, challenge-response-timeout=${CHALLENGE_RESPONSE_TIMEOUT_MS}ms, attestation-max-age=${ATTESTATION_MAX_AGE_MS}ms, ws-keepalive=${WS_KEEPALIVE_INTERVAL_MS}ms, ws-keepalive-max-missed=${WS_KEEPALIVE_MAX_MISSED}, ws-max-connection=${WS_MAX_CONNECTION_MS}ms, perMessageDeflate=off)`,
   );
   console.error(
     "advisor: WS connection-stability config tuned for Railway's edge (frequent keepalive under the idle cutoff, compression off, proactive recycle under the 15-min cap)",

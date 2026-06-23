@@ -139,6 +139,15 @@ interface InferenceComplete {
   receipt_uri: string;
 }
 
+/** Provider → advisor: "still generating" signal sent during a long job
+ *  when no user-visible token has gone out for a while (slow prefill or a
+ *  slow decode patch). Resets the session idle timer without being a token
+ *  — keeps a slow-but-alive job from being killed as silent. Additive; an
+ *  advisor that doesn't know this frame simply ignores it. */
+interface InferenceKeepalive {
+  session_id: string;
+}
+
 /** Advisor → provider liveness probe. The provider answers `pong` with
  *  the same nonce IMMEDIATELY from its serve loop (not behind an
  *  in-flight inference), so a pong proves the agent's request loop is
@@ -202,6 +211,7 @@ export type AdvisorMessage =
   | ({ type: "code_attestation_response" } & CodeAttestationResponse)
   | ({ type: "inference_request" } & InferenceRequest)
   | ({ type: "inference_chunk" } & InferenceChunk)
+  | ({ type: "inference_keepalive" } & InferenceKeepalive)
   | ({ type: "inference_complete" } & InferenceComplete)
   | ({ type: "ping" } & Ping)
   | ({ type: "pong" } & Pong)
