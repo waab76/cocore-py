@@ -31,9 +31,28 @@ permissions:
 
 jobs:
   build-mac-arm64:
-    runs-on: macos-14
+    # macos-26 (Tahoe) — NOT macos-14. SwiftUI gates its appearance on the
+    # macOS SDK the app is LINKED against: a binary linked against a pre-26 SDK
+    # renders the legacy grouped-Form / section-footer chrome even when run on
+    # macOS 26. The macos-14 runner's newest SDK is pre-26, so the shipped PR
+    # app looked "old" next to a local Xcode 26 build. macos-26 ships Xcode 26
+    # (macOS 26 SDK), so the PR app matches what developers see locally.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show toolchain + SDK (must be macOS 26 SDK)
+        # SwiftUI's modern appearance is keyed to the linked SDK version; assert
+        # it here so a runner-image downgrade fails loudly instead of silently
+        # shipping the legacy look.
+        run: |
+          xcodebuild -version
+          SDK="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "macOS SDK: $SDK"
+          case "$SDK" in
+            26.*) : ;;
+            *) echo "::error::expected macOS 26 SDK (Liquid Glass appearance); got $SDK — bump the runner image"; exit 1 ;;
+          esac
 
       - name: Short SHA + artifact name
         id: vars

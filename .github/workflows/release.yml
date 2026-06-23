@@ -44,7 +44,11 @@ permissions:
 
 jobs:
   build-mac-arm64:
-    runs-on: macos-14
+    # macos-26 (Tahoe), not macos-14: SwiftUI keys its appearance to the SDK
+    # the app is LINKED against, so a pre-26-SDK binary ships the legacy
+    # grouped-Form chrome even on macOS 26. macos-26 also carries the full
+    # Xcode / Metal toolchain the native_mlx path needs.
+    runs-on: macos-26
     steps:
       - name: Resolve tag + build mode
         id: tag
@@ -84,7 +88,7 @@ jobs:
         # --features native_mlx so the binary carries the in-process MLX
         # engine (confidential tier). build.rs runs `swift build` of the
         # CoCoreMLX engine, which needs the Metal toolchain — present on the
-        # macos-14 image (full Xcode). The default path omits the feature.
+        # macos-26 image (full Xcode). The default path omits the feature.
         run: |
           cd provider
           FEATURES=()
