@@ -110,8 +110,9 @@ final class AgentSupervisor {
         // THIS shell that `process` no longer points at; left alive it keeps a
         // resident MLX engine and a second advisor registration. That's the
         // "paused but still burning CPU" report (#90): pause stopped the
-        // tracked worker, the leaked sibling kept running. Kill them all.
-        Self.reapWorkers()
+        // tracked worker, the leaked sibling kept running. Kill them all —
+        // via the async reaper so Pause never freezes the main actor.
+        await Self.reapWorkersAsync()
     }
 
     /// Synchronous teardown for `applicationWillTerminate`. The async
@@ -396,9 +397,14 @@ final class AgentSupervisor {
     /// while ALSO catching the same-shell leaks that were #90's root cause
     /// (duplicate confidential workers → mismatched encryption keys → endless
     /// `aead::Error` + bounce churn). `pgrep -P <ppid> -f <pat>` is AND
-    /// semantics on macOS. Best-effort and synchronous (it runs before a spawn
-    /// and on stop, where a ~half-second wait is acceptable).
-    private static func reapWorkers() {
+    /// semantics on macOS. Best-effort.
+    ///
+    /// Two flavours share `strayWorkerPids()`: the blocking `reapWorkers()` for
+    /// the pre-spawn + app-termination paths (a ~½s wait is fine there), and
+    /// the `await`-based `reapWorkersAsync()` for the `@MainActor async stop()`
+    /// path — Pause/Quit must NOT freeze the UI for the grace window, which is
+    /// precisely the leaked-worker case this hardens (caught in review of #100).
+    private static func strayWorkerPids() -> [Int32] {
         let mine = ProcessInfo.processInfo.processIdentifier
         var pids = Set<Int32>()
         for parent in ["1", String(mine)] {
@@ -421,14 +427,33 @@ final class AgentSupervisor {
             }
         }
         pids.remove(mine)
+        return Array(pids)
+    }
+
+    /// SIGTERM, then (after a grace window) SIGKILL any survivor. The grace lets
+    /// each worker's Drop SIGTERM its Python child + flip its provider record to
+    /// serving=false, so we don't race a half-dead registration.
+    private static func reapWorkers() {
+        let pids = strayWorkerPids()
         guard !pids.isEmpty else { return }
         NSLog("cocore: reaping %d stray agent worker(s): %@",
               pids.count, pids.map(String.init).joined(separator: ","))
         for pid in pids { kill(pid, SIGTERM) }
-        // Give them a moment to unwind (their Drop SIGTERMs the Python child +
-        // flips the provider record to serving=false) so we don't race a
-        // half-dead registration.
         Thread.sleep(forTimeInterval: 0.5)
+        for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+    }
+
+    /// Non-blocking twin of `reapWorkers()` for the MainActor-async `stop()`
+    /// path: yields the grace window with `Task.sleep` instead of
+    /// `Thread.sleep`, so a Pause/Quit with a leaked worker present doesn't
+    /// block the main actor for ~500 ms.
+    private static func reapWorkersAsync() async {
+        let pids = strayWorkerPids()
+        guard !pids.isEmpty else { return }
+        NSLog("cocore: reaping %d stray agent worker(s): %@",
+              pids.count, pids.map(String.init).joined(separator: ","))
+        for pid in pids { kill(pid, SIGTERM) }
+        try? await Task.sleep(nanoseconds: 500_000_000)
         for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
     }
 

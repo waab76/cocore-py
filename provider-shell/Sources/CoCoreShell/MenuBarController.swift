@@ -520,9 +520,14 @@ final class MenuBarController {
             UserDefaults.standard.set(on, forKey: "cachedConfidentialDesired")
             if !on { state.confidentialBlockedReason = nil }
             // Fresh intent → allow exactly one auto-bounce again if it gets
-            // stuck, and start the grace clock from this apply-bounce.
+            // stuck, and start the grace clock from this apply-bounce. Clear
+            // the auto-bounce cooldown too: an explicit user enable is intent,
+            // and must not be silently blocked by a floor left over from an
+            // earlier stuck window (else a re-enable within 30m sits in
+            // "Applying…" with no auto-recovery until the cooldown lapses).
             didAutoBounceConfidential = false
             lastConfidentialActionAt = on ? Date() : nil
+            lastAutoBounceAt = nil
             // Bounce so the fresh serve reads the new desiredTier and the
             // supervisor selects the right worker (same as Restart serving).
             await supervisor.stop()
@@ -563,6 +568,7 @@ final class MenuBarController {
             NSLog("cocore: user retried confidential — bouncing agent to re-verify")
             didAutoBounceConfidential = false
             lastConfidentialActionAt = Date()
+            lastAutoBounceAt = nil  // explicit Retry overrides the auto-bounce cooldown
             await supervisor.stop()
             await supervisor.start()
             refreshServing()
