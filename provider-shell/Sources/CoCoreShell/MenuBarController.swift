@@ -51,6 +51,16 @@ final class MenuBarController {
     /// How long to let a freshly-(re)started confidential worker finish
     /// verifying before the reconciler's one auto-retry kicks in.
     private static let confidentialVerifyGrace: TimeInterval = 120
+    /// When the reconciler last AUTO-bounced for confidential. Unlike
+    /// `didAutoBounceConfidential` (which resets the instant verification
+    /// flickers true), this is never reset by flapping — so it enforces a hard
+    /// floor between auto-bounces. Without it, an intermittently-verifying
+    /// machine cleared the latch on every brief success and re-bounced on the
+    /// next failure: #90 logged 62 bounces in ~12h (each a full MLX reload),
+    /// which is churn, not recovery. Past the floor we leave it for the user's
+    /// explicit Retry rather than restart-looping behind their back.
+    private var lastAutoBounceAt: Date?
+    private static let autoBounceCooldown: TimeInterval = 30 * 60
     /// One-shot recreate at launch when ControlCenter registered the item but
     /// never composited it (common on Sonoma+ when LSUIElement conflicted with
     /// a runtime accessory-policy switch).
@@ -696,8 +706,21 @@ final class MenuBarController {
             Date().timeIntervalSince(last) < Self.confidentialVerifyGrace {
             return  // still inside the grace window — give it time
         }
+        // Hard floor between auto-bounces, immune to verification flapping.
+        // A bounce only helps if the worker can actually verify on re-register;
+        // if it keeps failing (e.g. a persistent code-identity `aead::Error`),
+        // bouncing every couple of minutes is pure churn, so back off and let
+        // the user's explicit Retry drive it.
+        if let lastBounce = lastAutoBounceAt,
+            Date().timeIntervalSince(lastBounce) < Self.autoBounceCooldown {
+            NSLog(
+                "cocore: confidential still unverified but within auto-bounce cooldown (%.0fm) — not churning",
+                Self.autoBounceCooldown / 60)
+            return
+        }
         didAutoBounceConfidential = true
         lastConfidentialActionAt = Date()
+        lastAutoBounceAt = Date()
         NSLog("cocore: auto-bouncing agent once to re-trigger confidential verification")
         await supervisor.stop()
         await supervisor.start()

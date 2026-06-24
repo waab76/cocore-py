@@ -98,11 +98,20 @@ final class AgentSupervisor {
         // Mark BEFORE we signal the process so the terminationHandler
         // (which fires on exit) doesn't treat this as a crash and respawn.
         intentionalStop = true
-        guard let p = process else { return }
-        p.interrupt()
-        await waitForExit(p, timeout: 5)
-        if p.isRunning { p.terminate() }
-        process = nil
+        if let p = process {
+            p.interrupt()
+            await waitForExit(p, timeout: 5)
+            if p.isRunning { p.terminate() }
+            process = nil
+        }
+        // Reap any leaked sibling workers too — not just the one we track.
+        // A prior stop() that lost the race (or an auto-bounce that spawned a
+        // replacement before the old child died) leaves a worker parented to
+        // THIS shell that `process` no longer points at; left alive it keeps a
+        // resident MLX engine and a second advisor registration. That's the
+        // "paused but still burning CPU" report (#90): pause stopped the
+        // tracked worker, the leaked sibling kept running. Kill them all.
+        Self.reapWorkers()
     }
 
     /// Synchronous teardown for `applicationWillTerminate`. The async
@@ -115,14 +124,19 @@ final class AgentSupervisor {
     func stopSynchronously() {
         guard !isLaunchAgentManaged else { return }
         intentionalStop = true
-        guard let p = process, p.isRunning else { return }
-        p.interrupt() // SIGINT → agent's graceful shutdown (flips serving=false)
-        let deadline = Date().addingTimeInterval(3)
-        while p.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
+        if let p = process, p.isRunning {
+            p.interrupt() // SIGINT → agent's graceful shutdown (flips serving=false)
+            let deadline = Date().addingTimeInterval(3)
+            while p.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if p.isRunning { p.terminate() }
+            process = nil
         }
-        if p.isRunning { p.terminate() }
-        process = nil
+        // Same singleton guarantee as stop(): a leaked sibling reparented to
+        // launchd would otherwise survive app quit as a stray that fights the
+        // next launch over the advisor session.
+        Self.reapWorkers()
     }
 
     // MARK: - Bug reports
@@ -347,10 +361,14 @@ final class AgentSupervisor {
         // this DID — and when the orphan dies its disconnect cleanup can
         // tear the machine out of routing, stranding the live agent
         // connected-but-unrouted (the exact "jobs reported, ledger flat"
-        // failure). Reap any stray `cocore agent serve` we don't own before
-        // starting a fresh one. Only in the app-supervised path — when a
-        // LaunchAgent owns the agent we never reach spawnChild.
-        Self.killStrayAgents()
+        // failure). It's also the root of #90: a SECOND confidential worker
+        // holds a DIFFERENT ephemeral encryption key, so the advisor's
+        // code-identity challenge (sealed to whichever worker registered
+        // last) fails to open in the other — the perpetual `aead::Error`
+        // churn that keeps confidential unverified and drives the bounce
+        // loop. We reach spawnChild only with `process == nil`, so ANY
+        // surviving serve worker here is a leak — reap them all.
+        Self.reapWorkers()
 
         do {
             try p.run()
@@ -363,54 +381,55 @@ final class AgentSupervisor {
         }
     }
 
-    /// SIGTERM any launchd-orphaned `cocore agent serve` process — one whose
-    /// parent is pid 1, i.e. a previous app session's agent that was
-    /// reparented to launchd when its shell quit without reaping it. Scoped
-    /// to ppid==1 deliberately: a worker parented to a LIVE supervisor is
-    /// that supervisor's to manage, never ours to kill. Without the `-P 1`
-    /// scope, two coexisting tray instances (a botched relaunch, or an
-    /// in-place update where the old instance hadn't quit yet) each reaped
-    /// the OTHER's live worker on every pre-spawn pass — the worker
-    /// respawned and ~30s later got reaped again, the "⚠ the agent keeps
-    /// crashing N×" war that hit the confidential nested worker most
-    /// visibly. `pgrep -P 1 -f <pattern>` is AND semantics on macOS, so we
-    /// catch genuine orphans while leaving live supervised workers alone.
-    /// Best-effort and synchronous (it runs before a spawn, where a
-    /// ~half-second wait is acceptable). Uses `pgrep`/`kill` rather than
-    /// `pkill` so we can exclude our own PID and log what we reaped.
-    private static func killStrayAgents() {
-        let pgrep = Process()
-        pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        // Match both the default CLI (`cocore agent serve`) and the nested
-        // confidential worker (`cocore-provider agent serve`) — a confidential
-        // machine runs the latter, and an orphan of either kind must be reaped.
-        // `-P 1` restricts to launchd orphans (ppid==1); a worker parented to
-        // a running supervisor is left alone.
-        pgrep.arguments = ["-P", "1", "-f", "cocore(-provider)? agent serve"]
-        let pipe = Pipe()
-        pgrep.standardOutput = pipe
-        pgrep.standardError = FileHandle.nullDevice
-        do {
-            try pgrep.run()
+    /// SIGTERM→SIGKILL every stray `cocore[-provider] agent serve` worker that
+    /// is NOT the one we currently track — both launchd orphans (ppid==1, a
+    /// previous app session's agent reparented when its shell quit without
+    /// reaping it) AND direct children of THIS shell that `process` no longer
+    /// points at (a stop() that lost the race, or an auto-bounce that spawned
+    /// a replacement before the old child died).
+    ///
+    /// We deliberately union TWO parent scopes — `-P 1` and `-P <our pid>` —
+    /// rather than a blanket `pkill`. A worker parented to a DIFFERENT live
+    /// shell (a botched relaunch, or an in-place update where the old instance
+    /// hasn't quit) is that instance's to manage; matching only ppid∈{1,us}
+    /// leaves it alone, preserving the property the old `-P 1`-only scope had
+    /// while ALSO catching the same-shell leaks that were #90's root cause
+    /// (duplicate confidential workers → mismatched encryption keys → endless
+    /// `aead::Error` + bounce churn). `pgrep -P <ppid> -f <pat>` is AND
+    /// semantics on macOS. Best-effort and synchronous (it runs before a spawn
+    /// and on stop, where a ~half-second wait is acceptable).
+    private static func reapWorkers() {
+        let mine = ProcessInfo.processInfo.processIdentifier
+        var pids = Set<Int32>()
+        for parent in ["1", String(mine)] {
+            let pgrep = Process()
+            pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            // Match both the default CLI (`cocore agent serve`) and the nested
+            // confidential worker (`cocore-provider agent serve`).
+            pgrep.arguments = ["-P", parent, "-f", "cocore(-provider)? agent serve"]
+            let pipe = Pipe()
+            pgrep.standardOutput = pipe
+            pgrep.standardError = FileHandle.nullDevice
+            guard (try? pgrep.run()) != nil else { continue }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             pgrep.waitUntilExit()
-            let mine = ProcessInfo.processInfo.processIdentifier
-            let pids = (String(data: data, encoding: .utf8) ?? "")
+            for pid in (String(data: data, encoding: .utf8) ?? "")
                 .split(whereSeparator: \.isNewline)
-                .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
-                .filter { $0 != mine }
-            guard !pids.isEmpty else { return }
-            NSLog("cocore: reaping %d orphaned agent process(es) before spawn: %@",
-                  pids.count, pids.map(String.init).joined(separator: ","))
-            for pid in pids { kill(pid, SIGTERM) }
-            // Give them a moment to unwind (their Drop SIGTERMs the Python
-            // child + flips the provider record to serving=false) so we
-            // don't race a half-dead registration.
-            Thread.sleep(forTimeInterval: 0.5)
-            for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
-        } catch {
-            // pgrep absent / failed — nothing to reap, proceed.
+                .compactMap({ Int32($0.trimmingCharacters(in: .whitespaces)) })
+            {
+                pids.insert(pid)
+            }
         }
+        pids.remove(mine)
+        guard !pids.isEmpty else { return }
+        NSLog("cocore: reaping %d stray agent worker(s): %@",
+              pids.count, pids.map(String.init).joined(separator: ","))
+        for pid in pids { kill(pid, SIGTERM) }
+        // Give them a moment to unwind (their Drop SIGTERMs the Python child +
+        // flips the provider record to serving=false) so we don't race a
+        // half-dead registration.
+        Thread.sleep(forTimeInterval: 0.5)
+        for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
     }
 
     /// Append a chunk of agent stderr to the durable log at
