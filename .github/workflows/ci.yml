@@ -161,3 +161,30 @@ jobs:
           name: ci-log-${{ github.run_id }}-${{ github.run_attempt }}
           path: /tmp/ci.log
           if-no-files-found: ignore
+
+  # The confidential worker is built `cargo build --features apns`, and the
+  # apns module is additionally cfg(target_os = "macos"). The clippy step above
+  # runs --all-features but on ubuntu, where that macOS-gated code compiles to
+  # nothing — so apns-only code (e.g. a call site that misses a new fn arg) can
+  # rot unnoticed until someone cuts a confidential release. This caught exactly
+  # that (PR #93: write_provision_status arity). A macOS type-check closes it.
+  #
+  # COCORE_SKIP_NATIVE_BUILD=1 skips the Swift/Metal MLX engine build in build.rs
+  # (`apns` implies `native_mlx`): `cargo check` never links, so the type-check
+  # stays complete without the slow, network-heavy mlx-swift compile.
+  apns-build-check:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: provider
+
+      - name: cargo check --features apns (macOS-gated confidential worker code)
+        env:
+          COCORE_SKIP_NATIVE_BUILD: "1"
+        run: cargo check --locked --features apns --manifest-path provider/Cargo.toml

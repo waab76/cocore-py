@@ -24,8 +24,23 @@ fn main() {
     // engine). The Rust agent links one libCoCoreMLX.dylib (which statically
     // contains MLX + the Swift code); enforced library validation + a pinned
     // dylib/metallib hash keep the owner from swapping it.
+    println!("cargo:rerun-if-env-changed=COCORE_SKIP_NATIVE_BUILD");
     if std::env::var("CARGO_FEATURE_NATIVE_MLX").is_ok() && cfg!(target_os = "macos") {
-        build_and_link_mlx_engine();
+        // COCORE_SKIP_NATIVE_BUILD lets CI TYPE-CHECK the native/apns Rust paths
+        // (`cargo check --features apns`) without the Swift/Metal engine build —
+        // a fast guard so the macOS-only, apns-gated code can't rot unnoticed
+        // between confidential releases (see PR #93). `cargo check` never links,
+        // so skipping the dylib build + link directives leaves the type-check
+        // complete. NEVER set this for a real `cargo build` — the result won't
+        // link against libCoCoreMLX.
+        if std::env::var("COCORE_SKIP_NATIVE_BUILD").is_ok() {
+            println!(
+                "cargo:warning=COCORE_SKIP_NATIVE_BUILD set: skipping MLX engine build \
+                 (type-check only; the resulting artifact will NOT link)"
+            );
+        } else {
+            build_and_link_mlx_engine();
+        }
     }
 
     let sha = std::env::var("COCORE_GIT_SHA").ok().or_else(|| {
