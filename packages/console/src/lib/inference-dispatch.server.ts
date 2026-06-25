@@ -50,6 +50,10 @@ export interface DispatchInputs {
   maxTokensOut: number;
   priceCeiling: { amount: number; currency: string };
   targetProviderDid?: string;
+  /** Specific machine under targetProviderDid to pin. When set, pickProvider
+   *  selects that exact machine row and the advisor /jobs call includes
+   *  targetMachineId so the advisor routes to that machine only. */
+  targetMachineId?: string;
   /** OAuth session to publish records under. Required — every
    *  authoritative record must hit the user's PDS. */
   oauthSession: OAuthSession;
@@ -327,6 +331,7 @@ async function pickProvider(
   model: string,
   requesterDid: string,
   targetDid: string | undefined,
+  targetMachineId: string | undefined,
   options: PickProviderOptions,
   allowedDids: Set<string> | undefined,
   /** Providers already tried this dispatch (a prior attempt's `/jobs`
@@ -343,7 +348,16 @@ async function pickProvider(
   if (attested.length === 0) throw new NoProvidersConnectedError();
 
   if (targetDid) {
-    const hit = attested.find((p) => p.did === targetDid);
+    // When targetMachineId is set, require an exact (DID, machineId) match so
+    // a Mac Mini and a Linux box under the same owner DID are distinguished.
+    // Fall back to DID-only if no machineId was specified (or for legacy rows
+    // that predate the field).
+    const hit = targetMachineId
+      ? (attested.find((p) => p.did === targetDid && p.machineId === targetMachineId) ??
+        // Fall back only to legacy rows that predate the machineId field; a row with
+        // a *different* machineId is a different machine and must not be silently selected.
+        attested.find((p) => p.did === targetDid && !p.machineId))
+      : attested.find((p) => p.did === targetDid);
     if (!hit) throw new TargetProviderNotConnectedError(targetDid);
     // Hard refusal on explicit target: surface why before the user
     // submits the (now doomed) job. We don't auto-fall-back to
@@ -589,6 +603,7 @@ export async function* runDispatch(input: DispatchInputs): AsyncGenerator<Dispat
         input.model,
         input.did,
         input.targetProviderDid,
+        input.targetMachineId,
         { payoutsEligibleDids: null, selfLoopExempt: null },
         input.targetProviderDid ? undefined : input.allowedProviderDids,
         excludeDids,

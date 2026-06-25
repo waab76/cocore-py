@@ -925,6 +925,9 @@ const styles = stylex.create({
 
 interface MachineOption {
   did: string;
+  /** Matches the advisor machineId (provider-record rkey). Null only for
+   *  legacy agents that predate the field; always present in practice. */
+  machineId: string | null;
   label: string;
   detail: string | null;
 }
@@ -991,6 +994,7 @@ function ModelPicker({
   models,
   modelId,
   targetProviderDid,
+  targetMachineId,
   maxTokensOut,
   onModel,
   onTarget,
@@ -999,9 +1003,10 @@ function ModelPicker({
   models: ModelDirectoryEntry[];
   modelId: string | null;
   targetProviderDid: string | null;
+  targetMachineId: string | null;
   maxTokensOut: number;
   onModel: (id: string) => void;
-  onTarget: (did: string | null) => void;
+  onTarget: (did: string | null, machineId: string | null) => void;
   onMaxTokens: (n: number) => void;
 }): ReactElement {
   const [open, setOpen] = useState(false);
@@ -1017,20 +1022,26 @@ function ModelPicker({
   }, [models, modelQuery]);
   const machines: MachineOption[] = (selected?.machines ?? []).map((m) => ({
     did: m.did,
+    machineId: m.machineId ?? null,
     label: machineLabel(m),
     detail:
       [m.chip, m.ramGB != null ? `${m.ramGB}gb ram` : null].filter(Boolean).join(" · ") || null,
   }));
+  // Match on both DID and machineId when available so two machines under the
+  // same owner DID don't both light up as "selected".
+  const isPinnedTo = (m: MachineOption) =>
+    m.did === targetProviderDid &&
+    (targetMachineId == null || m.machineId == null || m.machineId === targetMachineId);
   const targetLabel = targetProviderDid
-    ? (machines.find((m) => m.did === targetProviderDid)?.label ?? shortDid(targetProviderDid))
+    ? (machines.find(isPinnedTo)?.label ?? shortDid(targetProviderDid))
     : "auto";
 
   const pickModel = (id: string) => {
     onModel(id);
     setOpen(false);
   };
-  const pickTarget = (did: string | null) => {
-    onTarget(did);
+  const pickTarget = (did: string | null, machineId: string | null) => {
+    onTarget(did, machineId);
     setOpen(false);
   };
   const pickMaxTokens = (n: number) => {
@@ -1121,7 +1132,7 @@ function ModelPicker({
           <button
             type="button"
             {...stylex.props(styles.popOpt, targetProviderDid === null && styles.popOptSelected)}
-            onClick={() => pickTarget(null)}
+            onClick={() => pickTarget(null, null)}
           >
             <span {...stylex.props(styles.popOptRow)}>
               <span {...stylex.props(styles.popOptName)}>auto</span>
@@ -1131,10 +1142,10 @@ function ModelPicker({
           </button>
           {machines.map((m) => (
             <button
-              key={m.did}
+              key={m.machineId ?? m.did}
               type="button"
-              {...stylex.props(styles.popOpt, m.did === targetProviderDid && styles.popOptSelected)}
-              onClick={() => pickTarget(m.did)}
+              {...stylex.props(styles.popOpt, isPinnedTo(m) && styles.popOptSelected)}
+              onClick={() => pickTarget(m.did, m.machineId)}
             >
               <span {...stylex.props(styles.popOptRow)}>
                 <span {...stylex.props(styles.popOptName)}>{m.label}</span>
@@ -1297,6 +1308,7 @@ export function ChatPage(): ReactElement {
   // Settings for the not-yet-created session shown by "new chat".
   const [draftModelId, setDraftModelId] = useState<string | null>(null);
   const [draftTarget, setDraftTarget] = useState<string | null>(null);
+  const [draftTargetMachineId, setDraftTargetMachineId] = useState<string | null>(null);
   const [draftMaxTokens, setDraftMaxTokens] = useState<number>(MAX_TOKENS_CHOICES[1]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -1382,6 +1394,7 @@ export function ChatPage(): ReactElement {
 
   const modelId = active?.modelId ?? draftModelId ?? defaultModelId;
   const targetProviderDid = active ? active.targetProviderDid : draftTarget;
+  const targetMachineId = active ? (active.targetMachineId ?? null) : draftTargetMachineId;
   const maxTokensOut = active?.maxTokensOut ?? draftMaxTokens;
 
   const updateSession = useCallback((id: string, fn: (s: ChatSession) => ChatSession) => {
@@ -1452,6 +1465,7 @@ export function ChatPage(): ReactElement {
     setActiveId(null);
     setDraftModelId(modelId);
     setDraftTarget(null);
+    setDraftTargetMachineId(null);
     setDraft("");
     setSidebarOpen(false);
     taRef.current?.focus();
@@ -1465,26 +1479,42 @@ export function ChatPage(): ReactElement {
   const setModel = (id: string) => {
     if (active) {
       // Pinned machine may not serve the new model; unpin if so.
+      // Match on both DID and machineId — two machines under the same owner
+      // DID each serve distinct model sets, so clearing the pin must be
+      // per-machine, not per-owner.
       const entry = models.find((m) => m.modelId === id);
+      const stillValid =
+        !!active.targetProviderDid &&
+        entry?.machines.some(
+          (m) =>
+            m.did === active.targetProviderDid &&
+            (active.targetMachineId == null ||
+              m.machineId == null ||
+              m.machineId === active.targetMachineId),
+        );
       updateSession(active.id, (s) => ({
         ...s,
         modelId: id,
-        targetProviderDid:
-          s.targetProviderDid && entry?.machines.some((m) => m.did === s.targetProviderDid)
-            ? s.targetProviderDid
-            : null,
+        targetProviderDid: stillValid ? s.targetProviderDid : null,
+        targetMachineId: stillValid ? s.targetMachineId : null,
       }));
     } else {
       setDraftModelId(id);
       setDraftTarget(null);
+      setDraftTargetMachineId(null);
     }
   };
 
-  const setTarget = (didOrNull: string | null) => {
+  const setTarget = (didOrNull: string | null, machineIdOrNull: string | null) => {
     if (active) {
-      updateSession(active.id, (s) => ({ ...s, targetProviderDid: didOrNull }));
+      updateSession(active.id, (s) => ({
+        ...s,
+        targetProviderDid: didOrNull,
+        targetMachineId: machineIdOrNull,
+      }));
     } else {
       setDraftTarget(didOrNull);
+      setDraftTargetMachineId(machineIdOrNull);
     }
   };
 
@@ -1564,7 +1594,7 @@ export function ChatPage(): ReactElement {
     // Materialize the session on first send.
     let target = active;
     if (!target) {
-      target = { ...createSession(modelId), targetProviderDid, maxTokensOut };
+      target = { ...createSession(modelId), targetProviderDid, targetMachineId, maxTokensOut };
       setSessions((prev) => [target!, ...prev]);
       setActiveId(target.id);
     }
@@ -1619,6 +1649,7 @@ export function ChatPage(): ReactElement {
         ...(turnImages.length > 0 ? { transcript, images: turnImages } : {}),
         maxTokensOut,
         targetProviderDid,
+        targetMachineId,
         signal: abort.signal,
         onMeta: (meta) => {
           const entry = models.find((m) => m.modelId === modelId);
@@ -1682,7 +1713,11 @@ export function ChatPage(): ReactElement {
 
   const selectedModel = models.find((m) => m.modelId === modelId) ?? null;
   const targetMachine = targetProviderDid
-    ? (selectedModel?.machines.find((m) => m.did === targetProviderDid) ?? null)
+    ? (selectedModel?.machines.find(
+        (m) =>
+          m.did === targetProviderDid &&
+          (targetMachineId == null || m.machineId == null || m.machineId === targetMachineId),
+      ) ?? null)
     : null;
   const messages = active?.messages ?? [];
 
@@ -2019,6 +2054,7 @@ export function ChatPage(): ReactElement {
                     models={models}
                     modelId={modelId}
                     targetProviderDid={targetProviderDid}
+                    targetMachineId={targetMachineId}
                     maxTokensOut={maxTokensOut}
                     onModel={setModel}
                     onTarget={setTarget}

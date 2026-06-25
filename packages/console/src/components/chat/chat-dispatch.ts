@@ -29,6 +29,9 @@ export interface ChatDispatchInputs {
   images?: ChatDispatchImage[];
   maxTokensOut: number;
   targetProviderDid?: string | null;
+  /** Specific machine under targetProviderDid. null/undefined → any machine
+   *  for that DID. Ignored when targetProviderDid is not set. */
+  targetMachineId?: string | null;
   signal?: AbortSignal;
   onMeta?: (meta: { providerDid: string; jobUri: string }) => void;
   onChunk?: (text: string) => void;
@@ -139,6 +142,9 @@ export async function dispatchChatTurn(inputs: ChatDispatchInputs): Promise<Chat
       maxTokensOut: inputs.maxTokensOut,
       priceCeiling: PRICE_CEILING,
       ...(inputs.targetProviderDid ? { targetProviderDid: inputs.targetProviderDid } : {}),
+      ...(inputs.targetProviderDid && inputs.targetMachineId
+        ? { targetMachineId: inputs.targetMachineId }
+        : {}),
     }),
     ...(inputs.signal ? { signal: inputs.signal } : {}),
   });

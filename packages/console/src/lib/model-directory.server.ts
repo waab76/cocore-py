@@ -67,6 +67,11 @@ interface ProfileChip {
 
 interface ModelMachine {
   did: string;
+  /** Stable per-machine identifier (the agent's provider-record rkey).
+   *  Matches `machineId` in the advisor registry. Used to distinguish
+   *  two machines that share an owner DID and to route pinned requests
+   *  to the specific machine the user selected. */
+  machineId: string | null;
   machineLabel: string | null;
   chip: string | null;
   ramGB: number | null;
@@ -269,6 +274,9 @@ function totalsFor(
 
 interface AdvisorProviderRow {
   did: string;
+  /** Per-machine identity (the agent's provider-record rkey). One DID
+   *  can have multiple machines; this distinguishes them. */
+  machineId?: string;
   attestedAt: string | null;
   active?: boolean;
   lastSeen?: string;
@@ -283,11 +291,7 @@ interface AdvisorProviderRow {
   codeAttested?: boolean;
 }
 
-/** DIDs the advisor currently considers routable — attested and not
- *  owner-paused. Matches the filter in inference-dispatch pickProvider
- *  plus the advisor registry's `active` gate. Returns null when the
- *  advisor is unreachable so callers can treat every indexed provider
- *  as offline rather than showing stale PDS records. */
+/** Per-machine online info from the advisor. */
 interface AdvisorOnline {
   lastSeen: string;
   /** The machine's tier recomputed from its ACTUAL signed attestation (the
@@ -295,7 +299,18 @@ interface AdvisorOnline {
   verifiedTier: VerifiedTier;
 }
 
-async function fetchAdvisorOnlineDids(): Promise<Map<string, AdvisorOnline> | null> {
+interface AdvisorOnlineResult {
+  /** Keyed by "${did}:${machineId}" for machines that report a machineId,
+   *  or just "${did}" for legacy agents. Used for per-machine online checks
+   *  so a Mac Mini and a Linux box under the same owner DID don't collapse
+   *  into one entry. */
+  byMachine: Map<string, AdvisorOnline>;
+  /** The set of owner DIDs that have at least one online machine. Used for
+   *  the profile-chip hydration filter (which is DID-scoped, not per-machine). */
+  onlineDids: Set<string>;
+}
+
+async function fetchAdvisorOnlineDids(): Promise<AdvisorOnlineResult | null> {
   const base = cocoreConfig().advisorUrl.replace(/\/$/, "");
   try {
     const r = await fetch(`${base}/providers`);
@@ -314,10 +329,17 @@ async function fetchAdvisorOnlineDids(): Promise<Map<string, AdvisorOnline> | nu
           confidentialEligible: p.confidentialEligible,
           codeAttested: p.codeAttested,
         });
-        return [p.did, { lastSeen: p.lastSeen ?? p.attestedAt!, verifiedTier }];
+        // Key by composite "${did}:${machineId}" so two machines under the
+        // same owner DID get separate entries. Fall back to the DID alone for
+        // legacy agents that predate the machineId field.
+        const key = p.machineId ? `${p.did}:${p.machineId}` : p.did;
+        return [key, { lastSeen: p.lastSeen ?? p.attestedAt!, verifiedTier }];
       }),
     );
-    return new Map(entries);
+    return {
+      byMachine: new Map(entries),
+      onlineDids: new Set(rows.map((p) => p.did)),
+    };
   } catch (reason) {
     console.warn("[model-directory] Advisor /providers failed:", reason);
     return null;
@@ -362,21 +384,22 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
   // tolerant of AppView failure independently — providers being
   // unreachable means an empty directory, but a profile or
   // activity miss just means we render bare DIDs / zero counts.
-  const [[providersResult, profilesResult, activityResult], advisorOnline] = await Promise.all([
-    // One root span, three concurrent child `appview.request` spans.
-    runTraced(
-      "models.directory.appview",
-      Effect.all(
-        [
-          Effect.either(appviewListProvidersEffect),
-          Effect.either(appviewListProfilesEffect),
-          Effect.either(appviewModelActivityEffect),
-        ],
-        { concurrency: "unbounded" },
+  const [[providersResult, profilesResult, activityResult], advisorOnlineResult] =
+    await Promise.all([
+      // One root span, three concurrent child `appview.request` spans.
+      runTraced(
+        "models.directory.appview",
+        Effect.all(
+          [
+            Effect.either(appviewListProvidersEffect),
+            Effect.either(appviewListProfilesEffect),
+            Effect.either(appviewModelActivityEffect),
+          ],
+          { concurrency: "unbounded" },
+        ),
       ),
-    ),
-    fetchAdvisorOnlineDids(),
-  ]);
+      fetchAdvisorOnlineDids(),
+    ]);
 
   if (providersResult._tag !== "Right") {
     logAppviewUnreachable(providersResult.left);
@@ -404,6 +427,9 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
     console.warn("[model-directory] AppView modelActivity failed:", activityResult.left);
   }
 
+  const advisorOnline = advisorOnlineResult?.byMachine ?? null;
+  const advisorOnlineDids = advisorOnlineResult?.onlineDids ?? null;
+
   // Fall back to microcosm for operator chips: any online provider DID without
   // a local dev.cocore.account.profile record gets its handle/name/avatar from
   // Slingshot + its PDS, so the table shows a real user instead of a bare DID.
@@ -411,7 +437,7 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
     ...new Set(
       providersResult.right.providers
         .map((row) => row.repo)
-        .filter((did) => (advisorOnline?.has(did) ?? false) && !profilesByDid.has(did)),
+        .filter((did) => (advisorOnlineDids?.has(did) ?? false) && !profilesByDid.has(did)),
     ),
   ];
   const microcosmByDid =
@@ -431,8 +457,16 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
     const body = row.body as ProviderRecordView;
     const supportedModels = body.supportedModels ?? [];
     const did = row.repo;
+    // row.rkey is the provider-record rkey, which matches machineId in the
+    // advisor registry. Used both for the composite online-check key and to
+    // populate ModelMachine.machineId for per-machine pinning.
+    const machineId = row.rkey || null;
     const lastSeen = safeString(body.createdAt) ?? safeString(row.indexedAt) ?? null;
-    if (!advisorOnline?.has(did)) continue;
+    // Check THIS SPECIFIC machine is online, not just any machine for the DID.
+    // The advisor map is keyed by "${did}:${machineId}" (composite), falling
+    // back to the DID alone for legacy agents that predate machineId.
+    const advisorKey = machineId ? `${did}:${machineId}` : did;
+    if (!advisorOnline?.has(advisorKey)) continue;
 
     for (const modelId of supportedModels) {
       if (typeof modelId !== "string" || modelId.length === 0) continue;
@@ -454,7 +488,7 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
         };
         byModel.set(modelId, entry);
       }
-      const onlineInfo = advisorOnline.get(did);
+      const onlineInfo = advisorOnline.get(advisorKey);
       const seen = onlineInfo?.lastSeen ?? lastSeen;
       const attestationPubKey = safeString(body.attestationPubKey);
       const machineKey = attestationPubKey ?? did;
@@ -467,6 +501,7 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
       if (!prev || (seen != null && (prev.lastSeen == null || seen > prev.lastSeen))) {
         machines.set(machineKey, {
           did,
+          machineId,
           machineLabel: safeString(body.machineLabel),
           chip: safeString(body.chip),
           ramGB: safeNumber(body.ramGB),

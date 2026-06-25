@@ -56,6 +56,9 @@ export interface ChatSession {
   modelId: string;
   /** null → the advisor routes to any eligible machine. */
   targetProviderDid: string | null;
+  /** Specific machine under targetProviderDid to pin. null → any machine
+   *  for that DID. Always null when targetProviderDid is null. */
+  targetMachineId?: string | null;
   maxTokensOut: number;
   /** Display-only running sum of tokensIn+tokensOut. The exchange
    *  ledger owns the real balance. */
@@ -92,6 +95,7 @@ export function createSession(modelId: string): ChatSession {
     title: "new session",
     modelId,
     targetProviderDid: null,
+    targetMachineId: null,
     maxTokensOut: DEFAULT_MAX_TOKENS_OUT,
     spentTokens: 0,
     createdAt: now,
