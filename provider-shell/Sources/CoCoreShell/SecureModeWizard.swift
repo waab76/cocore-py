@@ -668,6 +668,7 @@ struct SecureModeWizardView: View {
                 progress = nil
                 return  // attestingStep now renders the "Sign in again" panel
             }
+            let pushStart = Date()
             do {
                 try await pushAttestation()
                 progress = "Building the attestation chain…"
@@ -687,7 +688,7 @@ struct SecureModeWizardView: View {
                 let diag = AttestationDiagnostic(
                     serial: serial,
                     enrolled: EnrollmentProbe.isEnrolled(),
-                    elapsedSeconds: 0,
+                    elapsedSeconds: Int(Date().timeIntervalSince(pushStart)),
                     polls: 0,
                     pushStatus: pushStatus,
                     pushStubbed: pushStubbed,
@@ -765,12 +766,15 @@ struct SecureModeWizardView: View {
             }
             let start = Date()
             while !Task.isCancelled, Date() < deadline {
+                // Count every attempt, including ones whose request throws
+                // (network error / timeout), so `polls` in the report reflects
+                // the real effort, not just the responses that came back.
+                pollAttempts += 1
                 var req = URLRequest(url: url)
                 req.setValue("Bearer \(auth.apiKey)", forHTTPHeaderField: "Authorization")
                 req.timeoutInterval = 15
                 if let (data, resp) = try? await URLSession.shared.data(for: req) {
                     let http = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                    pollAttempts += 1
                     recordChainResponse(data, http: http)
                     if http == 200, hasChain(data) {
                         working = false
