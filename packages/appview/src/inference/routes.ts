@@ -64,6 +64,7 @@ interface DispatchBody {
   maxTokensOut?: unknown;
   priceCeiling?: unknown;
   targetProviderDid?: unknown;
+  targetMachineId?: unknown;
   /** Optional ISO 3166-1 alpha-2 country to route by (advisory). */
   country?: unknown;
   /** Optional DID allow-set the console resolved (pro-bono / friends /
@@ -96,6 +97,12 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
   }
   if (body.targetProviderDid !== undefined && typeof body.targetProviderDid !== "string") {
     return "targetProviderDid must be a string when provided";
+  }
+  if (body.targetMachineId !== undefined && typeof body.targetMachineId !== "string") {
+    return "targetMachineId must be a string when provided";
+  }
+  if (body.targetMachineId !== undefined && body.targetProviderDid === undefined) {
+    return "targetMachineId requires targetProviderDid";
   }
   let country: string | undefined;
   if (body.country !== undefined) {
@@ -131,6 +138,9 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
     priceCeiling: { amount: pc.amount, currency: pc.currency },
     ...(typeof body.targetProviderDid === "string"
       ? { targetProviderDid: body.targetProviderDid }
+      : {}),
+    ...(typeof body.targetProviderDid === "string" && typeof body.targetMachineId === "string"
+      ? { targetMachineId: body.targetMachineId }
       : {}),
     ...(country ? { country } : {}),
     ...(allowedProviderDids ? { allowedProviderDids } : {}),

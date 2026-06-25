@@ -56,6 +56,11 @@ export interface DispatchInputs {
   maxTokensOut: number;
   priceCeiling: { amount: number; currency: string };
   targetProviderDid?: string;
+  /** Specific machine under targetProviderDid to pin. When set, pickProvider
+   *  selects the advisor row matching both DID and machineId rather than the
+   *  first DID match, so two machines under the same owner DID are
+   *  distinguished. */
+  targetMachineId?: string;
   /** Optional ISO 3166-1 alpha-2 country filter (uppercased). When set,
    *  pickProvider keeps only candidates whose advertised `region` matches,
    *  after the model filter. Advisory routing (region is a provider
@@ -326,6 +331,7 @@ async function pickProvider(
   model: string,
   requesterDid: string,
   targetDid: string | undefined,
+  targetMachineId: string | undefined,
   options: PickProviderOptions,
   /** Optional ISO 3166-1 alpha-2 country filter (uppercased). Applied after
    *  the model filter; not applied to an explicit `targetDid`. */
@@ -345,7 +351,13 @@ async function pickProvider(
   if (attested.length === 0) throw new NoProvidersConnectedError();
 
   if (targetDid) {
-    const hit = attested.find((p) => p.did === targetDid);
+    // When targetMachineId is set, require an exact (DID, machineId) match so
+    // a Mac Mini and a Linux box under the same owner DID are distinguished.
+    // Fall back to DID-only if no machineId was specified (or for legacy rows
+    // that predate the field).
+    const hit = targetMachineId
+      ? attested.find((p) => p.did === targetDid && p.machineId === targetMachineId)
+      : attested.find((p) => p.did === targetDid);
     if (!hit) throw new TargetProviderNotConnectedError(targetDid);
     const targetPasses = filterByPayoutsEligibility([hit], options).length > 0;
     if (!targetPasses) throw new ProviderPayoutsNotEligibleError(targetDid);
@@ -526,6 +538,7 @@ export async function* runDispatch(
         input.model,
         input.did,
         input.targetProviderDid,
+        input.targetMachineId,
         { payoutsEligibleDids: null, selfLoopExempt: null },
         // No country / allow-set filter on an explicit pin — the user chose
         // that machine.

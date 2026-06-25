@@ -96,6 +96,9 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
   if (body.targetMachineId !== undefined && typeof body.targetMachineId !== "string") {
     return "targetMachineId must be a string when provided";
   }
+  if (body.targetMachineId !== undefined && body.targetProviderDid === undefined) {
+    return "targetMachineId requires targetProviderDid";
+  }
   let country: string | undefined;
   // `null` (an explicit "no country") is treated the same as absent, so a
   // client that sends `country: null` isn't rejected with a misleading 400.
