@@ -44,18 +44,26 @@ interface ProviderRecordView {
   proBono?: ProBonoPolicyView;
 }
 
-/** The set of provider DIDs that currently offer `requesterDid` pro-bono work,
- *  resolved from the AppView's provider-record mirror. Deduped by DID (a single
- *  owner may run several machines; routing is DID-scoped here, then the live
- *  advisor intersect in pickProvider narrows to connected machines). Throws on
- *  an AppView failure so the caller can distinguish "nobody offers you pro
- *  bono" (empty set) from "the lookup failed". */
-export async function resolveProBonoProviderDids(requesterDid: string): Promise<Set<string>> {
+/** The set of MACHINE keys (`${did}:${machineId}`, where machineId is the
+ *  provider-record rkey) that currently offer `requesterDid` pro-bono work,
+ *  resolved from the AppView's provider-record mirror. Keyed per MACHINE, not
+ *  per owner DID, because `proBono` is a per-record election: an owner can run
+ *  one machine pro bono and another billed, so a DID-scoped allow-set could
+ *  route a balance-less requester to the owner's *billing* machine and bust the
+ *  pro-bono guarantee. The composite key is matched by {@link filterByAllowedDids}
+ *  against the advisor row's `(did, machineId)`. Throws on an AppView failure so
+ *  the caller can distinguish "nobody offers you pro bono" (empty set) from "the
+ *  lookup failed". */
+export async function resolveProBonoProviderKeys(requesterDid: string): Promise<Set<string>> {
   const res = await runTraced("proBono.listProviders", appviewListProvidersEffect);
   const out = new Set<string>();
   for (const row of res.providers) {
     const body = row.body as ProviderRecordView;
-    if (proBonoApplies(body.proBono, requesterDid)) out.add(row.repo);
+    // Need the rkey to address the specific machine; a record without one
+    // can't be matched to an advisor row, so it can't be offered pro bono.
+    if (row.rkey && proBonoApplies(body.proBono, requesterDid)) {
+      out.add(`${row.repo}:${row.rkey}`);
+    }
   }
   return out;
 }

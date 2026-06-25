@@ -86,6 +86,19 @@ describe("filterByAllowedDids", () => {
   it("an empty allow-set filters everything out", () => {
     expect(filterByAllowedDids(rows, new Set())).toEqual([]);
   });
+
+  it("a `did:machineId` composite matches only that machine (pro-bono granularity)", () => {
+    // Same owner, two machines — a composite key must not widen to the other.
+    const m1 = { did: "did:plc:a", machineId: "rkeyA" };
+    const m2 = { did: "did:plc:a", machineId: "rkeyB" };
+    expect(filterByAllowedDids([m1, m2], new Set(["did:plc:a:rkeyA"]))).toEqual([m1]);
+  });
+
+  it("a bare DID still matches every machine of that owner (friends/verified)", () => {
+    const m1 = { did: "did:plc:a", machineId: "rkeyA" };
+    const m2 = { did: "did:plc:a", machineId: "rkeyB" };
+    expect(filterByAllowedDids([m1, m2], new Set(["did:plc:a"]))).toEqual([m1, m2]);
+  });
 });
 
 describe("classifyDispatchError", () => {

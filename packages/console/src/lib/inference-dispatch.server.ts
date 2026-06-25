@@ -57,9 +57,13 @@ export interface DispatchInputs {
   /** OAuth session to publish records under. Required — every
    *  authoritative record must hit the user's PDS. */
   oauthSession: OAuthSession;
-  /** Restrict provider selection to this set of DIDs. Used by the
-   *  friends-only chat-completions endpoint, which fetches the
-   *  user's friend records from their PDS and passes the DID set
+  /** Restrict provider selection to this allow-set. Each entry is either a
+   *  bare DID — owner-granular, used by the friends-only + verified endpoints —
+   *  or a `${did}:${machineId}` composite — machine-granular, used by the
+   *  pro-bono path (the election is per provider record, so it must not widen
+   *  to an owner's other billed machines). {@link filterByAllowedDids} matches
+   *  either form. Used by the friends-only chat-completions endpoint, which
+   *  fetches the user's friend records from their PDS and passes the DID set
    *  through to constrain pickProvider.
    *
    *  Empty set is meaningful and DIFFERENT from `undefined`:
@@ -336,12 +340,19 @@ export function filterByPayoutsEligibility<T extends { did: string }>(
  *  meaningful "filter everything out" signal that the caller
  *  should distinguish — the route layer turns that into
  *  NoFriendsAvailableError. */
-export function filterByAllowedDids<T extends { did: string }>(
+export function filterByAllowedDids<T extends { did: string; machineId?: string }>(
   candidates: T[],
   allowedDids: Set<string> | undefined,
 ): T[] {
   if (!allowedDids) return candidates;
-  return candidates.filter((c) => allowedDids.has(c.did));
+  // An entry is either a bare DID — owner-granular (friends / verified) — or a
+  // `${did}:${machineId}` composite — machine-granular (pro-bono, where the
+  // election is per provider record). Match either, so a pro-bono allow-set
+  // never widens to an owner's other, billed machines.
+  return candidates.filter(
+    (c) =>
+      allowedDids.has(c.did) || (c.machineId != null && allowedDids.has(`${c.did}:${c.machineId}`)),
+  );
 }
 
 /** Pure filter for country routing. `undefined`/empty country passes the

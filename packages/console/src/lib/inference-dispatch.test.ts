@@ -93,6 +93,22 @@ describe("filterByAllowedDids", () => {
     const out = filterByAllowedDids([A, B], new Set(["did:plc:carol", "did:plc:alice"]));
     assert.deepEqual(out, [A]);
   });
+
+  test("a `did:machineId` composite matches only that machine (pro-bono granularity)", () => {
+    // Same owner DID, two machines — one pro bono, one not. A composite key
+    // must match ONLY the pro-bono machine, never widen to the billed one.
+    const m1 = { did: "did:plc:alice", machineId: "rkeyA" };
+    const m2 = { did: "did:plc:alice", machineId: "rkeyB" };
+    const out = filterByAllowedDids([m1, m2], new Set(["did:plc:alice:rkeyA"]));
+    assert.deepEqual(out, [m1]);
+  });
+
+  test("a bare DID still matches every machine of that owner (friends/verified)", () => {
+    const m1 = { did: "did:plc:alice", machineId: "rkeyA" };
+    const m2 = { did: "did:plc:alice", machineId: "rkeyB" };
+    const out = filterByAllowedDids([m1, m2], new Set(["did:plc:alice"]));
+    assert.deepEqual(out, [m1, m2]);
+  });
 });
 
 describe("classifyDispatchError", () => {

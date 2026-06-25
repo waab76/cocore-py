@@ -30,7 +30,7 @@ import {
   isDispatchForwardConfigured,
 } from "@/lib/inference-dispatch-forward.server.ts";
 import { runDispatch } from "@/lib/inference-dispatch.server.ts";
-import { resolveProBonoProviderDids } from "@/lib/pro-bono.server.ts";
+import { resolveProBonoProviderKeys } from "@/lib/pro-bono.server.ts";
 import { getAtprotoSessionForRequest } from "@/middleware/auth.server.ts";
 
 interface DispatchBody {
@@ -160,15 +160,18 @@ export const Route = createFileRoute("/api/xrpc/dev.cocore.inference.dispatch")(
         const parsed = parseDispatch(body);
         if (typeof parsed === "string") return json({ error: parsed }, 400);
 
-        // The pro-bono path: route ONLY to providers whose policy serves this
-        // requester free. We resolve WHO offers them pro bono here (the console
-        // has the AppView read + the requester DID), then forward / pass the
-        // allow-set so either core just filters. Fail closed if nobody does.
+        // The pro-bono path: route ONLY to the specific machines whose policy
+        // serves this requester free. We resolve WHICH machines offer them pro
+        // bono here (the console has the AppView read + the requester DID) as
+        // composite `did:machineId` keys, then forward / pass the allow-set so
+        // either core just filters. Machine-granular (not DID-granular) so an
+        // owner's other, billed machines never satisfy the pro-bono request.
+        // Fail closed if nobody does.
         const { proBono, ...rest } = parsed;
         let allowedProviderDids: string[] | undefined;
         if (proBono) {
           try {
-            const set = await resolveProBonoProviderDids(session.did);
+            const set = await resolveProBonoProviderKeys(session.did);
             if (set.size === 0) {
               return json(
                 {

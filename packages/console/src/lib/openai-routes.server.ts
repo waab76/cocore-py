@@ -26,7 +26,7 @@ import { appviewBackedSession, appviewSessionInfo } from "@/lib/appview-backed-s
 import { isAppviewForwardConfigured } from "@/lib/appview-pds-forward.server.ts";
 import { type DispatchInputs, runDispatch } from "@/lib/inference-dispatch.server.ts";
 import { listMyFriendDids } from "@/lib/friends.server.ts";
-import { resolveProBonoProviderDids } from "@/lib/pro-bono.server.ts";
+import { resolveProBonoProviderKeys } from "@/lib/pro-bono.server.ts";
 import {
   buildJobInput,
   bufferedResponse,
@@ -321,12 +321,14 @@ export async function handleProBonoChatCompletions(request: Request): Promise<Re
   const parsed = parseRequest(raw);
   if (typeof parsed === "string") return jsonError(400, parsed);
 
-  // Resolve the providers that currently serve this DID pro bono BEFORE
-  // submitting the job. A lookup failure surfaces as a transport error (so the
-  // caller can tell "nobody offers me pro bono" from "the AppView coughed").
+  // Resolve the specific MACHINES that currently serve this DID pro bono BEFORE
+  // submitting the job (composite `did:machineId` keys — pro bono is per-machine,
+  // so we can't widen to an owner's other billed machines). A lookup failure
+  // surfaces as a transport error (so the caller can tell "nobody offers me pro
+  // bono" from "the AppView coughed").
   let allowedProviderDids: Set<string>;
   try {
-    allowedProviderDids = await resolveProBonoProviderDids(auth.did);
+    allowedProviderDids = await resolveProBonoProviderKeys(auth.did);
   } catch (e) {
     return jsonError(
       502,
