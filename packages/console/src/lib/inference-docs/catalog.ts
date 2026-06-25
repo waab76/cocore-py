@@ -40,7 +40,7 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
     method: "POST",
     path: "/chat/completions",
     description:
-      "OpenAI-compatible chat completion. Routes to an attested provider serving the requested model. Set country to an ISO 3166-1 alpha-2 code (e.g. US) to route only to providers advertising that region — an advisory provider self-claim — failing closed with no_providers_for_country when none match. country is accepted on every completion route below.",
+      "OpenAI-compatible chat completion. Routes to an attested provider serving the requested model. Set country to an ISO 3166-1 alpha-2 code (e.g. US) to route only to providers advertising that region — an advisory provider self-claim — failing closed with no_providers_for_country when none match.",
     auth: "required",
     params: [
       { name: "model", type: "string", required: true },
@@ -91,7 +91,7 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
     method: "POST",
     path: "/private/chat/completions",
     description:
-      "Same request shape as chat/completions, but routing is limited to providers run by DIDs on your friends list.",
+      "Same request shape as chat/completions, but routing is limited to providers run by DIDs on your friends list. country still narrows by region.",
     auth: "required",
     params: [
       { name: "model", type: "string", required: true },
@@ -119,7 +119,7 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
     method: "POST",
     path: "/verified/chat/completions",
     description:
-      'Same request shape as chat/completions, but routing is limited to providers whose attestation is cryptographically verified (recomputed from the signed Apple-rooted attestation, not the self-asserted label). Set min_trust to "hardware-attested" (default) or "confidential" to pick the floor. Fails closed with no_verified_providers when none qualify.',
+      'Same request shape as chat/completions, but routing is limited to providers whose attestation is cryptographically verified (recomputed from the signed Apple-rooted attestation, not the self-asserted label). Set min_trust to "hardware-attested" (default) or "confidential" to pick the floor. Fails closed with no_verified_providers when none qualify. country still narrows by region.',
     auth: "required",
     params: [
       { name: "model", type: "string", required: true },
