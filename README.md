@@ -106,6 +106,13 @@ The mechanics are deliberately few:
 - **A monthly patronage rebate** — most of the treasury flows back to active
   members in proportion to how much they participated. This is the old
   Rochdale co-op dividend (think REI's annual rebate), translated to compute.
+- **A pro bono carve-out** — a provider can hold a machine out for free,
+  unmetered work, either for *anyone* or for an explicit list of direct
+  relationships. A pro bono job counts no tokens and the treasury takes no
+  cut: the receipt records `proBono: true` with a zero price and zero token
+  counts, so a balance-less requester can still be served unlimited. It's
+  purely additive — a requester the policy doesn't cover is still served as a
+  normal paid job, so opting in never costs the machine paid work.
 
 Every parameter lives on a public `dev.cocore.compute.exchangePolicy`
 record, so you — or a competing exchange — can replicate the math without

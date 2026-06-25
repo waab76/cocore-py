@@ -65,6 +65,34 @@ calls beyond the federated AT Protocol layer:
 Any failure in this chain invalidates the unit of work without requiring
 agreement from any other party.
 
+## Pro bono receipts
+
+A provider can elect to serve work **pro bono** — free, unmetered, and with
+no exchange cut — via the `proBono` policy on its
+`dev.cocore.compute.provider` record:
+
+- `proBono.mode: "any"` serves every requester pro bono.
+- `proBono.mode: "direct"` serves only the requester DIDs in `proBono.dids`
+  (the owner's direct pro bono relationships) and bills everyone else
+  normally. An absent policy, or an unknown `mode`, means pro bono is off —
+  readers fail closed to paid.
+
+Pro bono is purely **additive**: a requester the policy doesn't cover is
+still served as a normal paid job, so opting in never costs the machine paid
+work. The election is the provider's alone — there is no central pro bono
+registry, consistent with the no-coordinator invariant.
+
+When a provider serves a job pro bono it still publishes a signed receipt
+(the provider's PDS stays the source of truth for work done), but the receipt
+carries `proBono: true` and, by invariant, `price.amount: 0` and
+`tokens: { in: 0, out: 0 }` — the work is explicitly not counted, so neither
+figure is a billing claim. The flag is covered by `enclaveSignature`, so the
+carve-out is part of the signed, self-verifying record rather than an
+off-record side channel. A verifier MUST reject a `proBono: true` receipt
+whose price or token counts are non-zero. An exchange settling such a receipt
+takes no fee and moves no balance: `amountCharged`, `providerPayout`, and
+`exchangeFee` are all `0`.
+
 ## Federation invariants
 
 These two properties together are what "no privileged operator" means in
