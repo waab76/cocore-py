@@ -81,6 +81,7 @@ import {
   listMyFriendsQueryOptions,
   type ListedFriend,
 } from "@/components/friends/friends.functions.ts";
+import { ProBonoBadge, RegionFlag } from "@/components/machines/MachineBadges.tsx";
 import {
   dedupMyProviderRecordsMutationOptions,
   deleteMyProviderRecordMutationOptions,
@@ -1403,7 +1404,9 @@ export function AdvancedSettingsDialogContent({
   isSharePending: boolean;
   isProBonoPending: boolean;
   onShareLocation: (share: boolean) => void;
-  onSaveProBono: (policy: ProBonoPolicy) => void;
+  /** Persists the policy and resolves/rejects with the write so the dialog can
+   *  roll back its optimistic local state on failure. */
+  onSaveProBono: (policy: ProBonoPolicy) => Promise<unknown>;
   onClose: () => void;
 }) {
   // Three-way pro-bono state seeded from the record. Off = no policy; `any`
@@ -1422,24 +1425,29 @@ export function AdvancedSettingsDialogContent({
   const friends = friendsQ.data ?? [];
 
   // Every interaction here autosaves — sliding the control or ticking a friend
-  // writes the provider record immediately, no separate submit step.
-  const persist = (next: ProBonoMode, dids: Set<string>) => {
-    if (next === "off") onSaveProBono(null);
-    else if (next === "any") onSaveProBono({ mode: "any" });
-    else onSaveProBono({ mode: "direct", dids: [...dids] });
+  // writes the provider record immediately, no separate submit step. The write
+  // is optimistic: the handlers below update local state first, then roll it
+  // back if `onSaveProBono`'s promise rejects so the dialog never shows a value
+  // the server didn't accept.
+  const persist = (next: ProBonoMode, dids: Set<string>): Promise<unknown> => {
+    if (next === "off") return onSaveProBono(null);
+    if (next === "any") return onSaveProBono({ mode: "any" });
+    return onSaveProBono({ mode: "direct", dids: [...dids] });
   };
 
   const handleModeChange = (next: ProBonoMode) => {
+    const prevMode = mode;
     setMode(next);
-    persist(next, selected);
+    void persist(next, selected).catch(() => setMode(prevMode));
   };
 
   const toggleFriend = (did: string, on: boolean) => {
+    const prev = selected;
     const next = new Set(selected);
     if (on) next.add(did);
     else next.delete(did);
     setSelected(next);
-    persist("direct", next);
+    void persist("direct", next).catch(() => setSelected(prev));
   };
 
   return (
@@ -1498,6 +1506,8 @@ export function AdvancedSettingsDialogContent({
               <ProBonoFriendPicker
                 friends={friends}
                 isLoading={friendsQ.isLoading}
+                isError={friendsQ.isError}
+                onRetry={() => void friendsQ.refetch()}
                 selected={selected}
                 isDisabled={isProBonoPending}
                 onToggle={toggleFriend}
@@ -1522,18 +1532,34 @@ export function AdvancedSettingsDialogContent({
 function ProBonoFriendPicker({
   friends,
   isLoading,
+  isError,
+  onRetry,
   selected,
   isDisabled,
   onToggle,
 }: {
   friends: ListedFriend[];
   isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
   selected: Set<string>;
   isDisabled: boolean;
   onToggle: (did: string, on: boolean) => void;
 }) {
   if (isLoading) {
     return <SmallBody variant="secondary">Loading friends…</SmallBody>;
+  }
+  // A failed load leaves `friends` empty too — distinguish it from a genuinely
+  // empty friend set so we don't send someone with friends to /friends.
+  if (isError) {
+    return (
+      <Flex direction="row" gap="md" align="center">
+        <SmallBody variant="secondary">Couldn't load your friends.</SmallBody>
+        <Button variant="tertiary" size="sm" onPress={onRetry}>
+          Retry
+        </Button>
+      </Flex>
+    );
   }
   if (friends.length === 0) {
     return (
@@ -2338,6 +2364,8 @@ export function MachinesDashboard() {
                                   {m.id}
                                 </Text>
                                 {m.verifiedTier ? <TrustTierBadge tier={m.verifiedTier} /> : null}
+                                <RegionFlag region={m.region} />
+                                <ProBonoBadge mode={m.proBonoMode} />
                               </Flex>
                             </TableCell>
                           );
