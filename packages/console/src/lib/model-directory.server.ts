@@ -384,21 +384,22 @@ export async function buildModelDirectory(): Promise<ModelDirectoryResponse> {
   // tolerant of AppView failure independently — providers being
   // unreachable means an empty directory, but a profile or
   // activity miss just means we render bare DIDs / zero counts.
-  const [[providersResult, profilesResult, activityResult], advisorOnlineResult] = await Promise.all([
-    // One root span, three concurrent child `appview.request` spans.
-    runTraced(
-      "models.directory.appview",
-      Effect.all(
-        [
-          Effect.either(appviewListProvidersEffect),
-          Effect.either(appviewListProfilesEffect),
-          Effect.either(appviewModelActivityEffect),
-        ],
-        { concurrency: "unbounded" },
+  const [[providersResult, profilesResult, activityResult], advisorOnlineResult] =
+    await Promise.all([
+      // One root span, three concurrent child `appview.request` spans.
+      runTraced(
+        "models.directory.appview",
+        Effect.all(
+          [
+            Effect.either(appviewListProvidersEffect),
+            Effect.either(appviewListProfilesEffect),
+            Effect.either(appviewModelActivityEffect),
+          ],
+          { concurrency: "unbounded" },
+        ),
       ),
-    ),
-    fetchAdvisorOnlineDids(),
-  ]);
+      fetchAdvisorOnlineDids(),
+    ]);
 
   if (providersResult._tag !== "Right") {
     logAppviewUnreachable(providersResult.left);
