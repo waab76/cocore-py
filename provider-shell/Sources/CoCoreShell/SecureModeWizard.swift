@@ -673,11 +673,14 @@ struct SecureModeWizardView: View {
                 working = false
                 // The push leg failing is the same silent-failure pattern we
                 // fix for the poll leg — classify + log it instead of dropping
-                // to a bare string. recordPushResponse already ran on an HTTP
-                // error body; force the error status/detail for the throw so
-                // the diagnostic lands on `secure-mode/push-failed`.
-                if pushStatus == nil { pushStatus = "error" }
-                if pushDetail == nil { pushDetail = error.localizedDescription }
+                // to a bare string. The push definitively failed (it threw), so
+                // force the error status UNCONDITIONALLY: recordPushResponse may
+                // have already captured a non-"error" body status, and a plain
+                // `?? "error"` would leave that stale value and misclassify the
+                // failure onto a chain code. Keep the server's message as the
+                // detail when it gave one, else the thrown error's text.
+                pushStatus = "error"
+                pushDetail = pushDetail ?? error.localizedDescription
                 let diag = AttestationDiagnostic(
                     serial: serial,
                     enrolled: EnrollmentProbe.isEnrolled(),
