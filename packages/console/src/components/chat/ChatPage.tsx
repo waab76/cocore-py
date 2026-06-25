@@ -1031,7 +1031,7 @@ function ModelPicker({
   // same owner DID don't both light up as "selected".
   const isPinnedTo = (m: MachineOption) =>
     m.did === targetProviderDid &&
-    (m.machineId == null || targetMachineId == null || m.machineId === targetMachineId);
+    (targetMachineId == null || m.machineId == null || m.machineId === targetMachineId);
   const targetLabel = targetProviderDid
     ? (machines.find(isPinnedTo)?.label ?? shortDid(targetProviderDid))
     : "auto";
