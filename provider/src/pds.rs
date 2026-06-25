@@ -147,7 +147,6 @@ pub struct ProviderRecord {
 /// The owner's pro-bono election for a machine, mirroring the lexicon
 /// `dev.cocore.compute.provider#proBonoPolicy`. Decides, per requester,
 /// whether a job is served free + unmetered with no exchange cut.
-#[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ProBonoPolicy {
     /// `any` — every requester is served pro bono. `direct` — only the
