@@ -172,7 +172,10 @@ export const Route = createFileRoute("/api/xrpc/dev.cocore.inference.dispatch")(
                 {
                   error:
                     "no provider currently offers you pro-bono compute; turn off pro bono for a normal (billed) request",
-                  code: "no-pro-bono-providers",
+                  // snake_case to match the documented `no_pro_bono_providers`
+                  // code emitted by /v1/probono/chat/completions + openapi.yaml,
+                  // so the same failure has one spelling across both endpoints.
+                  code: "no_pro_bono_providers",
                 },
                 503,
               );
