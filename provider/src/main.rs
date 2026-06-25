@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use cocore_provider::{
     advisor::AdvisorClient,
     attestation, oauth,
-    pds::{EngineFault, ModelPrice, PdsClient, ProviderRecord, TrustLevel},
+    pds::{EngineFault, ModelPrice, PdsClient, ProBonoPolicy, ProviderRecord, TrustLevel},
     pricing,
     protocol::Register,
     receipt::StrongRef,
@@ -539,6 +539,10 @@ fn preserve_console_fields(record: &mut ProviderRecord, existing: &serde_json::V
         .get("desiredTier")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    // The owner's pro-bono election (console / tray "serve pro bono"). Like
+    // the others it's console-written; carry it through or a serve restart
+    // would silently drop the owner's choice to give work away free.
+    record.proBono = ProBonoPolicy::from_record_value(existing);
 }
 
 /// Find this machine's existing provider record (if any) on the
@@ -1032,6 +1036,9 @@ async fn cmd_serve(
             active: None,
             desiredModels: None,
             desiredTier: None,
+            // Owner's pro-bono election — preserved from the existing record
+            // by dedup, like active/desiredModels/desiredTier.
+            proBono: None,
             provisioning: Some(true),
             // NOT serving yet: this record is published immediately (so the
             // machine is visible) while the engine is still loading/downloading.
@@ -1076,26 +1083,33 @@ async fn cmd_serve(
     // of an unmeasured Python child, defeating the tier). We still read
     // `desiredModels` below so a change still triggers a reload restart.
     let confidential = push_rx.is_some();
-    let (desired_at_start, desired_tier_at_start): (Vec<String>, Option<String>) =
-        match find_my_provider_record(&pds, &attestation_pub_key).await {
-            Ok((_, value, _)) => {
-                let models = value
-                    .get("desiredModels")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|m| m.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let tier = value
-                    .get("desiredTier")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                (models, tier)
-            }
-            Err(_) => (Vec::new(), None),
-        };
+    let (desired_at_start, desired_tier_at_start, pro_bono_at_start): (
+        Vec<String>,
+        Option<String>,
+        ProBonoPolicy,
+    ) = match find_my_provider_record(&pds, &attestation_pub_key).await {
+        Ok((_, value, _)) => {
+            let models = value
+                .get("desiredModels")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|m| m.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let tier = value
+                .get("desiredTier")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            // The owner's pro-bono election, read off our own record so each
+            // served job can decide per-requester whether it's free. Absent /
+            // malformed ≡ off (every job metered + billed).
+            let pro_bono = ProBonoPolicy::from_record_value(&value).unwrap_or_default();
+            (models, tier, pro_bono)
+        }
+        Err(_) => (Vec::new(), None, ProBonoPolicy::default()),
+    };
     match inference_models_action(confidential, &desired_at_start) {
         InferenceModelsAction::Clear => {
             // Confidential = native-only. Inference MUST stay inside the
@@ -1331,6 +1345,8 @@ async fn cmd_serve(
         desiredModels: None,
         // Owner's confidential opt-in — preserved by dedup like the others.
         desiredTier: None,
+        // Owner's pro-bono election — preserved by dedup like the others.
+        proBono: None,
         // Engine is loaded by this point — clear the provisioning flag we
         // set on the early publish above, so the console flips the row
         // from "provisioning" to live.
@@ -1493,6 +1509,7 @@ async fn cmd_serve(
                             &model_schedules,
                             &configured_models,
                             push_rx.as_mut(),
+                            &pro_bono_at_start,
                         )
                         .await;
                     let lived = connected_at.elapsed();
@@ -1552,7 +1569,7 @@ async fn cmd_serve(
                         );
                         let client = AdvisorClient::new(advisor_url);
                         tokio::select! {
-                            res = client.run(register.clone(), &*signer, &enc, &pds, attestation, &eng, provider_rkey.as_deref(), &desired_at_start, desired_tier_at_start.as_deref(), &model_schedules, &configured_models, push_rx.as_mut()) => {
+                            res = client.run(register.clone(), &*signer, &enc, &pds, attestation, &eng, provider_rkey.as_deref(), &desired_at_start, desired_tier_at_start.as_deref(), &model_schedules, &configured_models, push_rx.as_mut(), &pro_bono_at_start) => {
                                 if let Err(e) = res {
                                     tracing::warn!(error = %e, "advisor run ended; reconnecting within window in 5s");
                                 }
@@ -2453,6 +2470,7 @@ mod offline_marker_tests {
             active: None,
             desiredModels: None,
             desiredTier: None,
+            proBono: None,
             provisioning: Some(false),
             serving: Some(true),
             engineFault: None,
