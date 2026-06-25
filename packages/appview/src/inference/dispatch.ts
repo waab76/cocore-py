@@ -355,11 +355,9 @@ async function pickProvider(
     // a Mac Mini and a Linux box under the same owner DID are distinguished.
     // Fall back to DID-only if no machineId was specified (or for legacy rows
     // that predate the field).
-    const hit =
-      targetMachineId
-        ? (attested.find((p) => p.did === targetDid && p.machineId === targetMachineId) ??
-          attested.find((p) => p.did === targetDid))
-        : attested.find((p) => p.did === targetDid);
+    const hit = targetMachineId
+      ? attested.find((p) => p.did === targetDid && p.machineId === targetMachineId)
+      : attested.find((p) => p.did === targetDid);
     if (!hit) throw new TargetProviderNotConnectedError(targetDid);
     const targetPasses = filterByPayoutsEligibility([hit], options).length > 0;
     if (!targetPasses) throw new ProviderPayoutsNotEligibleError(targetDid);

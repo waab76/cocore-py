@@ -411,10 +411,7 @@ async function pickProvider(
     // Fall back to DID-only if no machineId was specified (or for legacy rows
     // that predate the field).
     const hit = targetMachineId
-      ? (attested.find((p) => p.did === targetDid && p.machineId === targetMachineId) ??
-        // Fall back only to legacy rows that predate the machineId field; a row with
-        // a *different* machineId is a different machine and must not be silently selected.
-        attested.find((p) => p.did === targetDid && !p.machineId))
+      ? attested.find((p) => p.did === targetDid && p.machineId === targetMachineId)
       : attested.find((p) => p.did === targetDid);
     if (!hit) throw new TargetProviderNotConnectedError(targetDid);
     // Hard refusal on explicit target: surface why before the user
