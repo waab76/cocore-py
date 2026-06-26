@@ -146,6 +146,19 @@ enum AgentCmd {
     /// menu-bar app polls this to reconcile the agent process to the
     /// owner's choice no matter which side (site or tray) changed it.
     Active,
+    /// Report this machine's attestation status: its trust level, whether the
+    /// Mac is MDM-enrolled, whether an attestation record is published (and
+    /// when it expires), and any attestation fault. Explains the common
+    /// "enrolled but still self-attested" state. The "list via command" the
+    /// settings UI mirrors.
+    Attestation {
+        /// Clear the MDA request cooldown so the next attestation refresh
+        /// re-requests a hardware attestation immediately, instead of waiting
+        /// out the remaining (up to 6h) cooldown. Use on an MDM-enrolled Mac
+        /// that's still self-attested and you don't want to wait.
+        #[arg(long)]
+        retry: bool,
+    },
     /// Write a content-safe diagnostic bundle (a `.tar.gz`) for a bug
     /// report and print its path. Contains crash + health telemetry only
     /// — logs (no prompt/token content by design), the last panic +
@@ -208,6 +221,7 @@ async fn main() -> Result<()> {
         Cmd::Agent(AgentCmd::Pause) => cmd_set_active(false).await,
         Cmd::Agent(AgentCmd::Resume) => cmd_set_active(true).await,
         Cmd::Agent(AgentCmd::Active) => cmd_print_active().await,
+        Cmd::Agent(AgentCmd::Attestation { retry }) => cmd_attestation(retry).await,
         Cmd::Agent(AgentCmd::Diag { out }) => cmd_diag(out),
     }
 }
@@ -430,6 +444,130 @@ async fn cmd_print_active() -> Result<()> {
     };
     println!("{}", if active { "serving" } else { "paused" });
     Ok(())
+}
+
+/// `cocore agent attestation [--retry]`: report this machine's attestation
+/// posture. Reads the provider record (trustLevel + any attestationFault) and
+/// the latest published attestation record (URI + expiry + whether it carries a
+/// hardware MDA chain), plus the local MDM-enrollment state, and explains the
+/// common "enrolled but still self-attested" case. `--retry` first clears the
+/// MDA request cooldown so the next refresh re-requests a hardware attestation.
+async fn cmd_attestation(retry: bool) -> Result<()> {
+    if retry {
+        match cocore_provider::mda_loader::clear_auto_request_cooldown() {
+            Ok(true) => println!(
+                "Cleared the MDA request cooldown — the next attestation refresh will re-request a hardware attestation."
+            ),
+            Ok(false) => println!("No MDA request cooldown was set (nothing to clear)."),
+            Err(e) => println!("Could not clear the MDA request cooldown: {e}"),
+        }
+    }
+
+    let (pds, pubkey) = open_pds()?;
+
+    // Provider record: the ACHIEVED trustLevel + any attestation fault.
+    let (trust_level, attestation_fault_msg) = match find_my_provider_record(&pds, &pubkey).await {
+        Ok((_, value, _)) => {
+            let tl = value
+                .get("trustLevel")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let fault = value
+                .get("attestationFault")
+                .and_then(|f| f.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::to_string);
+            (tl, fault)
+        }
+        Err(_) => (
+            "unknown (this machine has not served yet)".to_string(),
+            None,
+        ),
+    };
+    println!("trustLevel:    {trust_level}");
+
+    // Local MDM enrollment (macOS system state; non-macOS reports `no`).
+    let enrolled = cocore_provider::mda_loader::mdm_enrolled();
+    println!("mdmEnrolled:   {}", if enrolled { "yes" } else { "no" });
+
+    // Latest published attestation record on this machine's PDS.
+    match latest_attestation_record(&pds).await {
+        Ok(Some(att)) => {
+            println!(
+                "attestation:   {} (expires {})",
+                att.uri,
+                att.expires_at.as_deref().unwrap_or("?")
+            );
+            println!(
+                "hardwareBound: {}",
+                if att.mda_chain_present {
+                    "yes"
+                } else {
+                    "no (self-attested)"
+                }
+            );
+        }
+        Ok(None) => {
+            println!("attestation:   NONE published");
+            if let Some(msg) = &attestation_fault_msg {
+                println!("fault:         {msg}");
+            }
+        }
+        Err(e) => println!("attestation:   (could not read from PDS: {e})"),
+    }
+
+    // The common point of confusion: enrolled, but still self-attested.
+    if enrolled && trust_level != "hardware-attested" {
+        println!();
+        println!(
+            "This Mac is MDM-enrolled but not yet hardware-attested. A key-bound \
+             attestation chain was requested and lands on the next attestation \
+             refresh (≤23h). To re-request sooner, run \
+             `cocore agent attestation --retry`."
+        );
+    }
+    Ok(())
+}
+
+/// A flattened view of this machine's most recent attestation record, for the
+/// `attestation` status command.
+struct AttestationView {
+    uri: String,
+    expires_at: Option<String>,
+    mda_chain_present: bool,
+}
+
+/// Read this machine's latest `dev.cocore.compute.attestation` record from its
+/// PDS, picking the one with the freshest `attestedAt`. `Ok(None)` when none is
+/// published (the machine never attested, or publish failed).
+async fn latest_attestation_record(pds: &PdsClient) -> Result<Option<AttestationView>> {
+    let records = pds
+        .list_my_records("dev.cocore.compute.attestation")
+        .await?;
+    let latest = records.into_iter().max_by(|a, b| {
+        let key = |r: &cocore_provider::pds::ListedRecord| {
+            r.value
+                .get("attestedAt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        key(a).cmp(&key(b))
+    });
+    Ok(latest.map(|r| AttestationView {
+        uri: r.uri,
+        expires_at: r
+            .value
+            .get("expiresAt")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        mda_chain_present: r
+            .value
+            .get("mdaCertChain")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| !a.is_empty()),
+    }))
 }
 
 fn init_tracing(level: &str) {
