@@ -71,6 +71,14 @@ export interface OpenAiChatRequest {
   /** Optional tool choice strategy: "auto", "none", "required", or
    *  { type: "function", function: { name } } for a specific tool. */
   tool_choice?: unknown;
+  /** Optional minimum provider binaryVersion to route to, e.g. "0.9.32".
+   *  Only providers whose Register-reported `binaryVersion` is >= this are
+   *  eligible; a provider that reports no version is excluded. Use it to
+   *  pin a feature that landed in a specific release. A multimodal request
+   *  also derives an automatic floor — the effective floor is whichever is
+   *  higher. Fails closed with `no_providers_for_version` (503) when none
+   *  qualify. */
+  min_provider_version?: unknown;
 }
 
 export interface ParsedRequest {
@@ -101,6 +109,10 @@ export interface ParsedRequest {
   toolChoice?: "auto" | "none" | "required";
   /** When toolChoice is "required", optionally force a specific function. */
   toolChoiceFunction?: string;
+  /** Optional caller-requested minimum provider binaryVersion (e.g.
+   *  "0.9.32"). Combined with the automatic multimodal floor at dispatch —
+   *  the higher of the two wins. */
+  minProviderVersion?: string;
 }
 
 const DEFAULT_MAX_TOKENS = 1024;
@@ -275,6 +287,19 @@ export function parseRequest(raw: OpenAiChatRequest): ParsedRequest | string {
     }
     country = raw.country.trim().toUpperCase();
   }
+  // Optional caller-requested provider version floor. Accept a dotted-numeric
+  // version (optional leading `v`); the dispatch comparator tolerates a `v`
+  // prefix and any pre-release/build suffix. `null` is treated as absent.
+  let minProviderVersion: string | undefined;
+  if (raw.min_provider_version !== undefined && raw.min_provider_version !== null) {
+    if (
+      typeof raw.min_provider_version !== "string" ||
+      !/^v?\d+(\.\d+){0,3}$/.test(raw.min_provider_version.trim())
+    ) {
+      return 'min_provider_version must be a dotted-numeric version string (e.g. "0.9.32")';
+    }
+    minProviderVersion = raw.min_provider_version.trim();
+  }
   // Parse OpenAI-compatible response_format for structured output.
   let outputSchema: ParsedRequest["outputSchema"];
   if (raw.response_format !== undefined) {
@@ -367,6 +392,7 @@ export function parseRequest(raw: OpenAiChatRequest): ParsedRequest | string {
     stream,
     maxTokens,
     country,
+    ...(minProviderVersion ? { minProviderVersion } : {}),
     ...(outputSchema ? { outputSchema } : {}),
     ...(tools ? { tools } : {}),
     ...(toolChoice ? { toolChoice } : {}),

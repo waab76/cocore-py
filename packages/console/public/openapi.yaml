@@ -366,6 +366,20 @@ components:
             (`no_providers_for_country`) when the model exists but no provider
             in that country currently serves it.
           example: US
+        min_provider_version:
+          type: string
+          pattern: '^v?\d+(\.\d+){0,3}$'
+          description: >-
+            Optional minimum provider `binaryVersion` (e.g. `0.9.32`; an
+            optional leading `v` is tolerated). When set, the request is routed
+            only to providers whose Register-reported `binaryVersion` is greater
+            than or equal to this floor; a provider reporting no version is
+            excluded. A multimodal request (images/tool messages) also derives
+            an automatic floor — the effective floor is whichever is higher.
+            Returns 503 (`no_providers_for_version`) when the model exists but
+            no connected provider runs a new-enough binary (retryable as the
+            fleet updates).
+          example: 0.9.32
         temperature:
           type: number
           description: Accepted for OpenAI compatibility; honoring is provider-dependent.

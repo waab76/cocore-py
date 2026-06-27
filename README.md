@@ -154,6 +154,14 @@ just the model:
   per machine on the website: off, free for *anyone*, or free for an explicit
   list of people (friends-only). Pro-bono jobs are unmetered and take no
   exchange cut, so a balance-less requester can still be served.
+- **By provider version.** Pass `min_provider_version` (e.g. `0.9.32`) to route
+  only to providers running that tray release or newer — useful for pinning a
+  feature that landed in a specific version. Each machine reports its
+  `binaryVersion` when it registers with the matchmaker; only versions at or
+  above your floor are eligible (one reporting no version is excluded). A
+  multimodal request (images/tool messages) already derives this floor on its
+  own; an explicit pin and the automatic floor combine to whichever is higher.
+  Requests fail closed (`no_providers_for_version`) when none qualify.
 - **Verified / friends-only.** `/v1/verified/...` and `/v1/private/...` are the
   existing trust- and friend-constrained paths.
 
