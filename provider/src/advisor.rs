@@ -978,6 +978,20 @@ async fn handle_inference_request_inner(
         max_tokens: req.max_tokens_out,
         temperature: None,
         top_p: None,
+        guided_json: req.output_schema.clone(),
+        tools: req.tools.clone(),
+        tool_choice: match (&req.tool_choice, &req.tool_choice_function) {
+            // When tool_choice is "required" and a function name is specified,
+            // reconstruct the OpenAI object form { type: "function", function: { name } }.
+            (Some(choice), Some(func_name)) if choice.as_str() == Some("required") => {
+                Some(serde_json::json!({
+                    "type": "function",
+                    "function": { "name": func_name }
+                }))
+            }
+            // Otherwise pass through tool_choice as-is.
+            _ => req.tool_choice.clone(),
+        },
     };
 
     // Look up the engine for the requested model. A miss means the
@@ -1086,6 +1100,7 @@ async fn handle_inference_request_inner(
                 match channel {
                     DeltaChannel::Content => reply.push_str(&delta),
                     DeltaChannel::Reasoning => reasoning.push_str(&delta),
+                    DeltaChannel::ToolCall => { /* tool call deltas are forwarded but not accumulated into reply/reasoning */ }
                 }
                 let ct = match ctx
                     .encryption
@@ -1105,6 +1120,7 @@ async fn handle_inference_request_inner(
                 let chunk_channel = match channel {
                     DeltaChannel::Content => ChunkChannel::Content,
                     DeltaChannel::Reasoning => ChunkChannel::Reasoning,
+                    DeltaChannel::ToolCall => ChunkChannel::ToolCall,
                 };
                 push_frame(
                     live_tx.as_ref(),
@@ -1184,11 +1200,30 @@ async fn handle_inference_request_inner(
     // back, in order, so the requester can prove the ciphertext they
     // received matches the receipt.
     let output_cipher_commitment = sha256_hex(&all_ciphertext);
+    // Cryptographically commit to the output schema the provider used,
+    // so the receipt proves which constrained-generation shape was in
+    // effect. We hash the canonical JSON encoding so semantically
+    // equivalent schemas produce identical hashes.
+    let output_schema_hash = req.output_schema.as_ref().and_then(|schema| {
+        to_canonical_bytes(schema)
+            .ok()
+            .map(|bytes| sha256_hex(&bytes))
+    });
+    // Commit to the tool definitions the provider used, so the receipt
+    // proves which functions were available to the model.
+    let tool_schema_hash = req.tools.as_ref().and_then(|tools| {
+        to_canonical_bytes(tools)
+            .ok()
+            .map(|bytes| sha256_hex(&bytes))
+    });
+
     let params = receipt::GenerationParams {
         maxTokens: Some(req.max_tokens_out as u64),
         seed: None,
         temperatureMilli: None,
         topPMilli: None,
+        outputSchemaHash: output_schema_hash,
+        toolSchemaHash: tool_schema_hash,
     };
 
     // Pro bono decision: if the owner has elected to serve this requester
@@ -2040,6 +2075,10 @@ mod tests {
             session_id: "session-1".into(),
             nonce: None,
             attestation_cid: None,
+            output_schema: None,
+            tools: None,
+            tool_choice: None,
+            tool_choice_function: None,
         };
         let replies = handle_inference_request(req, &cx).await;
         let chunks: Vec<&InferenceChunk> = replies
@@ -2094,6 +2133,10 @@ mod tests {
             session_id: "bad".into(),
             nonce: None,
             attestation_cid: None,
+            output_schema: None,
+            tools: None,
+            tool_choice: None,
+            tool_choice_function: None,
         };
         let replies = handle_inference_request(req, &cx).await;
         assert!(replies.is_empty());
@@ -2131,6 +2174,10 @@ mod tests {
             session_id: "publish-fails".into(),
             nonce: None,
             attestation_cid: None,
+            output_schema: None,
+            tools: None,
+            tool_choice: None,
+            tool_choice_function: None,
         };
         let replies = handle_inference_request(req, &cx).await;
         match replies.last() {

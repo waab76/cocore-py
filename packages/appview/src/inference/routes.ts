@@ -29,6 +29,7 @@ import {
   buildEnvelopeBytes,
   coerceEnvelopeMessages,
   hasImageParts,
+  hasToolMessages,
   MESSAGES_V1,
 } from "@cocore/sdk/multimodal-envelope";
 
@@ -67,6 +68,12 @@ interface DispatchBody {
   targetMachineId?: unknown;
   /** Optional ISO 3166-1 alpha-2 country to route by (advisory). */
   country?: unknown;
+  /** Optional JSON Schema constraining the model's output. */
+  outputSchema?: unknown;
+  /** Optional list of tool/function definitions. */
+  tools?: unknown;
+  /** Optional tool choice strategy. */
+  toolChoice?: unknown;
   /** Optional DID allow-set the console resolved (pro-bono / friends /
    *  verified) and forwarded. Constrains provider selection. */
   allowedProviderDids?: unknown;
@@ -138,9 +145,49 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
   if (body.messages !== undefined) {
     const coerced = coerceEnvelopeMessages(body.messages);
     if (!coerced) return "messages must be an array of { role, content } turns";
-    if (hasImageParts(coerced)) {
+    if (hasImageParts(coerced) || hasToolMessages(coerced)) {
       envelope = { payloadBytes: buildEnvelopeBytes(coerced), inputFormat: MESSAGES_V1 };
     }
+  }
+  // Optional JSON Schema for structured output.
+  let outputSchema: DispatchInputs["outputSchema"];
+  if (body.outputSchema !== undefined) {
+    if (typeof body.outputSchema !== "object" || body.outputSchema === null) {
+      return "outputSchema must be an object when provided";
+    }
+    const os = body.outputSchema as { name?: unknown; strict?: unknown; schema?: unknown };
+    if (typeof os.name !== "string" || os.name.length === 0) {
+      return "outputSchema.name must be a non-empty string";
+    }
+    if (os.strict !== undefined && typeof os.strict !== "boolean") {
+      return "outputSchema.strict must be a boolean when provided";
+    }
+    if (typeof os.schema !== "object" || os.schema === null) {
+      return "outputSchema.schema must be an object";
+    }
+    outputSchema = {
+      name: os.name,
+      ...(typeof os.strict === "boolean" ? { strict: os.strict } : {}),
+      schema: os.schema as Record<string, unknown>,
+    };
+  }
+  // Optional tools for tool calling.
+  let tools: DispatchInputs["tools"];
+  if (body.tools !== undefined) {
+    if (!Array.isArray(body.tools)) {
+      return "tools must be an array when provided";
+    }
+    tools = body.tools as DispatchInputs["tools"];
+  }
+  let toolChoice: DispatchInputs["toolChoice"];
+  if (body.toolChoice !== undefined) {
+    if (typeof body.toolChoice !== "string") {
+      return "toolChoice must be a string when provided";
+    }
+    if (!["auto", "none", "required"].includes(body.toolChoice)) {
+      return "toolChoice must be 'auto', 'none', or 'required'";
+    }
+    toolChoice = body.toolChoice as DispatchInputs["toolChoice"];
   }
   // An explicit floor wins; otherwise an image request derives the
   // messages-v1 floor so it only reaches providers that can parse it.
@@ -163,6 +210,9 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
       ? { targetMachineId: body.targetMachineId }
       : {}),
     ...(country ? { country } : {}),
+    ...(outputSchema ? { outputSchema } : {}),
+    ...(tools ? { tools } : {}),
+    ...(toolChoice ? { toolChoice } : {}),
     ...(allowedProviderDids ? { allowedProviderDids } : {}),
     ...(minProviderVersion ? { minProviderVersion } : {}),
   };

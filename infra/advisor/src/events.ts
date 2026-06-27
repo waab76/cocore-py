@@ -19,9 +19,10 @@ export type AttestedSseEvent =
       type: "chunk";
       sessionId: string;
       seq: number;
-      /** "content" (the answer) or "reasoning" (thinking). Omitted for
-       *  answer chunks so existing wire bytes are unchanged. */
-      channel?: "content" | "reasoning";
+      /** "content" (the answer), "reasoning" (thinking), or "tool_call"
+       *  (structured tool-call delta). Omitted for answer chunks so
+       *  existing wire bytes are unchanged. */
+      channel?: "content" | "reasoning" | "tool_call";
       ciphertext: number[] | string;
     }
   | {

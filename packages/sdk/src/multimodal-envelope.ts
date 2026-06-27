@@ -49,9 +49,21 @@ export type EnvelopeContentPart = EnvelopeTextPart | EnvelopeImagePart;
  *  of parts (text interleaved with images). */
 export type EnvelopeContent = string | EnvelopeContentPart[];
 
+/** A tool call the assistant made — mirrors the OpenAI `tool_calls` shape.
+ *  Present on assistant messages that include function calls. */
+export interface EnvelopeToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
 export interface EnvelopeMessage {
   role: string;
   content: EnvelopeContent;
+  /** Present on assistant messages that include tool calls. */
+  tool_calls?: EnvelopeToolCall[];
+  /** Present on tool-role messages (the result of a tool call). */
+  tool_call_id?: string;
 }
 
 export interface MultimodalEnvelope {
@@ -65,6 +77,19 @@ export function hasImageParts(messages: EnvelopeMessage[]): boolean {
   return messages.some(
     (m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image"),
   );
+}
+
+/** True when any message carries tool_calls or tool_call_id — i.e. the
+ *  request must travel as a messages-v1 envelope (the legacy flattened
+ *  text path can't represent tool round-tripping). */
+export function hasToolMessages(messages: EnvelopeMessage[]): boolean {
+  return messages.some((m) => m.tool_calls != null || m.tool_call_id != null);
+}
+
+/** True when the request needs the messages-v1 envelope rather than the
+ *  legacy flattened text path — i.e. it carries images or tool messages. */
+export function needsEnvelope(messages: EnvelopeMessage[]): boolean {
+  return hasImageParts(messages) || hasToolMessages(messages);
 }
 
 /** Canonical bytes of the envelope — the exact payload that gets sealed
@@ -89,7 +114,11 @@ export function parseEnvelope(bytes: Uint8Array): MultimodalEnvelope {
     if (!m || typeof m !== "object") throw new Error(`message ${i} is not an object`);
     const msg = m as Record<string, unknown>;
     if (typeof msg.role !== "string") throw new Error(`message ${i} role must be a string`);
-    return { role: msg.role, content: parseContent(msg.content, i) };
+    return {
+      role: msg.role,
+      content: parseContent(msg.content, i),
+      ...parseToolFields(msg, i),
+    };
   });
   return { v: ENVELOPE_VERSION, messages };
 }
@@ -107,7 +136,11 @@ export function coerceEnvelopeMessages(value: unknown): EnvelopeMessage[] | null
       if (!m || typeof m !== "object") throw new Error(`message ${i} is not an object`);
       const msg = m as Record<string, unknown>;
       if (typeof msg.role !== "string") throw new Error(`message ${i} role must be a string`);
-      return { role: msg.role, content: parseContent(msg.content, i) };
+      return {
+        role: msg.role,
+        content: parseContent(msg.content, i),
+        ...parseToolFields(msg, i),
+      };
     });
   } catch {
     return null;
@@ -128,4 +161,40 @@ function parseContent(content: unknown, i: number): EnvelopeContent {
     }
     throw new Error(`message ${i} part ${j} has unknown type`);
   });
+}
+
+/** Parse optional `tool_calls` and `tool_call_id` from a message object.
+ *  Returns an empty object when neither is present, so the spread into the
+ *  message is a no-op for plain text/image messages. */
+function parseToolFields(
+  msg: Record<string, unknown>,
+  i: number,
+): { tool_calls?: EnvelopeToolCall[]; tool_call_id?: string } {
+  const out: { tool_calls?: EnvelopeToolCall[]; tool_call_id?: string } = {};
+  if (msg.tool_call_id !== undefined) {
+    if (typeof msg.tool_call_id !== "string")
+      throw new Error(`message ${i} tool_call_id must be a string`);
+    out.tool_call_id = msg.tool_call_id;
+  }
+  if (msg.tool_calls !== undefined) {
+    if (!Array.isArray(msg.tool_calls)) throw new Error(`message ${i} tool_calls must be an array`);
+    out.tool_calls = msg.tool_calls.map((tc, j) => {
+      if (!tc || typeof tc !== "object")
+        throw new Error(`message ${i} tool_call ${j} is not an object`);
+      const t = tc as Record<string, unknown>;
+      if (typeof t.id !== "string") throw new Error(`message ${i} tool_call ${j} missing id`);
+      if (t.type !== "function")
+        throw new Error(`message ${i} tool_call ${j} type must be "function"`);
+      const fn = t.function as Record<string, unknown> | undefined;
+      if (!fn || typeof fn.name !== "string" || typeof fn.arguments !== "string") {
+        throw new Error(`message ${i} tool_call ${j} function must have name and arguments`);
+      }
+      return {
+        id: t.id,
+        type: "function" as const,
+        function: { name: fn.name, arguments: fn.arguments },
+      };
+    });
+  }
+  return out;
 }

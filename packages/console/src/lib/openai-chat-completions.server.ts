@@ -15,6 +15,7 @@ import {
   type EnvelopeImagePart,
   type EnvelopeMessage,
   hasImageParts,
+  hasToolMessages,
   MESSAGES_V1,
 } from "@cocore/sdk/multimodal-envelope";
 
@@ -40,6 +41,14 @@ type NormalizedContent = string | NormalizedPart[];
 interface ChatMessage {
   role: string;
   content: NormalizedContent;
+  /** Present on assistant messages that include tool calls. */
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
+  /** Present on tool-role messages (the result of a tool call). */
+  tool_call_id?: string;
 }
 
 export interface OpenAiChatRequest {
@@ -53,6 +62,15 @@ export interface OpenAiChatRequest {
    *  `region` on their provider record. Advisory routing, not a guarantee:
    *  the region is a provider self-claim (see the provider lexicon). */
   country?: unknown;
+  /** Optional OpenAI-compatible response_format for structured output.
+   *  When type is "json_schema", the json_schema.name/strict/schema are
+   *  forwarded to the provider as outputSchema for guided decoding. */
+  response_format?: unknown;
+  /** Optional list of tool/function definitions the model may call. */
+  tools?: unknown;
+  /** Optional tool choice strategy: "auto", "none", "required", or
+   *  { type: "function", function: { name } } for a specific tool. */
+  tool_choice?: unknown;
 }
 
 export interface ParsedRequest {
@@ -63,6 +81,26 @@ export interface ParsedRequest {
   /** Normalized ISO 3166-1 alpha-2 country filter (uppercased), or
    *  undefined when the caller didn't request country routing. */
   country?: string;
+  /** Optional JSON Schema for structured output, extracted from the
+   *  OpenAI response_format.json_schema field. */
+  outputSchema?: {
+    name: string;
+    strict?: boolean;
+    schema: Record<string, unknown>;
+  };
+  /** Optional tool definitions for tool calling. */
+  tools?: Array<{
+    type: "function";
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }>;
+  /** Optional tool choice strategy. */
+  toolChoice?: "auto" | "none" | "required";
+  /** When toolChoice is "required", optionally force a specific function. */
+  toolChoiceFunction?: string;
 }
 
 const DEFAULT_MAX_TOKENS = 1024;
@@ -162,7 +200,12 @@ export function parseRequest(raw: OpenAiChatRequest): ParsedRequest | string {
   const messages: ChatMessage[] = [];
   let promptBytes = 0;
   let imageBytes = 0;
-  for (const m of raw.messages as Array<{ role?: unknown; content?: unknown }>) {
+  for (const m of raw.messages as Array<{
+    role?: unknown;
+    content?: unknown;
+    tool_calls?: unknown;
+    tool_call_id?: unknown;
+  }>) {
     if (typeof m.role !== "string") {
       return "each message must include a string role";
     }
@@ -190,7 +233,23 @@ export function parseRequest(raw: OpenAiChatRequest): ParsedRequest | string {
     if (imageBytes > MAX_IMAGE_BYTES) {
       return `images too large (max ${MAX_IMAGE_BYTES} bytes total)`;
     }
-    messages.push({ role: m.role, content });
+    const msg: ChatMessage = { role: m.role, content };
+    // Pass through tool_calls on assistant messages and tool_call_id
+    // on tool-role messages, so the sealed envelope carries the full
+    // tool-calling conversation history.
+    if (m.tool_calls !== undefined) {
+      if (!Array.isArray(m.tool_calls)) {
+        return "tool_calls must be an array when provided";
+      }
+      msg.tool_calls = m.tool_calls as ChatMessage["tool_calls"];
+    }
+    if (m.tool_call_id !== undefined) {
+      if (typeof m.tool_call_id !== "string") {
+        return "tool_call_id must be a string when provided";
+      }
+      msg.tool_call_id = m.tool_call_id;
+    }
+    messages.push(msg);
   }
   let maxTokens = DEFAULT_MAX_TOKENS;
   if (raw.max_tokens !== undefined) {
@@ -216,7 +275,103 @@ export function parseRequest(raw: OpenAiChatRequest): ParsedRequest | string {
     }
     country = raw.country.trim().toUpperCase();
   }
-  return { model: raw.model, messages, stream, maxTokens, country };
+  // Parse OpenAI-compatible response_format for structured output.
+  let outputSchema: ParsedRequest["outputSchema"];
+  if (raw.response_format !== undefined) {
+    if (typeof raw.response_format !== "object" || raw.response_format === null) {
+      return "response_format must be an object when provided";
+    }
+    const rf = raw.response_format as { type?: unknown; json_schema?: unknown };
+    if (rf.type !== "json_schema") {
+      return 'response_format.type must be "json_schema"';
+    }
+    if (typeof rf.json_schema !== "object" || rf.json_schema === null) {
+      return "response_format.json_schema must be an object";
+    }
+    const js = rf.json_schema as { name?: unknown; strict?: unknown; schema?: unknown };
+    if (typeof js.name !== "string" || js.name.length === 0) {
+      return "response_format.json_schema.name must be a non-empty string";
+    }
+    if (js.strict !== undefined && typeof js.strict !== "boolean") {
+      return "response_format.json_schema.strict must be a boolean when provided";
+    }
+    if (typeof js.schema !== "object" || js.schema === null) {
+      return "response_format.json_schema.schema must be an object";
+    }
+    outputSchema = {
+      name: js.name,
+      ...(typeof js.strict === "boolean" ? { strict: js.strict } : {}),
+      schema: js.schema as Record<string, unknown>,
+    };
+  }
+  // Parse tools for tool calling.
+  let tools: ParsedRequest["tools"];
+  if (raw.tools !== undefined) {
+    if (!Array.isArray(raw.tools)) {
+      return "tools must be an array when provided";
+    }
+    const validated: ParsedRequest["tools"] = [];
+    for (let i = 0; i < raw.tools.length; i++) {
+      const t = raw.tools[i] as Record<string, unknown> | null;
+      if (!t || typeof t !== "object") return `tools[${i}] must be an object`;
+      if (t.type !== "function") return `tools[${i}].type must be "function"`;
+      const fn = t.function as Record<string, unknown> | undefined;
+      if (!fn || typeof fn.name !== "string" || fn.name.length === 0)
+        return `tools[${i}].function.name must be a non-empty string`;
+      validated.push({
+        type: "function",
+        function: {
+          name: fn.name,
+          ...(typeof fn.description === "string" ? { description: fn.description } : {}),
+          ...(fn.parameters !== undefined &&
+          typeof fn.parameters === "object" &&
+          fn.parameters !== null
+            ? { parameters: fn.parameters as Record<string, unknown> }
+            : {}),
+        },
+      });
+    }
+    tools = validated;
+  }
+  // Parse tool_choice.
+  let toolChoice: ParsedRequest["toolChoice"];
+  let toolChoiceFunction: ParsedRequest["toolChoiceFunction"];
+  if (raw.tool_choice !== undefined) {
+    if (typeof raw.tool_choice === "string") {
+      if (!["auto", "none", "required"].includes(raw.tool_choice)) {
+        return "tool_choice must be 'auto', 'none', or 'required'";
+      }
+      toolChoice = raw.tool_choice as ParsedRequest["toolChoice"];
+    } else if (typeof raw.tool_choice === "object" && raw.tool_choice !== null) {
+      // Object form { type: "function", function: { name } } — force a
+      // specific function. We convert to toolChoice: "required" +
+      // toolChoiceFunction: name for the lexicon (which only supports
+      // string toolChoice with knownValues).
+      const tc = raw.tool_choice as Record<string, unknown>;
+      if (tc.type !== "function") {
+        return "tool_choice object type must be 'function'";
+      }
+      const fn = tc.function as Record<string, unknown> | undefined;
+      if (!fn || typeof fn.name !== "string") {
+        return "tool_choice object must have function.name";
+      }
+      toolChoice = "required";
+      toolChoiceFunction = fn.name;
+    } else {
+      return "tool_choice must be a string or an object";
+    }
+  }
+  return {
+    model: raw.model,
+    messages,
+    stream,
+    maxTokens,
+    country,
+    ...(outputSchema ? { outputSchema } : {}),
+    ...(tools ? { tools } : {}),
+    ...(toolChoice ? { toolChoice } : {}),
+    ...(toolChoiceFunction ? { toolChoiceFunction } : {}),
+  };
 }
 
 /** The flattened text of one message's content (image parts contribute
@@ -236,10 +391,12 @@ function flattenMessages(messages: ChatMessage[]): string {
   return messages.map((m) => `${m.role}: ${messageText(m.content)}`).join("\n");
 }
 
-/** True when any message carries an image (the request must travel as a
- *  messages-v1 envelope). */
+/** True when any message carries an image or tool fields (the request
+ *  must travel as a messages-v1 envelope). */
 export function requestHasImages(messages: ChatMessage[]): boolean {
-  return messages.some((m) => typeof m.content !== "string");
+  return messages.some(
+    (m) => typeof m.content !== "string" || m.tool_calls != null || m.tool_call_id != null,
+  );
 }
 
 /** Fetch every remote (http/https) image into an inline base64 part, so
@@ -251,7 +408,12 @@ async function resolveImages(messages: ChatMessage[]): Promise<EnvelopeMessage[]
   const out: EnvelopeMessage[] = [];
   for (const m of messages) {
     if (typeof m.content === "string") {
-      out.push({ role: m.role, content: m.content });
+      out.push({
+        role: m.role,
+        content: m.content,
+        ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+        ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+      });
       continue;
     }
     const resolved: EnvelopeContentPart[] = [];
@@ -279,7 +441,12 @@ async function resolveImages(messages: ChatMessage[]): Promise<EnvelopeMessage[]
       }
       resolved.push({ type: "image", mime, data: Buffer.from(buf).toString("base64") });
     }
-    out.push({ role: m.role, content: resolved });
+    out.push({
+      role: m.role,
+      content: resolved,
+      ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+      ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+    });
   }
   return out;
 }
@@ -295,8 +462,8 @@ export async function buildJobInput(
     return { payloadBytes: new TextEncoder().encode(flattenMessages(messages)) };
   }
   const envelopeMessages = await resolveImages(messages);
-  if (!hasImageParts(envelopeMessages)) {
-    // All images turned out to be unresolved/empty — fall back to text.
+  if (!hasImageParts(envelopeMessages) && !hasToolMessages(envelopeMessages)) {
+    // All images turned out to be unresolved/empty and no tool messages — fall back to text.
     return { payloadBytes: new TextEncoder().encode(flattenMessages(messages)) };
   }
   return { payloadBytes: buildEnvelopeBytes(envelopeMessages), inputFormat: MESSAGES_V1 };
@@ -327,8 +494,18 @@ export function readBearer(request: Request): string | null {
 
 interface OpenAiChunkChoice {
   index: 0;
-  delta: { role?: "assistant"; content?: string; reasoning_content?: string };
-  finish_reason: null | "stop";
+  delta: {
+    role?: "assistant";
+    content?: string;
+    reasoning_content?: string;
+    tool_calls?: Array<{
+      index: number;
+      id?: string;
+      type?: "function";
+      function?: { name?: string; arguments?: string };
+    }>;
+  };
+  finish_reason: null | "stop" | "tool_calls";
 }
 
 function chunkPayload(
@@ -484,11 +661,22 @@ export function streamingResponse(
       try {
         for await (const ev of events) {
           if (ev.kind === "chunk") {
-            // Reasoning ("thinking") rides delta.reasoning_content, the
-            // vLLM/DeepSeek convention; the answer rides delta.content.
-            const delta =
-              ev.channel === "reasoning" ? { reasoning_content: ev.text } : { content: ev.text };
-            send(chunkPayload(id, model, delta, null));
+            // Tool-call deltas arrive as JSON on the tool_call channel;
+            // parse and forward as OpenAI tool_calls delta.
+            if (ev.channel === "tool_call") {
+              try {
+                const toolCalls = JSON.parse(ev.text);
+                send(chunkPayload(id, model, { tool_calls: toolCalls }, null));
+              } catch {
+                // Malformed tool_call JSON — skip rather than crash the stream.
+              }
+            } else {
+              // Reasoning ("thinking") rides delta.reasoning_content, the
+              // vLLM/DeepSeek convention; the answer rides delta.content.
+              const delta =
+                ev.channel === "reasoning" ? { reasoning_content: ev.text } : { content: ev.text };
+              send(chunkPayload(id, model, delta, null));
+            }
           } else if (ev.kind === "complete") {
             // The final `stop` chunk carries the x_cocore credit so a
             // streaming client gets the same "who ran it" metadata the
@@ -548,6 +736,7 @@ export async function bufferedResponse(
 ): Promise<Response> {
   let content = "";
   let reasoning = "";
+  let toolCallChunks: string[] = [];
   let tokensIn = 0;
   let tokensOut = 0;
   let providerCredit: ProviderCredit | undefined;
@@ -557,6 +746,7 @@ export async function bufferedResponse(
   for await (const ev of events) {
     if (ev.kind === "chunk") {
       if (ev.channel === "reasoning") reasoning += ev.text;
+      else if (ev.channel === "tool_call") toolCallChunks.push(ev.text);
       else content += ev.text;
     } else if (ev.kind === "complete") {
       tokensIn = ev.tokensIn;
@@ -574,6 +764,62 @@ export async function bufferedResponse(
     return jsonError(mapped.status, errored.reason, mapped.type, mapped.code);
   }
 
+  // Reassemble tool-call deltas into the OpenAI tool_calls array.
+  // Each delta is a JSON array fragment; we concatenate the arguments
+  // strings and take the id/name from the first delta that has them.
+  let toolCalls:
+    | Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+      }>
+    | undefined;
+  let hasToolCalls = false;
+  if (toolCallChunks.length > 0) {
+    hasToolCalls = true;
+    const assembled: Record<
+      number,
+      {
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+      }
+    > = {};
+    for (const chunk of toolCallChunks) {
+      try {
+        const deltas = JSON.parse(chunk) as Array<{
+          index: number;
+          id?: string;
+          type?: string;
+          function?: { name?: string; arguments?: string };
+        }>;
+        for (const d of deltas) {
+          const existing = assembled[d.index];
+          if (!existing) {
+            assembled[d.index] = {
+              id: d.id ?? "",
+              type: "function",
+              function: {
+                name: d.function?.name ?? "",
+                arguments: d.function?.arguments ?? "",
+              },
+            };
+          } else {
+            if (d.id) existing.id = d.id;
+            if (d.function?.name) existing.function.name = d.function.name;
+            if (d.function?.arguments) existing.function.arguments += d.function.arguments;
+          }
+        }
+      } catch {
+        // Malformed delta — skip.
+      }
+    }
+    toolCalls = Object.keys(assembled)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((k) => assembled[Number(k)]!)
+      .filter((tc) => tc.id && tc.function.name);
+  }
+
   return new Response(
     JSON.stringify({
       id,
@@ -587,8 +833,9 @@ export async function bufferedResponse(
             role: "assistant",
             content,
             ...(reasoning ? { reasoning_content: reasoning } : {}),
+            ...(toolCalls ? { tool_calls: toolCalls } : {}),
           },
-          finish_reason: "stop",
+          finish_reason: hasToolCalls ? "tool_calls" : "stop",
         },
       ],
       usage: {

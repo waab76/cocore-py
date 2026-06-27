@@ -135,6 +135,18 @@
           "minimum": 0,
           "maximum": 1000,
           "description": "Nucleus sampling top_p × 1000 (e.g. 0.95 -> 950). Omitted when the provider used the model default."
+        },
+        "outputSchemaHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "SHA-256 hex over the canonical JSON of the outputSchema the provider used for this job. Present only when the job specified outputSchema. Covered by enclaveSignature, so a requester can prove the provider honored the schema they asked for."
+        },
+        "toolSchemaHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "SHA-256 hex over the canonical JSON of the tools the provider used for this job. Present only when the job specified tools. Covered by enclaveSignature, so a requester can prove the provider honored the tool definitions they asked for."
         }
       }
     }

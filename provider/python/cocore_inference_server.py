@@ -45,6 +45,7 @@ knows when to call `engine.ready() = true`.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import signal
 import stat
@@ -204,6 +205,35 @@ def main() -> None:
             "is a manual override for a VLM that auto-detection misses."
         ),
     )
+    ap.add_argument(
+        "--enable-auto-tool-choice",
+        action="store_true",
+        help=(
+            "Enable OpenAI-compatible tool calling (function calling) in "
+            "vllm-mlx. When set, the /v1/chat/completions endpoint can parse "
+            "and emit structured tool_calls so the model can invoke functions. "
+            "Requires --tool-call-parser to select the format parser for the "
+            "model family (e.g. hermes for Qwen, mistral for Mistral/Devstral)."
+        ),
+    )
+    ap.add_argument(
+        "--tool-call-parser",
+        default=None,
+        help=(
+            "Tool call parser name (e.g. auto, hermes, mistral, qwen, llama, "
+            "deepseek, kimi, granite, nemotron, xlam, functionary, glm47). "
+            "Only used when --enable-auto-tool-choice is set. Defaults to "
+            "'auto' which tries all formats."
+        ),
+    )
+    ap.add_argument(
+        "--default-chat-template-kwargs",
+        default=None,
+        help=(
+            "JSON object passed through to vllm-mlx as default chat_template_kwargs "
+            "for every request (for example: '{\"enable_thinking\": false}')."
+        ),
+    )
     args = ap.parse_args()
 
     socket_path = Path(args.uds)
@@ -268,6 +298,79 @@ def main() -> None:
         flush=True,
     )
     srv.load_model(args.model, force_mllm=args.vision)
+
+    if args.default_chat_template_kwargs:
+        try:
+            _kwargs = json.loads(args.default_chat_template_kwargs)
+        except Exception as exc:
+            raise SystemExit(
+                f"--default-chat-template-kwargs must be a JSON object: {exc}"
+            ) from exc
+        if not isinstance(_kwargs, dict):
+            raise SystemExit("--default-chat-template-kwargs must decode to a JSON object")
+        if hasattr(srv, "_default_chat_template_kwargs"):
+            srv._default_chat_template_kwargs = _kwargs
+            print(
+                "[cocore-engine] default chat_template_kwargs configured",
+                flush=True,
+            )
+        else:
+            print(
+                "[cocore-engine] WARNING: --default-chat-template-kwargs was passed "
+                "but this vllm-mlx version does not expose _default_chat_template_kwargs.",
+                flush=True,
+            )
+
+    # Enable tool calling when the flag was passed. vllm-mlx uses
+    # module-level globals (_enable_auto_tool_choice, _tool_call_parser)
+    # that the FastAPI routes read at request time. Setting them here
+    # (after load_model, before uvicorn.run) configures the server so
+    # /v1/chat/completions can parse and emit structured tool_calls.
+    #
+    # We verify the globals exist on the module before setting them.
+    # If they don't, the installed vllm-mlx version doesn't support
+    # tool calling — we warn and continue. The Rust parent separately
+    # runs a forced-tool startup canary and will not advertise tool
+    # support if this configuration doesn't produce structured tool_calls.
+    if args.enable_auto_tool_choice:
+        _has_tool_support = hasattr(srv, "_enable_auto_tool_choice")
+        if not _has_tool_support:
+            print(
+                "[cocore-engine] WARNING: --enable-auto-tool-choice was passed "
+                "but this vllm-mlx version does not expose _enable_auto_tool_choice. "
+                "Tool calling will NOT work. Upgrade vllm-mlx to a version that "
+                "supports tool calling (look for _enable_auto_tool_choice and "
+                "_tool_call_parser globals in vllm_mlx.server).",
+                flush=True,
+            )
+            # Still set the attributes so a future vllm-mlx upgrade picks
+            # them up without needing a restart — but they're inert on
+            # versions that don't read them.
+            srv._enable_auto_tool_choice = True
+            srv._tool_call_parser = args.tool_call_parser or "auto"
+        else:
+            srv._enable_auto_tool_choice = True
+            srv._tool_call_parser = args.tool_call_parser or "auto"
+            # Verify the parser is known. vllm-mlx supports a fixed set;
+            # an unknown parser will cause request-time errors.
+            _known_parsers = {
+                "auto", "hermes", "nous", "mistral", "qwen", "qwen3_xml",
+                "llama", "deepseek", "kimi", "granite", "harmony", "nemotron",
+                "xlam", "functionary", "glm47", "gemma4", "minimax",
+            }
+            _parser = srv._tool_call_parser
+            if _parser not in _known_parsers:
+                print(
+                    f"[cocore-engine] WARNING: tool call parser {_parser!r} is not "
+                    f"in the known set {sorted(_known_parsers)}. It may not work "
+                    f"with this vllm-mlx version.",
+                    flush=True,
+                )
+            print(
+                f"[cocore-engine] tool calling enabled (parser: {srv._tool_call_parser})",
+                flush=True,
+            )
+
     print(f"[cocore-engine] model loaded; binding {socket_path}", flush=True)
 
     # SIGTERM handler that exits cleanly. uvicorn installs its own

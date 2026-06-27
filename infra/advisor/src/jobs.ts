@@ -59,6 +59,15 @@ interface JobBody {
    *  `targetProviderDid` is also set. Lets the console route a "test this
    *  machine" probe at exactly one of an owner's machines. */
   targetMachineId?: string;
+  /** Optional JSON Schema constraining the model's output. Forwarded
+   *  verbatim to the provider; the advisor never inspects it. */
+  outputSchema?: { name: string; strict?: boolean; schema: Record<string, unknown> };
+  /** Optional tool definitions the model may call. Forwarded verbatim
+   *  to the provider; the advisor never inspects them. */
+  tools?: unknown;
+  /** Optional tool-choice directive (e.g. "auto", "none", "required").
+   *  Forwarded verbatim to the provider; the advisor never inspects it. */
+  toolChoice?: unknown;
   /** Optional: minimum provider binaryVersion eligible for this job (e.g.
    *  `0.9.32` for an image request that needs messages-v1 support). Machines
    *  below it — or that don't report a version — are excluded (fail-closed).
@@ -72,13 +81,23 @@ interface ParsedJob {
   body: Required<
     Omit<
       JobBody,
-      "jobCid" | "inputFormat" | "targetProviderDid" | "targetMachineId" | "minProviderVersion"
+      | "jobCid"
+      | "inputFormat"
+      | "targetProviderDid"
+      | "targetMachineId"
+      | "outputSchema"
+      | "tools"
+      | "toolChoice"
+      | "minProviderVersion"
     >
   > & {
     jobCid?: string;
     inputFormat?: string;
     targetProviderDid?: string;
     targetMachineId?: string;
+    outputSchema?: { name: string; strict?: boolean; schema: Record<string, unknown> };
+    tools?: unknown;
+    toolChoice?: unknown;
     minProviderVersion?: string;
   };
 }
@@ -143,6 +162,18 @@ function parseJobBody(input: unknown, generateId: () => string): ParsedJob | Par
   if (b["targetMachineId"] !== undefined && typeof b["targetMachineId"] !== "string") {
     return { ok: false, status: 400, error: "targetMachineId must be a string when provided" };
   }
+  if (
+    b["outputSchema"] !== undefined &&
+    (typeof b["outputSchema"] !== "object" || b["outputSchema"] === null)
+  ) {
+    return { ok: false, status: 400, error: "outputSchema must be an object when provided" };
+  }
+  if (b["tools"] !== undefined && !Array.isArray(b["tools"])) {
+    return { ok: false, status: 400, error: "tools must be an array when provided" };
+  }
+  if (b["toolChoice"] !== undefined && typeof b["toolChoice"] !== "string") {
+    return { ok: false, status: 400, error: "toolChoice must be a string when provided" };
+  }
   if (b["minProviderVersion"] !== undefined && typeof b["minProviderVersion"] !== "string") {
     return { ok: false, status: 400, error: "minProviderVersion must be a string when provided" };
   }
@@ -161,6 +192,16 @@ function parseJobBody(input: unknown, generateId: () => string): ParsedJob | Par
       targetProviderDid:
         typeof b["targetProviderDid"] === "string" ? b["targetProviderDid"] : undefined,
       targetMachineId: typeof b["targetMachineId"] === "string" ? b["targetMachineId"] : undefined,
+      outputSchema:
+        typeof b["outputSchema"] === "object" && b["outputSchema"] !== null
+          ? (b["outputSchema"] as {
+              name: string;
+              strict?: boolean;
+              schema: Record<string, unknown>;
+            })
+          : undefined,
+      tools: Array.isArray(b["tools"]) ? b["tools"] : undefined,
+      toolChoice: typeof b["toolChoice"] === "string" ? b["toolChoice"] : undefined,
       minProviderVersion:
         typeof b["minProviderVersion"] === "string" ? b["minProviderVersion"] : undefined,
     },
@@ -403,6 +444,9 @@ function dispatch(
     max_tokens_out: job.maxTokensOut,
     ciphertext: job.ciphertext,
     ...(job.inputFormat ? { input_format: job.inputFormat } : {}),
+    ...(job.outputSchema ? { output_schema: job.outputSchema } : {}),
+    ...(job.tools ? { tools: job.tools } : {}),
+    ...(job.toolChoice ? { tool_choice: job.toolChoice } : {}),
     session_id: job.sessionId,
   } as InferenceRequest & { type: "inference_request" };
 

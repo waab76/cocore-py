@@ -174,14 +174,28 @@ impl ContentPart {
     }
 }
 
+/// A tool call the assistant made — mirrors the OpenAI `tool_calls` shape.
+/// Present on assistant messages that include function calls.
+#[derive(Debug, Clone)]
+pub struct ToolCallData {
+    pub id: String,
+    pub function_name: String,
+    pub function_arguments: String,
+}
+
 /// One message in a chat conversation. Mirrors OpenAI's
 /// `chat.completions` message shape so we can pass it directly into the
 /// engine's `messages=...` without translation. Content is an ordered
 /// list of parts; the common text-only case is a single `Text` part.
+/// `tool_calls` is present on assistant messages that include function
+/// calls; `tool_call_id` is present on tool-role messages (the result
+/// of a tool call).
 #[derive(Debug, Clone)]
 pub struct Message {
     pub role: String,
     pub content: Vec<ContentPart>,
+    pub tool_calls: Option<Vec<ToolCallData>>,
+    pub tool_call_id: Option<String>,
 }
 
 impl Message {
@@ -190,6 +204,8 @@ impl Message {
         Self {
             role: role.into(),
             content: vec![ContentPart::Text(content.into())],
+            tool_calls: None,
+            tool_call_id: None,
         }
     }
 
@@ -259,9 +275,61 @@ pub fn parse_messages_v1(bytes: &[u8]) -> Result<Vec<Message>> {
             .get("content")
             .ok_or_else(|| anyhow!("message {i} missing content"))?;
         let parts = parse_content_parts(content, i)?;
+        // Parse optional tool_calls (assistant messages) and tool_call_id
+        // (tool-role messages) from the envelope.
+        let tool_calls = mo
+            .get("tool_calls")
+            .map(|tc| {
+                let arr = tc
+                    .as_array()
+                    .ok_or_else(|| anyhow!("message {i} tool_calls must be an array"))?;
+                arr.iter()
+                    .enumerate()
+                    .map(|(j, t)| {
+                        let to = t
+                            .as_object()
+                            .ok_or_else(|| anyhow!("message {i} tool_call {j} is not an object"))?;
+                        let id = to
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| anyhow!("message {i} tool_call {j} missing id"))?
+                            .to_string();
+                        let function = to
+                            .get("function")
+                            .and_then(|v| v.as_object())
+                            .ok_or_else(|| anyhow!("message {i} tool_call {j} missing function"))?;
+                        let function_name = function
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                anyhow!("message {i} tool_call {j} missing function.name")
+                            })?
+                            .to_string();
+                        let function_arguments = function
+                            .get("arguments")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                anyhow!("message {i} tool_call {j} missing function.arguments")
+                            })?
+                            .to_string();
+                        Ok::<ToolCallData, anyhow::Error>(ToolCallData {
+                            id,
+                            function_name,
+                            function_arguments,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?;
+        let tool_call_id = mo
+            .get("tool_call_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         messages.push(Message {
             role,
             content: parts,
+            tool_calls,
+            tool_call_id,
         });
     }
     Ok(messages)
@@ -319,6 +387,20 @@ pub struct GenerateRequest {
     pub max_tokens: u32,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
+    /// Optional JSON Schema for structured output. When present, the
+    /// engine passes it to the inference backend as `response_format`
+    /// (OpenAI-compatible guided decoding). The value is a JSON object
+    /// with `name`, `strict`, and `schema` fields matching the
+    /// `response_format.json_schema` shape. Engines that don't support
+    /// structured generation should reject the request rather than
+    /// serving unconstrained output.
+    pub guided_json: Option<serde_json::Value>,
+    /// Optional list of tool/function definitions (OpenAI-compatible
+    /// `tools` array). When present, the engine passes them to the
+    /// inference backend so the model can call functions.
+    pub tools: Option<serde_json::Value>,
+    /// Optional tool choice strategy (OpenAI-compatible `tool_choice`).
+    pub tool_choice: Option<serde_json::Value>,
 }
 
 /// Result of a non-streaming inference call.
@@ -340,6 +422,10 @@ pub enum DeltaChannel {
     #[default]
     Content,
     Reasoning,
+    /// Structured tool-call delta (JSON-serialized OpenAI tool_calls
+    /// fragment). The provider seals and forwards these on the
+    /// `ToolCall` chunk channel so the client can reassemble them.
+    ToolCall,
 }
 
 const THINK_OPEN: &str = "<think>";
@@ -872,6 +958,60 @@ mod tests {
     }
 
     #[test]
+    fn parse_messages_v1_with_tool_calls_on_assistant() {
+        let bytes = br#"{"v":1,"messages":[
+            {"role":"user","content":"What's the weather?"},
+            {"role":"assistant","content":"","tool_calls":[
+                {"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}
+            ]}
+        ]}"#;
+        let msgs = parse_messages_v1(bytes).expect("parse");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[1].role, "assistant");
+        let tool_calls = msgs[1].tool_calls.as_ref().expect("tool_calls present");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_abc");
+        assert_eq!(tool_calls[0].function_name, "get_weather");
+        assert_eq!(tool_calls[0].function_arguments, r#"{"city":"Tokyo"}"#);
+    }
+
+    #[test]
+    fn parse_messages_v1_with_tool_call_id_on_tool_message() {
+        let bytes = br#"{"v":1,"messages":[
+            {"role":"user","content":"What's the weather?"},
+            {"role":"assistant","content":"","tool_calls":[
+                {"id":"call_abc","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Tokyo\"}"}}
+            ]},
+            {"role":"tool","content":"{\"temperature\":22}","tool_call_id":"call_abc"}
+        ]}"#;
+        let msgs = parse_messages_v1(bytes).expect("parse");
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[2].role, "tool");
+        assert_eq!(msgs[2].tool_call_id.as_deref(), Some("call_abc"));
+        assert!(msgs[2].tool_calls.is_none());
+    }
+
+    #[test]
+    fn parse_messages_v1_rejects_tool_calls_missing_id() {
+        let bytes = br#"{"v":1,"messages":[
+            {"role":"assistant","content":"","tool_calls":[
+                {"type":"function","function":{"name":"get_weather","arguments":"{}"}}
+            ]}
+        ]}"#;
+        assert!(parse_messages_v1(bytes).is_err());
+    }
+
+    #[test]
+    fn parse_messages_v1_rejects_tool_calls_missing_function() {
+        let bytes = br#"{"v":1,"messages":[
+            {"role":"assistant","content":"","tool_calls":[
+                {"id":"call_1","type":"function"}
+            ]}
+        ]}"#;
+        assert!(parse_messages_v1(bytes).is_err());
+    }
+
+    #[test]
     fn parse_messages_v1_rejects_unknown_part_type() {
         let bytes =
             br#"{"v":1,"messages":[{"role":"user","content":[{"type":"audio","data":"x"}]}]}"#;
@@ -889,6 +1029,8 @@ mod tests {
                     data_b64: "aGVsbG8=".into(),
                 },
             ],
+            tool_calls: None,
+            tool_call_id: None,
         };
         m.zeroize_content();
         for p in &m.content {

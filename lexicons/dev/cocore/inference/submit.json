@@ -22,6 +22,46 @@
                 "amount": { "type": "integer", "minimum": 0 },
                 "currency": { "type": "string", "minLength": 1 }
               }
+            },
+            "outputSchema": {
+              "type": "object",
+              "description": "Optional JSON Schema to constrain the model output. When present, the published job record carries this schema and the provider passes it to the inference engine as response_format guided decoding. The schema is public (not encrypted) — it describes the output shape, not the input.",
+              "properties": {
+                "name": { "type": "string", "description": "Schema name (maps to OpenAI response_format.json_schema.name)." },
+                "strict": { "type": "boolean", "description": "Whether to enforce strict schema adherence." },
+                "schema": { "type": "object", "description": "The actual JSON Schema object that constrains the model output." }
+              }
+            },
+            "tools": {
+              "type": "array",
+              "maxLength": 128,
+              "description": "Optional list of tool/function definitions the model may call. Public (not encrypted). The published job record carries this list and the provider passes it to the inference engine.",
+              "items": {
+                "type": "object",
+                "required": ["type", "function"],
+                "properties": {
+                  "type": { "type": "string", "knownValues": ["function"] },
+                  "function": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                      "name": { "type": "string", "maxLength": 256 },
+                      "description": { "type": "string", "maxLength": 4096 },
+                      "parameters": { "type": "object", "description": "JSON Schema for the function's arguments." }
+                    }
+                  }
+                }
+              }
+            },
+            "toolChoice": {
+              "type": "string",
+              "knownValues": ["auto", "none", "required"],
+              "description": "Optional tool choice strategy. 'auto' (default), 'none', or 'required'. Additive."
+            },
+            "toolChoiceFunction": {
+              "type": "string",
+              "maxLength": 256,
+              "description": "When toolChoice is 'required', force the model to call this specific function. Maps to OpenAI tool_choice object form. Additive."
             }
           }
         }

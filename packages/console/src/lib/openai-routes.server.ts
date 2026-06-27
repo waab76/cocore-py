@@ -24,7 +24,11 @@ import { runTraced } from "@/lib/o11y.server.ts";
 import { restoreAtprotoSessionEffect } from "@/integrations/auth/atproto.server.ts";
 import { appviewBackedSession, appviewSessionInfo } from "@/lib/appview-backed-session.server.ts";
 import { isAppviewForwardConfigured } from "@/lib/appview-pds-forward.server.ts";
-import { type DispatchInputs, runDispatch } from "@/lib/inference-dispatch.server.ts";
+import {
+  type AdvisorProviderRow,
+  type DispatchInputs,
+  runDispatch,
+} from "@/lib/inference-dispatch.server.ts";
 import { listMyFriendDids } from "@/lib/friends.server.ts";
 import { resolveProBonoProviderKeys } from "@/lib/pro-bono.server.ts";
 import {
@@ -37,6 +41,7 @@ import {
   streamingResponse,
 } from "@/lib/openai-chat-completions.server.ts";
 import { resolveBearerKey } from "@/lib/api-keys.server.ts";
+import { cocoreConfig } from "@/lib/cocore-config.ts";
 import { resolveBearerKeyViaAppview } from "@/lib/api-keys-appview.server.ts";
 import { verifyServiceAuth } from "@/lib/service-auth.server.ts";
 import { buildModelDirectory } from "@/lib/model-directory.server.ts";
@@ -172,6 +177,62 @@ async function authenticate(
   return { did, oauthSession };
 }
 
+/**
+ * Check whether at least one connected provider supports tool calling for
+ * the requested model. Returns `null` if OK (tools allowed or no tools in
+ * request), or an error message string if the request should be rejected.
+ *
+ * When `allowedDids` is provided, the pool is filtered to those DIDs
+ * (friends-only routing). Otherwise the full attested pool is considered.
+ */
+async function checkToolCallSupport(
+  model: string,
+  tools: unknown,
+  allowedDids?: Set<string>,
+): Promise<string | null> {
+  // No tools in the request — nothing to gate.
+  if (!tools || !Array.isArray(tools) || tools.length === 0) return null;
+
+  const config = cocoreConfig();
+  let list: AdvisorProviderRow[];
+  try {
+    const r = await fetch(`${config.advisorUrl}/providers`);
+    if (!r.ok) return null; // advisor unreachable — don't block the request
+    list = (await r.json()) as AdvisorProviderRow[];
+  } catch {
+    return null; // network error — don't block the request
+  }
+
+  // Filter to attested, active, model-matching providers.
+  let pool = list.filter(
+    (p) =>
+      p.attestedAt &&
+      p.active !== false &&
+      (p.supportedModels.length === 0 || p.supportedModels.includes(model)),
+  );
+
+  // Friends-only: further filter to the allowed DID set.
+  if (allowedDids !== undefined) {
+    pool = pool.filter((p) => allowedDids.has(p.did));
+  }
+
+  // Check if at least one provider in the pool has verified tool calling for
+  // this exact model. Legacy providers that predate `toolCallModels` fall back
+  // to the coarse boolean; new providers report a per-model canary-passed set.
+  const toolCapable = pool.some((p) => {
+    if (Array.isArray(p.toolCallModels)) return p.toolCallModels.includes(model);
+    return p.supportsToolCalls === true;
+  });
+  if (!toolCapable) {
+    return (
+      "No connected provider supports tool calling for this model. " +
+      "The provider must be started with vLLM tool calling enabled and pass " +
+      "the startup forced-tool canary."
+    );
+  }
+  return null;
+}
+
 /** POST /v1/chat/completions — open-network OpenAI chat completions. */
 export async function handleChatCompletions(request: Request): Promise<Response> {
   const auth = await authenticate(request);
@@ -185,6 +246,11 @@ export async function handleChatCompletions(request: Request): Promise<Response>
   }
   const parsed = parseRequest(raw);
   if (typeof parsed === "string") return jsonError(400, parsed);
+
+  // Tool calling gate: if the request includes tools, verify at least one
+  // connected provider supports tool calling for this model.
+  const toolError = await checkToolCallSupport(parsed.model, parsed.tools);
+  if (toolError) return jsonError(400, toolError, "tool_calls_not_supported");
 
   const id = `chatcmpl-${crypto.randomUUID().replace(/-/g, "")}`;
   let payload: Awaited<ReturnType<typeof buildJobInput>>;
@@ -206,6 +272,10 @@ export async function handleChatCompletions(request: Request): Promise<Response>
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     country: parsed.country,
+    ...(parsed.outputSchema ? { outputSchema: parsed.outputSchema } : {}),
+    ...(parsed.tools ? { tools: parsed.tools } : {}),
+    ...(parsed.toolChoice ? { toolChoice: parsed.toolChoice } : {}),
+    ...(parsed.toolChoiceFunction ? { toolChoiceFunction: parsed.toolChoiceFunction } : {}),
   };
 
   if (parsed.stream) {
@@ -247,6 +317,11 @@ export async function handlePrivateChatCompletions(request: Request): Promise<Re
     );
   }
 
+  // Tool calling gate: if the request includes tools, verify at least one
+  // friend provider supports tool calling for this model.
+  const toolError = await checkToolCallSupport(parsed.model, parsed.tools, allowedProviderDids);
+  if (toolError) return jsonError(400, toolError, "tool_calls_not_supported");
+
   const id = `chatcmpl-${crypto.randomUUID().replace(/-/g, "")}`;
   let payload: Awaited<ReturnType<typeof buildJobInput>>;
   try {
@@ -272,6 +347,10 @@ export async function handlePrivateChatCompletions(request: Request): Promise<Re
     // streaming responders map that to a 503 (no_friends_available).
     allowedProviderDids,
     country: parsed.country,
+    ...(parsed.outputSchema ? { outputSchema: parsed.outputSchema } : {}),
+    ...(parsed.tools ? { tools: parsed.tools } : {}),
+    ...(parsed.toolChoice ? { toolChoice: parsed.toolChoice } : {}),
+    ...(parsed.toolChoiceFunction ? { toolChoiceFunction: parsed.toolChoiceFunction } : {}),
   };
 
   if (parsed.stream) {
@@ -361,6 +440,10 @@ export async function handleVerifiedChatCompletions(request: Request): Promise<R
     // verified-provider list rather than the caller's friends.
     allowedProviderDids,
     country: parsed.country,
+    ...(parsed.outputSchema ? { outputSchema: parsed.outputSchema } : {}),
+    ...(parsed.tools ? { tools: parsed.tools } : {}),
+    ...(parsed.toolChoice ? { toolChoice: parsed.toolChoice } : {}),
+    ...(parsed.toolChoiceFunction ? { toolChoiceFunction: parsed.toolChoiceFunction } : {}),
   };
 
   if (parsed.stream) {

@@ -66,6 +66,29 @@ export interface DispatchInputs {
    *  after the model filter. Advisory routing (region is a provider
    *  self-claim); not applied to an explicit `targetProviderDid`. */
   country?: string;
+  /** Optional JSON Schema constraining the model's output. When present,
+   *  the published job record carries this schema and the provider passes
+   *  it to the inference engine as response_format guided decoding. */
+  outputSchema?: {
+    name: string;
+    strict?: boolean;
+    schema: Record<string, unknown>;
+  };
+  /** Optional list of tool/function definitions the model may call.
+   *  Public (not encrypted). The published job record carries this list
+   *  and the provider passes it to the inference engine. */
+  tools?: Array<{
+    type: "function";
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }>;
+  /** Optional tool choice strategy. */
+  toolChoice?: "auto" | "none" | "required";
+  /** When toolChoice is "required", optionally force a specific function. */
+  toolChoiceFunction?: string;
   /** Restrict provider selection to this allow-set, resolved by the console
    *  (friends / verified / pro-bono) and forwarded here so the AppView core
    *  only has to filter. Each entry is either a bare DID (owner-granular:
@@ -245,7 +268,7 @@ export type DispatchEvent =
       providerDid: string;
       sessionId: string;
     }
-  | { kind: "chunk"; seq: number; channel: "content" | "reasoning"; text: string }
+  | { kind: "chunk"; seq: number; channel: "content" | "reasoning" | "tool_call"; text: string }
   | {
       kind: "complete";
       tokensIn: number;
@@ -582,6 +605,10 @@ export async function* runDispatch(
         maxTokensOut: input.maxTokensOut,
         priceCeiling: input.priceCeiling,
         exchangeDid: deps.exchangeDid,
+        ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
+        ...(input.tools ? { tools: input.tools } : {}),
+        ...(input.toolChoice ? { toolChoice: input.toolChoice } : {}),
+        ...(input.toolChoiceFunction ? { toolChoiceFunction: input.toolChoiceFunction } : {}),
       },
     });
   } catch (e) {
@@ -678,6 +705,10 @@ export async function* runDispatch(
         maxTokensOut: input.maxTokensOut,
         ciphertext: [...candidateCiphertext],
         ...(input.inputFormat ? { inputFormat: input.inputFormat } : {}),
+        ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
+        ...(input.tools ? { tools: input.tools } : {}),
+        ...(input.toolChoice ? { toolChoice: input.toolChoice } : {}),
+        ...(input.toolChoiceFunction ? { toolChoiceFunction: input.toolChoiceFunction } : {}),
         ...(input.minProviderVersion ? { minProviderVersion: input.minProviderVersion } : {}),
         sessionId,
         targetProviderDid: candidate.did,

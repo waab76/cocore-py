@@ -80,6 +80,16 @@ pub struct GenerationParams {
     pub temperatureMilli: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topPMilli: Option<u64>,
+    /// SHA-256 hex over the canonical JSON of the outputSchema the
+    /// provider used for this job. Present only when the job specified
+    /// outputSchema. Covered by enclaveSignature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputSchemaHash: Option<String>,
+    /// SHA-256 hex over the canonical JSON of the tools the provider
+    /// used for this job. Present only when the job specified tools.
+    /// Covered by enclaveSignature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toolSchemaHash: Option<String>,
 }
 
 #[allow(non_snake_case)]
@@ -350,6 +360,8 @@ mod tests {
             seed: Some(42),
             temperatureMilli: Some(700),
             topPMilli: None,
+            outputSchemaHash: Some("d".repeat(64)),
+            toolSchemaHash: Some("e".repeat(64)),
         });
         let (rec, _) = build(inputs, &*signer).unwrap();
 
@@ -361,6 +373,8 @@ mod tests {
         assert_eq!(signed["params"]["maxTokens"], json!(256));
         assert_eq!(signed["params"]["temperatureMilli"], json!(700));
         assert!(signed["params"].get("topPMilli").is_none());
+        assert_eq!(signed["params"]["outputSchemaHash"], json!("d".repeat(64)));
+        assert_eq!(signed["params"]["toolSchemaHash"], json!("e".repeat(64)));
         let message = to_canonical_bytes(&signed).unwrap();
 
         let sig_der = B64.decode(rec.enclaveSignature.as_bytes()).unwrap();

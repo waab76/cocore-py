@@ -466,3 +466,392 @@ describe("streamingResponse is an SSE stream", () => {
     assert.equal(parsed.error.type, "invalid_request_error");
   });
 });
+
+// ─── Tool calling tests ───
+
+describe("parseRequest with tools", () => {
+  test("extracts tools and toolChoice from an OpenAI-compatible request", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "What's the weather in Tokyo?" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Get weather for a city",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+            },
+          },
+        },
+      ],
+      tool_choice: "auto",
+    });
+    assert.notEqual(typeof parsed, "string");
+    if (typeof parsed === "string") return;
+    assert.ok(parsed.tools, "tools should be present");
+    assert.equal(parsed.tools!.length, 1);
+    assert.equal(parsed.tools![0]!.function.name, "get_weather");
+    assert.equal(parsed.toolChoice, "auto");
+  });
+
+  test("parses tool_choice object form into required + toolChoiceFunction", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "What's the weather?" }],
+      tools: [
+        {
+          type: "function",
+          function: { name: "get_weather", description: "Get weather" },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "get_weather" } },
+    });
+    assert.notEqual(typeof parsed, "string");
+    if (typeof parsed === "string") return;
+    assert.equal(parsed.toolChoice, "required");
+    assert.equal(parsed.toolChoiceFunction, "get_weather");
+  });
+
+  test("rejects tool_choice object with wrong type", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "hi" }],
+      tool_choice: { type: "code", function: { name: "foo" } },
+    });
+    assert.equal(typeof parsed, "string");
+    assert.match(parsed as string, /type must be 'function'/);
+  });
+
+  test("rejects tool_choice object missing function.name", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "hi" }],
+      tool_choice: { type: "function", function: {} },
+    });
+    assert.equal(typeof parsed, "string");
+    assert.match(parsed as string, /function\.name/);
+  });
+
+  test("passes through tool_calls and tool_call_id on messages", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [
+        { role: "user", content: "What's the weather?" },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call_abc",
+              type: "function",
+              function: { name: "get_weather", arguments: '{"city":"Tokyo"}' },
+            },
+          ],
+        },
+        { role: "tool", tool_call_id: "call_abc", content: '{"temperature":22}' },
+      ],
+    });
+    assert.notEqual(typeof parsed, "string");
+    if (typeof parsed === "string") return;
+    // The assistant message should carry tool_calls.
+    const assistant = parsed.messages.find((m) => m.role === "assistant");
+    assert.ok(assistant, "assistant message present");
+    assert.ok(assistant!.tool_calls, "tool_calls present on assistant");
+    assert.equal(assistant!.tool_calls![0]!.function.name, "get_weather");
+    // The tool message should carry tool_call_id.
+    const tool = parsed.messages.find((m) => m.role === "tool");
+    assert.ok(tool, "tool message present");
+    assert.equal(tool!.tool_call_id, "call_abc");
+  });
+
+  test("rejects tool_calls that is not an array", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: null, tool_calls: "not-an-array" as unknown as never },
+      ],
+    });
+    assert.equal(typeof parsed, "string");
+    assert.match(parsed as string, /tool_calls must be an array/);
+  });
+});
+
+describe("bufferedResponse with tool calls", () => {
+  test("reassembles tool_call chunks into tool_calls with finish_reason=tool_calls", async () => {
+    const res = await bufferedResponse(
+      "chatcmpl-id",
+      "stub",
+      yieldEvents([
+        // First delta: id + function name
+        {
+          kind: "chunk",
+          seq: 0,
+          channel: "tool_call",
+          text: JSON.stringify([
+            {
+              index: 0,
+              id: "call_abc123",
+              type: "function",
+              function: { name: "get_weather", arguments: "" },
+            },
+          ]),
+        },
+        // Second delta: arguments fragment
+        {
+          kind: "chunk",
+          seq: 1,
+          channel: "tool_call",
+          text: JSON.stringify([
+            {
+              index: 0,
+              function: { arguments: '{"city":"Tokyo"}' },
+            },
+          ]),
+        },
+        { kind: "complete", tokensIn: 10, tokensOut: 5, receiptUri: "at://x" },
+      ]),
+    );
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as {
+      choices: Array<{
+        message: {
+          tool_calls?: Array<{
+            id: string;
+            type: string;
+            function: { name: string; arguments: string };
+          }>;
+          content: string;
+        };
+        finish_reason: string;
+      }>;
+    };
+    assert.equal(body.choices[0]!.finish_reason, "tool_calls");
+    assert.ok(body.choices[0]!.message.tool_calls, "tool_calls present");
+    assert.equal(body.choices[0]!.message.tool_calls!.length, 1);
+    const tc = body.choices[0]!.message.tool_calls![0]!;
+    assert.equal(tc.id, "call_abc123");
+    assert.equal(tc.type, "function");
+    assert.equal(tc.function.name, "get_weather");
+    assert.equal(tc.function.arguments, '{"city":"Tokyo"}');
+  });
+
+  test("content + tool_calls: content is preserved alongside tool calls", async () => {
+    const res = await bufferedResponse(
+      "chatcmpl-id",
+      "stub",
+      yieldEvents([
+        { kind: "chunk", seq: 0, channel: "content", text: "Let me check the weather." },
+        {
+          kind: "chunk",
+          seq: 1,
+          channel: "tool_call",
+          text: JSON.stringify([
+            {
+              index: 0,
+              id: "call_1",
+              type: "function",
+              function: { name: "get_weather", arguments: '{"city":"NYC"}' },
+            },
+          ]),
+        },
+        { kind: "complete", tokensIn: 5, tokensOut: 10, receiptUri: "at://x" },
+      ]),
+    );
+    const body = (await res.json()) as {
+      choices: Array<{
+        message: { content: string; tool_calls?: unknown[] };
+        finish_reason: string;
+      }>;
+    };
+    assert.equal(body.choices[0]!.finish_reason, "tool_calls");
+    assert.equal(body.choices[0]!.message.content, "Let me check the weather.");
+    assert.ok(body.choices[0]!.message.tool_calls);
+  });
+
+  test("no tool_calls when no tool_call chunks arrive", async () => {
+    const res = await bufferedResponse(
+      "chatcmpl-id",
+      "stub",
+      yieldEvents([
+        { kind: "chunk", seq: 0, channel: "content", text: "just a normal response" },
+        { kind: "complete", tokensIn: 1, tokensOut: 1, receiptUri: "at://x" },
+      ]),
+    );
+    const body = (await res.json()) as {
+      choices: Array<{
+        message: { tool_calls?: unknown[] };
+        finish_reason: string;
+      }>;
+    };
+    assert.equal(body.choices[0]!.finish_reason, "stop");
+    assert.equal(body.choices[0]!.message.tool_calls, undefined);
+  });
+});
+
+describe("streamingResponse with tool calls", () => {
+  test("emits delta.tool_calls in SSE when tool_call channel chunks arrive", async () => {
+    const res = streamingResponse(
+      "chatcmpl-id",
+      "stub",
+      yieldEvents([
+        {
+          kind: "chunk",
+          seq: 0,
+          channel: "tool_call",
+          text: JSON.stringify([
+            {
+              index: 0,
+              id: "call_abc",
+              type: "function",
+              function: { name: "get_weather", arguments: '{"city":"Tokyo"}' },
+            },
+          ]),
+        },
+        { kind: "complete", tokensIn: 5, tokensOut: 3, receiptUri: "at://x" },
+      ]),
+    );
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /^text\/event-stream/);
+
+    const data = await readSseData(res);
+    assert.equal(data.at(-1), "[DONE]");
+
+    // Find the chunk that carries tool_calls (skip [DONE] terminator).
+    const toolCallChunk = data
+      .filter((d) => d !== "[DONE]")
+      .map((d) => JSON.parse(d) as { choices: Array<{ delta: { tool_calls?: unknown[] } }> })
+      .find((c) => c.choices[0]?.delta.tool_calls);
+
+    assert.ok(toolCallChunk, "at least one SSE chunk should carry delta.tool_calls");
+    const tc = toolCallChunk!.choices[0]!.delta.tool_calls as Array<{
+      id: string;
+      function: { name: string; arguments: string };
+    }>;
+    assert.equal(tc[0]!.id, "call_abc");
+    assert.equal(tc[0]!.function.name, "get_weather");
+    assert.equal(tc[0]!.function.arguments, '{"city":"Tokyo"}');
+  });
+
+  test("emits content and tool_calls in separate SSE chunks", async () => {
+    const res = streamingResponse(
+      "chatcmpl-id",
+      "stub",
+      yieldEvents([
+        { kind: "chunk", seq: 0, channel: "content", text: "Checking" },
+        {
+          kind: "chunk",
+          seq: 1,
+          channel: "tool_call",
+          text: JSON.stringify([
+            {
+              index: 0,
+              id: "call_1",
+              type: "function",
+              function: { name: "lookup", arguments: "{}" },
+            },
+          ]),
+        },
+        { kind: "complete", tokensIn: 1, tokensOut: 2, receiptUri: "at://x" },
+      ]),
+    );
+    const data = await readSseData(res);
+    const chunks = data
+      .slice(0, -1) // drop [DONE]
+      .map((d) => JSON.parse(d) as { choices: Array<{ delta: Record<string, unknown> }> });
+
+    const contentChunks = chunks.filter((c) => c.choices[0]?.delta.content);
+    const toolCallChunks = chunks.filter((c) => c.choices[0]?.delta.tool_calls);
+
+    assert.ok(contentChunks.length > 0, "at least one content chunk");
+    assert.ok(toolCallChunks.length > 0, "at least one tool_call chunk");
+  });
+});
+
+describe("parseRequest with response_format", () => {
+  test("parses response_format json_schema into outputSchema", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "List 3 fruits as JSON." }],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "fruit_list",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              fruits: { type: "array", items: { type: "string" } },
+            },
+            required: ["fruits"],
+          },
+        },
+      },
+    });
+    assert.notEqual(typeof parsed, "string");
+    if (typeof parsed === "string") return;
+    assert.ok(parsed.outputSchema, "outputSchema should be present");
+    assert.equal(parsed.outputSchema!.name, "fruit_list");
+    assert.equal(parsed.outputSchema!.strict, true);
+    assert.ok(parsed.outputSchema!.schema.properties, "schema should have properties");
+  });
+
+  test("parses response_format without strict field", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "Return JSON." }],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "simple",
+          schema: { type: "object" },
+        },
+      },
+    });
+    assert.notEqual(typeof parsed, "string");
+    if (typeof parsed === "string") return;
+    assert.ok(parsed.outputSchema);
+    assert.equal(parsed.outputSchema!.name, "simple");
+    assert.equal(parsed.outputSchema!.strict, undefined);
+  });
+
+  test("rejects response_format with wrong type", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "hi" }],
+      response_format: { type: "text" },
+    });
+    assert.equal(typeof parsed, "string");
+    assert.match(parsed as string, /json_schema/);
+  });
+
+  test("rejects response_format missing json_schema.name", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "hi" }],
+      response_format: {
+        type: "json_schema",
+        json_schema: { schema: { type: "object" } },
+      },
+    });
+    assert.equal(typeof parsed, "string");
+    assert.match(parsed as string, /name/);
+  });
+
+  test("rejects response_format missing json_schema.schema", () => {
+    const parsed = parseRequest({
+      model: "stub",
+      messages: [{ role: "user", content: "hi" }],
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "test" },
+      },
+    });
+    assert.equal(typeof parsed, "string");
+    assert.match(parsed as string, /schema/);
+  });
+});

@@ -8,28 +8,6 @@ overrides:
   better-sqlite3: ^11.10.0
   vite: 8.0.11
 
-time:
-  '@types/katex@0.16.8': 2026-01-10T00:47:17.003Z
-  commander@8.3.0: 2021-10-22T07:02:06.771Z
-  hast-util-from-dom@5.0.1: 2024-11-19T09:18:30.519Z
-  hast-util-from-html-isomorphic@2.0.0: 2023-08-08T13:09:03.725Z
-  hast-util-from-html@2.0.3: 2024-09-17T11:10:50.098Z
-  hast-util-from-parse5@8.0.3: 2025-02-19T14:42:45.779Z
-  hast-util-is-element@3.0.0: 2023-07-31T15:09:01.219Z
-  hast-util-parse-selector@4.0.0: 2023-08-01T11:57:16.332Z
-  hast-util-to-text@4.0.2: 2024-04-16T10:33:12.922Z
-  hastscript@9.0.1: 2025-02-19T13:18:00.722Z
-  katex@0.16.47: 2026-05-16T07:48:35.236Z
-  katex@0.17.0: 2026-05-22T08:06:26.967Z
-  mdast-util-math@3.0.0: 2023-07-16T11:25:47.253Z
-  micromark-extension-math@3.1.0: 2024-07-08T10:14:07.623Z
-  rehype-katex@7.0.1: 2024-08-19T12:09:21.818Z
-  remark-math@6.0.0: 2023-09-19T11:38:59.221Z
-  unist-util-find-after@5.0.0: 2023-07-07T12:48:02.610Z
-  unist-util-remove-position@5.0.0: 2023-07-07T10:24:53.442Z
-  vfile-location@5.0.3: 2024-07-15T14:29:27.567Z
-  web-namespaces@2.0.1: 2021-11-05T18:13:56.968Z
-
 importers:
 
   .:
@@ -10444,6 +10422,8 @@ snapshots:
       mdast-util-from-markdown: 2.0.3
       mdast-util-to-markdown: 2.1.2
       unist-util-remove-position: 5.0.0
+    transitivePeerDependencies:
+    - supports-color
 
   mdast-util-mdx-expression@2.0.1:
     dependencies:
@@ -11472,6 +11452,8 @@ snapshots:
       mdast-util-math: 3.0.0
       micromark-extension-math: 3.1.0
       unified: 11.0.5
+    transitivePeerDependencies:
+    - supports-color
 
   remark-mdx-frontmatter@5.2.0:
     dependencies:

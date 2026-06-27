@@ -57,6 +57,15 @@ export interface Register {
    *  advisor sends the code-identity challenge here. Omitted on headless
    *  installs, which therefore stay best-effort. Additive. */
   apns_device_token?: string;
+  /** True only when at least one model passed the provider's startup
+   *  forced-tool canary. `tool_call_models` carries the per-model verified
+   *  subset for new clients. Additive — old advisors ignore it. */
+  supports_tool_calls?: boolean;
+  /** Model ids whose engines passed the provider's forced-tool startup canary.
+   *  When absent, clients fall back to legacy `supports_tool_calls`; when
+   *  present, tool-capability gating should require the requested model to be
+   *  listed. Additive. */
+  tool_call_models?: string[];
   /** This agent binary's version (e.g. `0.9.32`), echoed live so the advisor
    *  can route version-gated jobs (a request needing a feature only present
    *  from some release is steered to machines at/above a minimum version).
@@ -136,6 +145,18 @@ export interface InferenceRequest {
    *  the `/jobs` body; the advisor never reads the plaintext. */
   input_format?: string;
   session_id: string;
+  /** Optional JSON Schema constraining the model's output. When present,
+   *  the provider passes it to the inference engine as response_format
+   *  guided decoding. Forwarded from the `/jobs` body; the advisor never
+   *  reads the plaintext. */
+  output_schema?: { name: string; strict?: boolean; schema: Record<string, unknown> };
+  /** Optional tool definitions the model may call. Forwarded from the
+   *  `/jobs` body; the advisor never inspects the plaintext. */
+  tools?: unknown;
+  /** Optional tool-choice directive (e.g. "auto", "none", "required", or
+   *  a provider-specific object). Forwarded from the `/jobs` body; the
+   *  advisor never inspects it. */
+  tool_choice?: unknown;
 }
 
 interface InferenceChunk {
@@ -143,7 +164,7 @@ interface InferenceChunk {
   seq: number;
   /** Which channel this chunk's plaintext belongs to. Absent (older
    *  providers) means the answer. The advisor relays it opaquely. */
-  channel?: "content" | "reasoning";
+  channel?: "content" | "reasoning" | "tool_call";
   ciphertext: number[] | string;
 }
 

@@ -162,6 +162,12 @@ export interface JobRecord {
   nonce: string;
   expiresAt: string;
   createdAt: string;
+  outputSchema?: { name?: string; strict?: boolean; schema?: Record<string, unknown> };
+  tools?: {
+    type: "function";
+    function: { name: string; description?: string; parameters?: Record<string, unknown> };
+  }[];
+  toolChoice?: "auto" | "none" | "required";
 }
 
 export interface PaymentAuthorizationRecord {

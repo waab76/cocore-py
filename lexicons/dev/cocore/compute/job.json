@@ -84,7 +84,57 @@
             "format": "datetime",
             "description": "Provider must complete by this time. Receipts whose completedAt > expiresAt are invalid."
           },
-          "createdAt": { "type": "string", "format": "datetime" }
+          "createdAt": { "type": "string", "format": "datetime" },
+          "outputSchema": {
+            "type": "object",
+            "description": "Optional JSON Schema constraining the model's output. When present, the provider MUST pass it to the inference engine as a response_format guided-decoding constraint so the output conforms. The schema is public (not encrypted) — it describes the output shape, not the input prompt. A receipt's generationParams.outputSchemaHash MUST match SHA-256 of the canonical JSON of this field. Additive: providers that don't understand structured generation reject the job rather than serving unconstrained output.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 256,
+                "description": "Schema name (maps to OpenAI response_format.json_schema.name)."
+              },
+              "strict": {
+                "type": "boolean",
+                "description": "Whether to enforce strict schema adherence. When true, the engine must guarantee the output validates against the schema."
+              },
+              "schema": {
+                "type": "object",
+                "description": "The actual JSON Schema object that constrains the model output."
+              }
+            }
+          },
+          "tools": {
+            "type": "array",
+            "maxLength": 128,
+            "description": "Optional list of tool/function definitions the model may call. Public (not encrypted) — describes available functions, not user data. A receipt's generationParams.toolSchemaHash MUST match SHA-256 of the canonical JSON of this field. Additive: providers that don't support tool calling reject the job rather than ignoring the tools.",
+            "items": {
+              "type": "object",
+              "required": ["type", "function"],
+              "properties": {
+                "type": { "type": "string", "knownValues": ["function"], "description": "The tool type. Currently only 'function' is supported." },
+                "function": {
+                  "type": "object",
+                  "required": ["name"],
+                  "properties": {
+                    "name": { "type": "string", "maxLength": 256, "description": "The function name the model calls to invoke this tool." },
+                    "description": { "type": "string", "maxLength": 4096, "description": "What the function does, so the model knows when to call it." },
+                    "parameters": { "type": "object", "description": "JSON Schema describing the function's arguments." }
+                  }
+                }
+              }
+            }
+          },
+          "toolChoice": {
+            "type": "string",
+            "knownValues": ["auto", "none", "required"],
+            "description": "Optional tool choice strategy. 'auto' (default) lets the model decide whether to call a tool; 'none' disables tool calling; 'required' forces at least one tool call. Additive — absent means 'auto'."
+          },
+          "toolChoiceFunction": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "When toolChoice is 'required', optionally force the model to call this specific function (by name). Maps to the OpenAI tool_choice object form { type: 'function', function: { name } }. Additive — absent means any tool may be called."
+          }
         }
       }
     }

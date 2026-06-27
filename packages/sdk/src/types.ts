@@ -150,6 +150,26 @@ export interface JobRecord {
   nonce?: string;
   expiresAt: string;
   createdAt: string;
+  /** Optional JSON Schema constraining the model's output. When present,
+   *  the provider passes it to the inference engine as response_format
+   *  guided decoding. Public (not encrypted) — describes output shape. */
+  outputSchema?: {
+    name: string;
+    strict?: boolean;
+    schema: Record<string, unknown>;
+  };
+  /** Optional tool definitions the model may call during generation.
+   *  Public (not encrypted) — describes available tools. */
+  tools?: {
+    type: "function";
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }[];
+  /** How the model should choose tools. Absent ≡ "auto". */
+  toolChoice?: "auto" | "none" | "required";
 }
 
 /** Sampling parameters a receipt commits to. Integer-only because the
@@ -160,6 +180,12 @@ export interface GenerationParams {
   seed?: number;
   temperatureMilli?: number;
   topPMilli?: number;
+  /** SHA-256 hex of the canonical JSON of the outputSchema used. Present
+   *  only when the job specified outputSchema. */
+  outputSchemaHash?: string;
+  /** SHA-256 hex of the canonical JSON of the tools array used. Present
+   *  only when the job specified tools. */
+  toolSchemaHash?: string;
 }
 
 export interface ReceiptRecord {

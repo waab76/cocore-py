@@ -82,6 +82,29 @@ export interface DispatchInputs {
    *  Advisory routing: `region` is a provider self-claim, and a provider
    *  that doesn't publish a region is never matched by a country filter. */
   country?: string;
+  /** Optional JSON Schema constraining the model's output. When present,
+   *  the published job record carries this schema and the provider passes
+   *  it to the inference engine as response_format guided decoding. */
+  outputSchema?: {
+    name: string;
+    strict?: boolean;
+    schema: Record<string, unknown>;
+  };
+  /** Optional list of tool/function definitions the model may call.
+   *  Public (not encrypted). The published job record carries this list
+   *  and the provider passes it to the inference engine. */
+  tools?: Array<{
+    type: "function";
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }>;
+  /** Optional tool choice strategy. */
+  toolChoice?: "auto" | "none" | "required";
+  /** When toolChoice is "required", optionally force a specific function. */
+  toolChoiceFunction?: string;
   /** Optional minimum provider binaryVersion (e.g. `0.9.32`). When set,
    *  pickProvider keeps only machines reporting a version >= this — used to
    *  steer feature-bearing requests (image input needs a messages-v1 release)
@@ -228,7 +251,7 @@ export type DispatchEvent =
       providerDid: string;
       sessionId: string;
     }
-  | { kind: "chunk"; seq: number; channel: "content" | "reasoning"; text: string }
+  | { kind: "chunk"; seq: number; channel: "content" | "reasoning" | "tool_call"; text: string }
   | {
       kind: "complete";
       tokensIn: number;
@@ -292,12 +315,16 @@ async function resolveProviderCredit(
   return { did, handle, displayName, machineLabel, line };
 }
 
-interface AdvisorProviderRow {
+export interface AdvisorProviderRow {
   did: string;
   encryptionPubKey: string;
   supportedModels: string[];
   attestedAt: string | null;
   lastSeen: string;
+  /** The machine owner's start/stop switch, as last reported by the
+   *  machine's heartbeat. `false` → the owner stopped this machine; it's
+   *  excluded from routing. Absent/`true` → serving. */
+  active?: boolean;
   /** Per-machine identity for the row (the agent's provider-record
    *  rkey). The advisor returns one row per connected machine, so this
    *  distinguishes machines under the same DID. Optional: legacy
@@ -311,6 +338,16 @@ interface AdvisorProviderRow {
    *  Advisory self-claim; absent when the provider hasn't opted into
    *  location sharing. Used for `country` routing. */
   region?: string;
+  /** True when this machine's vllm-mlx was started with
+   *  `--enable-auto-tool-choice` (COCORE_ENABLE_TOOL_CALLS env var), so
+   *  the model can parse and emit structured tool calls. Absent when the
+   *  advisor or provider doesn't report it (treated as false). Used by
+   *  the console to gate tool requests. */
+  supportsToolCalls?: boolean;
+  /** Model ids whose engines passed the provider startup forced-tool canary.
+   *  When absent, callers fall back to legacy `supportsToolCalls`; when
+   *  present, only these models should be considered tool-capable. */
+  toolCallModels?: string[];
   /** Agent binary version (e.g. `0.9.32`) reported by the machine, from the
    *  advisor Register frame. Absent for a pre-version agent. Used for
    *  `minProviderVersion` routing (fail-closed: absent never satisfies a
@@ -706,6 +743,10 @@ export async function* runDispatch(input: DispatchInputs): AsyncGenerator<Dispat
         maxTokensOut: input.maxTokensOut,
         priceCeiling: input.priceCeiling,
         exchangeDid: config.exchangeDid,
+        ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
+        ...(input.tools ? { tools: input.tools } : {}),
+        ...(input.toolChoice ? { toolChoice: input.toolChoice } : {}),
+        ...(input.toolChoiceFunction ? { toolChoiceFunction: input.toolChoiceFunction } : {}),
       },
     });
   } catch (e) {
@@ -824,6 +865,10 @@ export async function* runDispatch(input: DispatchInputs): AsyncGenerator<Dispat
         maxTokensOut: input.maxTokensOut,
         ciphertext: [...candidateCiphertext],
         ...(input.inputFormat ? { inputFormat: input.inputFormat } : {}),
+        ...(input.outputSchema ? { outputSchema: input.outputSchema } : {}),
+        ...(input.tools ? { tools: input.tools } : {}),
+        ...(input.toolChoice ? { toolChoice: input.toolChoice } : {}),
+        ...(input.toolChoiceFunction ? { toolChoiceFunction: input.toolChoiceFunction } : {}),
         ...(input.minProviderVersion ? { minProviderVersion: input.minProviderVersion } : {}),
         sessionId,
         targetProviderDid: candidate.did,
@@ -895,7 +940,7 @@ export async function* runDispatch(input: DispatchInputs): AsyncGenerator<Dispat
       if (ev.event === "chunk") {
         let parsed: {
           seq: number;
-          channel?: "content" | "reasoning";
+          channel?: "content" | "reasoning" | "tool_call";
           ciphertext: number[] | string;
         };
         try {

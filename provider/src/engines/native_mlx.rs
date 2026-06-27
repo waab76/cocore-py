@@ -154,6 +154,26 @@ impl Drop for NativeMlxEngine {
     }
 }
 
+/// Check whether the native MLX engine can serve this request. The native
+/// FFI has no `tools` or `response_format` parameters, so requests using
+/// those features must be rejected rather than silently served as
+/// unconstrained plain text.
+fn check_native_capabilities(request: &GenerateRequest) -> Result<()> {
+    if request.tools.is_some() {
+        anyhow::bail!(
+            "native-mlx engine does not support tool calling; \
+             use the subprocess (vllm-mlx) engine with --enable-auto-tool-choice"
+        );
+    }
+    if request.guided_json.is_some() {
+        anyhow::bail!(
+            "native-mlx engine does not support structured output (response_format); \
+             use the subprocess (vllm-mlx) engine"
+        );
+    }
+    Ok(())
+}
+
 impl Engine for NativeMlxEngine {
     fn name(&self) -> &'static str {
         "native-mlx"
@@ -189,6 +209,13 @@ impl Engine for NativeMlxEngine {
         use super::ContentPart;
         use base64::Engine as _;
         use std::os::raw::{c_char, c_void};
+
+        // The native MLX FFI has no tools or response_format parameters, so
+        // tool-calling and structured-output requests cannot be served. Reject
+        // explicitly rather than silently ignoring the constraints — a silent
+        // drop would produce unconstrained plain text that violates the
+        // requester's contract (and the receipt's schema/tool hashes).
+        check_native_capabilities(request)?;
 
         // The agent flattens the request to a single user turn; the Swift side
         // applies the model's chat template. Text parts are concatenated;
@@ -327,7 +354,7 @@ impl Engine for NativeMlxEngine {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
-    use crate::engines::Message;
+    use crate::engines::{GenerateRequest, Message};
 
     /// End-to-end: load a real MLX model and stream tokens IN-PROCESS. Ignored
     /// by default (needs a model dir + the colocated metallib); run with:
@@ -357,6 +384,9 @@ mod tests {
             max_tokens: 48,
             temperature: None,
             top_p: None,
+            guided_json: None,
+            tools: None,
+            tool_choice: None,
         };
         let mut streamed = String::new();
         let resp = eng
@@ -370,5 +400,64 @@ mod tests {
             resp.tokens_out > 0 && resp.tokens_in > 0,
             "expected real token counts"
         );
+    }
+
+    /// The native engine must reject requests that carry tool definitions
+    /// rather than silently ignoring them and producing unconstrained text.
+    #[test]
+    fn rejects_tool_calling_requests() {
+        let req = GenerateRequest {
+            model: "test".into(),
+            messages: vec![Message::text("user", "hello")],
+            max_tokens: 16,
+            temperature: None,
+            top_p: None,
+            guided_json: None,
+            tools: Some(serde_json::json!([{"type":"function","function":{"name":"f"}}])),
+            tool_choice: None,
+        };
+        let err = check_native_capabilities(&req).unwrap_err();
+        assert!(
+            err.to_string().contains("tool calling"),
+            "error should mention tool calling, got: {err}"
+        );
+    }
+
+    /// The native engine must reject requests that carry structured-output
+    /// (response_format) constraints rather than silently ignoring them.
+    #[test]
+    fn rejects_structured_output_requests() {
+        let req = GenerateRequest {
+            model: "test".into(),
+            messages: vec![Message::text("user", "hello")],
+            max_tokens: 16,
+            temperature: None,
+            top_p: None,
+            guided_json: Some(serde_json::json!({"name":"schema","schema":{}})),
+            tools: None,
+            tool_choice: None,
+        };
+        let err = check_native_capabilities(&req).unwrap_err();
+        assert!(
+            err.to_string().contains("structured output"),
+            "error should mention structured output, got: {err}"
+        );
+    }
+
+    /// Plain text requests (no tools, no guided_json) must pass the
+    /// capability check without error.
+    #[test]
+    fn allows_plain_text_requests() {
+        let req = GenerateRequest {
+            model: "test".into(),
+            messages: vec![Message::text("user", "hello")],
+            max_tokens: 16,
+            temperature: None,
+            top_p: None,
+            guided_json: None,
+            tools: None,
+            tool_choice: None,
+        };
+        check_native_capabilities(&req).expect("plain text should be allowed");
     }
 }

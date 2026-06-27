@@ -140,6 +140,28 @@ export interface PublishJobInputs {
   acceptedExchanges?: string[];
   paymentAuthorization: StrongRef;
   expiresAt?: string;
+  /** Optional JSON Schema constraining the model's output. When present,
+   *  the provider passes it to the inference engine as response_format
+   *  guided decoding. Public (not encrypted) — describes output shape. */
+  outputSchema?: {
+    name: string;
+    strict?: boolean;
+    schema: Record<string, unknown>;
+  };
+  /** Optional tool definitions the model may call during generation.
+   *  Public (not encrypted) — describes available tools. */
+  tools?: {
+    type: "function";
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }[];
+  /** How the model should choose tools. Absent ≡ "auto". */
+  toolChoice?: "auto" | "none" | "required";
+  /** When toolChoice is "required", optionally force a specific function. */
+  toolChoiceFunction?: string;
 }
 
 /** Build + publish a `dev.cocore.compute.paymentAuthorization` to the
@@ -194,6 +216,12 @@ export async function publishJob(args: {
     ...(args.inputs.inputCipherURL ? { inputCipherURL: args.inputs.inputCipherURL } : {}),
     ...(args.inputs.acceptedProviders ? { acceptedProviders: args.inputs.acceptedProviders } : {}),
     ...(args.inputs.acceptedExchanges ? { acceptedExchanges: args.inputs.acceptedExchanges } : {}),
+    ...(args.inputs.outputSchema ? { outputSchema: args.inputs.outputSchema } : {}),
+    ...(args.inputs.tools ? { tools: args.inputs.tools } : {}),
+    ...(args.inputs.toolChoice ? { toolChoice: args.inputs.toolChoice } : {}),
+    ...(args.inputs.toolChoiceFunction
+      ? { toolChoiceFunction: args.inputs.toolChoiceFunction }
+      : {}),
   };
   const out = await args.transport.publish({
     repo: args.requesterDid,
@@ -220,6 +248,28 @@ export interface SubmitJobInputs {
   priceCeiling: Money;
   exchangeDid: string;
   acceptedTrustLevel?: TrustLevel;
+  /** Optional JSON Schema constraining the model's output. When present,
+   *  the published job record carries this schema and the provider passes
+   *  it to the inference engine as response_format guided decoding. */
+  outputSchema?: {
+    name: string;
+    strict?: boolean;
+    schema: Record<string, unknown>;
+  };
+  /** Optional tool definitions the model may call during generation.
+   *  Public (not encrypted) — describes available tools. */
+  tools?: {
+    type: "function";
+    function: {
+      name: string;
+      description?: string;
+      parameters?: Record<string, unknown>;
+    };
+  }[];
+  /** How the model should choose tools. Absent ≡ "auto". */
+  toolChoice?: "auto" | "none" | "required";
+  /** When toolChoice is "required", optionally force a specific function. */
+  toolChoiceFunction?: string;
 }
 
 export interface SubmittedJob {
@@ -260,6 +310,12 @@ export async function submitJob(args: {
       acceptedTrustLevel: args.inputs.acceptedTrustLevel,
       acceptedExchanges: [args.inputs.exchangeDid],
       paymentAuthorization: authorization.ref,
+      ...(args.inputs.outputSchema ? { outputSchema: args.inputs.outputSchema } : {}),
+      ...(args.inputs.tools ? { tools: args.inputs.tools } : {}),
+      ...(args.inputs.toolChoice ? { toolChoice: args.inputs.toolChoice } : {}),
+      ...(args.inputs.toolChoiceFunction
+        ? { toolChoiceFunction: args.inputs.toolChoiceFunction }
+        : {}),
     },
   });
   return { authorization, job };

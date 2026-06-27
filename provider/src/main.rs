@@ -1364,7 +1364,7 @@ async fn cmd_serve(
         }))
     };
 
-    let (engines, engine_fault) = build_engines(profile.ram_gb);
+    let (engines, engine_fault, tool_call_models) = build_engines(profile.ram_gb);
 
     // Stop the progress monitor and record the outcome for the tray: clear
     // the marker on success (tray shows normal serving), or write the fault
@@ -1625,6 +1625,16 @@ async fn cmd_serve(
         apns_device_token: cocore_provider::push_host::current_device_token(),
         #[cfg(not(all(target_os = "macos", feature = "apns")))]
         apns_device_token: None,
+        // Tool calling: advertise verified support only. vLLM/vllm-mlx owns
+        // parser/template semantics; each subprocess engine runs a forced-tool
+        // startup canary before its model is listed here. The boolean stays for
+        // legacy advisors/clients; `tool_call_models` is the per-model subset.
+        supports_tool_calls: Some(!tool_call_models.is_empty()),
+        tool_call_models: if tool_call_models.is_empty() {
+            None
+        } else {
+            Some(tool_call_models.clone())
+        },
         // Echo our binary version live so the advisor can route version-gated
         // jobs (e.g. image input requires a release that supports messages-v1).
         binary_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -1782,7 +1792,8 @@ async fn cmd_serve(
                                 // The fault (if any) was already published on the
                                 // initial provider record; the in-window reload only
                                 // needs the registry.
-                                let (eng, _fault) = build_engines(provider_record.ramGB);
+                                let (eng, _fault, _tool_call_models) =
+                                    build_engines(provider_record.ramGB);
                                 eng
                             }
                         };
@@ -2315,6 +2326,7 @@ fn build_engines(
 ) -> (
     cocore_provider::engines::EngineRegistry,
     Option<EngineFault>,
+    Vec<String>,
 ) {
     use cocore_provider::engines::stub::StubEngine;
     let mut registry = cocore_provider::engines::EngineRegistry::new();
@@ -2405,7 +2417,7 @@ fn build_engines(
         // On a confidential machine the subprocess set is intentionally empty
         // (inference runs in-process), so a native failure is the fault to
         // surface here. On best-effort machines `native_fault` is `None`.
-        return (registry, native_fault);
+        return (registry, native_fault, vec![]);
     }
 
     // Resolve the venv interpreter once. The install script writes it
@@ -2422,7 +2434,7 @@ fn build_engines(
             models: vec![],
             at: chrono::Utc::now(),
         };
-        return (registry, Some(fault));
+        return (registry, Some(fault), vec![]);
     };
     let venv_python = home.join(".cocore/python/bin/python");
 
@@ -2524,10 +2536,24 @@ fn build_engines(
     let mut saw_venv_missing = false;
     let mut last_err: Option<String> = None;
 
+    let tool_config = cocore_provider::engines::subprocess::VllmToolConfig::from_env();
+    if tool_config.enabled {
+        tracing::info!(
+            parser = tool_config.tool_call_parser.as_deref().unwrap_or("auto"),
+            chat_template_kwargs = tool_config.default_chat_template_kwargs.is_some(),
+            extra_args = tool_config.extra_args.len(),
+            "tool calling requested; vLLM config will be passed through and verified with a startup canary"
+        );
+    }
+    let mut tool_call_models: Vec<String> = vec![];
+
     for model in &configured {
-        match start_engine_with_recovery(model, &venv_python) {
+        match start_engine_with_recovery(model, &venv_python, tool_config.clone()) {
             Ok(engine) => {
                 tracing::info!(model = %model, "inference subprocess engine ready");
+                if engine.verified_tool_calls() {
+                    tool_call_models.push(model.clone());
+                }
                 registry.register(model.clone(), std::sync::Arc::new(engine));
             }
             Err(EngineStartFailure::VenvMissing) => {
@@ -2549,7 +2575,7 @@ fn build_engines(
     }
 
     if failed.is_empty() && too_large.is_empty() {
-        return (registry, None);
+        return (registry, None, tool_call_models);
     }
 
     // The fault's `models` field lists every model that won't be served
@@ -2751,7 +2777,7 @@ fn build_engines(
         }
     };
 
-    (registry, Some(fault))
+    (registry, Some(fault), tool_call_models)
 }
 
 /// How a single model's load ultimately failed, after recovery.
@@ -2839,6 +2865,7 @@ fn is_weight_download_incomplete(last_err: Option<&str>) -> bool {
 fn start_engine_with_recovery(
     model: &str,
     venv_python: &std::path::Path,
+    tool_config: cocore_provider::engines::subprocess::VllmToolConfig,
 ) -> std::result::Result<cocore_provider::engines::subprocess::SubprocessEngine, EngineStartFailure>
 {
     use cocore_provider::engines::subprocess::SubprocessEngine;
@@ -2853,7 +2880,7 @@ fn start_engine_with_recovery(
                 "venv python missing; the installer may still be provisioning it — will retry after backoff"
             );
         } else {
-            match SubprocessEngine::new(model, venv_python.to_path_buf()) {
+            match SubprocessEngine::new(model, venv_python.to_path_buf(), tool_config.clone()) {
                 Ok(engine) => match engine.start() {
                     Ok(()) => return Ok(engine),
                     Err(e) => {

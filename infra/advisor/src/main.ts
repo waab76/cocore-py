@@ -301,6 +301,11 @@ async function main(): Promise<void> {
               challengeVerifiedSip: p.challengeVerifiedSip,
               codeAttested: p.codeAttested,
             },
+            // Tool calling: verified by the provider's startup canary. The
+            // per-model subset lets clients avoid treating one verified model
+            // as capability for every model on the machine.
+            supportsToolCalls: p.supportsToolCalls,
+            toolCallModels: p.toolCallModels,
           })),
         ),
       ).pipe(Effect.withSpan("advisor.providers")),

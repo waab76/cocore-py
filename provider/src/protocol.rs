@@ -178,6 +178,18 @@ pub struct Register {
     /// stay best-effort. Additive — pre-APNs advisors ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apns_device_token: Option<String>,
+    /// True only when at least one subprocess engine has verified vLLM
+    /// tool-call support with a forced-tool startup canary. `tool_call_models`
+    /// carries the per-model subset for new advisors/clients; this boolean is
+    /// retained as the legacy coarse capability. Additive — old advisors that
+    /// don't know the field ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_tool_calls: Option<bool>,
+    /// Model ids whose engines passed the forced-tool startup canary. When
+    /// absent, clients fall back to legacy `supports_tool_calls`; when present,
+    /// tool-capability gating should require the requested model to be listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_models: Option<Vec<String>>,
     /// Version string of this agent binary (`env!("CARGO_PKG_VERSION")`,
     /// e.g. `0.9.32`), echoed live so the advisor can route version-gated
     /// jobs — a request that needs a feature only present from some release
@@ -245,6 +257,30 @@ pub struct InferenceRequest {
     /// different attestation can't be replayed). Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attestation_cid: Option<String>,
+    /// Optional JSON Schema constraining the model's output. When present,
+    /// the provider passes it to the inference engine as a `response_format`
+    /// guided-decoding constraint so the output conforms. The schema is
+    /// public (not encrypted) — it describes the output shape, not the
+    /// input. Additive — absent means unconstrained generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+    /// Optional list of tool/function definitions the model may call.
+    /// Public (not encrypted) — describes available functions, not user
+    /// data. Forwarded to the engine as OpenAI-compatible `tools`.
+    /// Additive — absent means no tool calling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<serde_json::Value>,
+    /// Optional tool choice strategy: "auto", "none", "required", or
+    /// a specific function object. Forwarded to the engine as
+    /// OpenAI-compatible `tool_choice`. Additive — absent means "auto".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<serde_json::Value>,
+    /// When tool_choice is "required", optionally force a specific
+    /// function by name. The provider reconstructs the OpenAI object
+    /// form `{ type: "function", function: { name } }` from this.
+    /// Additive — absent means any tool may be called.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice_function: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -287,6 +323,7 @@ pub enum ChunkChannel {
     #[default]
     Content,
     Reasoning,
+    ToolCall,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
