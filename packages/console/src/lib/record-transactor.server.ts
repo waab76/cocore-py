@@ -125,9 +125,7 @@ export async function transactRecord(
       throw new RecordNotFoundError(rkey);
     }
     const patched = patch(existing ? { ...existing.value } : {});
-    const value = stampCreatedAt
-      ? { ...patched, createdAt: new Date().toISOString() }
-      : patched;
+    const value = stampCreatedAt ? { ...patched, createdAt: new Date().toISOString() } : patched;
     try {
       const { cid } = await store.write(rkey, value, existing ? existing.cid : null);
       return { cid, value };
@@ -142,7 +140,5 @@ export async function transactRecord(
       throw err;
     }
   }
-  throw (
-    lastConflict ?? new Error(`transactRecord(${rkey}): exhausted ${maxAttempts} attempts`)
-  );
+  throw lastConflict ?? new Error(`transactRecord(${rkey}): exhausted ${maxAttempts} attempts`);
 }

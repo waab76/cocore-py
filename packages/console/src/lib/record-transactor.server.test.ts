@@ -86,12 +86,9 @@ describe("transactRecord", () => {
     const store = new FakeStore({
       value: { active: true, supportedModels: ["a"], unknownFutureField: 42 },
     });
-    const { value } = await transactRecord(
-      store,
-      "rk",
-      (v) => ({ ...v, active: false }),
-      { sleep: noSleep },
-    );
+    const { value } = await transactRecord(store, "rk", (v) => ({ ...v, active: false }), {
+      sleep: noSleep,
+    });
     assert.equal(value.active, false);
     // Agent-authored + entirely-unknown fields ride through untouched — this is
     // what makes a new field immune to the "forgot the allowlist" clobber.
@@ -122,12 +119,9 @@ describe("transactRecord", () => {
     store.interpose = () => {
       store.commitExternal((v) => ({ ...v, shareLocation: true }));
     };
-    const { value } = await transactRecord(
-      store,
-      "rk",
-      (v) => ({ ...v, active: false }),
-      { sleep: noSleep },
-    );
+    const { value } = await transactRecord(store, "rk", (v) => ({ ...v, active: false }), {
+      sleep: noSleep,
+    });
     assert.equal(store.writes, 2, "first write conflicts, second succeeds");
     assert.equal(value.active, false, "our field wins (we committed last)");
     assert.equal(value.shareLocation, true, "competitor's untouched field survives");
@@ -171,7 +165,8 @@ describe("transactRecord", () => {
     const store = new FakeStore({ value: { active: true } });
     // Every write loses the swap (a relentless competitor).
     const original = store.write.bind(store);
-    store.write = async (rkey, value, _swap) => original(rkey, value, "stale-cid-that-never-matches");
+    store.write = async (rkey, value, _swap) =>
+      original(rkey, value, "stale-cid-that-never-matches");
     await assert.rejects(
       () =>
         transactRecord(store, "rk", (v) => ({ ...v, active: false }), {

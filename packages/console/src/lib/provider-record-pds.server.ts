@@ -155,7 +155,7 @@ function providerRecordStore(session: OAuthSession): CasRecordStore {
  *  unknown fields — untouched), bump the monotonic `createdAt`, and putRecord
  *  with a swap guard, retrying on `InvalidSwap`. A failed read aborts without
  *  writing. This is what every `setProviderRecord*` runs on. */
-export async function transactProviderRecord(
+async function transactProviderRecord(
   session: OAuthSession,
   rkey: string,
   patch: (current: Record<string, unknown>) => Record<string, unknown>,

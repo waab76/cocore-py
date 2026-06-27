@@ -424,8 +424,16 @@ async fn cmd_set_desired_models(models: Vec<String>) -> Result<bool> {
         let current: Option<Vec<String>> = value
             .get("desiredModels")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|m| m.as_str().map(str::to_string)).collect());
-        let next: Option<Vec<String>> = if models.is_empty() { None } else { Some(models.clone()) };
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m.as_str().map(str::to_string))
+                    .collect()
+            });
+        let next: Option<Vec<String>> = if models.is_empty() {
+            None
+        } else {
+            Some(models.clone())
+        };
         if current == next {
             return Ok(false); // already in the desired state — no write.
         }
@@ -442,11 +450,17 @@ async fn cmd_set_desired_models(models: Vec<String>) -> Result<bool> {
             .await
         {
             Ok(_) => {
-                tracing::info!(count = models.len(), "wrote desiredModels to PDS (owner model pick)");
+                tracing::info!(
+                    count = models.len(),
+                    "wrote desiredModels to PDS (owner model pick)"
+                );
                 return Ok(true);
             }
             Err(e) if is_swap_conflict(&e) && attempt < MAX_ATTEMPTS => {
-                tracing::warn!(attempt, "desiredModels swap lost a race; re-reading and retrying");
+                tracing::warn!(
+                    attempt,
+                    "desiredModels swap lost a race; re-reading and retrying"
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(50 * attempt as u64)).await;
                 continue;
             }
@@ -791,7 +805,10 @@ async fn dedup_and_publish_provider(
 
         // Delete duplicate losers (best-effort; only need to run once).
         for (loser_rkey, loser_cid, _, _) in matching.iter().skip(1) {
-            match pds.delete_record(collection, loser_rkey, Some(loser_cid)).await {
+            match pds
+                .delete_record(collection, loser_rkey, Some(loser_cid))
+                .await
+            {
                 Ok(()) => {
                     deleted += 1;
                     tracing::info!(rkey = %loser_rkey, "deleted duplicate provider record");
@@ -809,7 +826,10 @@ async fn dedup_and_publish_provider(
             Err(e) if is_swap_conflict(&e) && attempt < MAX_ATTEMPTS => {
                 // Someone (a console edit, a sibling write) committed between our
                 // read and put. Re-read the now-current record and replay.
-                tracing::warn!(attempt, "provider record swap conflict; re-reading and retrying");
+                tracing::warn!(
+                    attempt,
+                    "provider record swap conflict; re-reading and retrying"
+                );
                 last_conflict = Some(e);
                 tokio::time::sleep(std::time::Duration::from_millis(50 * attempt as u64)).await;
                 continue;
@@ -894,7 +914,10 @@ async fn wait_until_active(pds: &cocore_provider::pds::PdsClient, rkey: Option<&
         // resolved (a transient PDS / console-proxy blip), distinct from a
         // confirmed `Some(active)`. Acting on that blip as if it were a real
         // value is the conflation that let a paused machine un-pause itself.
-        let read = pds.get_provider_control(rk).await.map(|(active, _, _)| active);
+        let read = pds
+            .get_provider_control(rk)
+            .await
+            .map(|(active, _, _)| active);
         if active_gate_decision(read, &mut confirmed_paused) == ActiveGate::Serve {
             clear_serving_paused();
             return;
@@ -3308,9 +3331,15 @@ mod active_gate_tests {
     #[test]
     fn confirmed_active_serves_and_confirmed_pause_waits() {
         let mut paused = false;
-        assert_eq!(active_gate_decision(Some(true), &mut paused), ActiveGate::Serve);
+        assert_eq!(
+            active_gate_decision(Some(true), &mut paused),
+            ActiveGate::Serve
+        );
         assert!(!paused);
-        assert_eq!(active_gate_decision(Some(false), &mut paused), ActiveGate::Wait);
+        assert_eq!(
+            active_gate_decision(Some(false), &mut paused),
+            ActiveGate::Wait
+        );
         assert!(paused, "a confirmed pause latches");
     }
 
@@ -3319,14 +3348,20 @@ mod active_gate_tests {
         // The regression: owner pauses (Some(false)); then the next read blips
         // (None). The machine must STAY paused — a blip can't un-pause it.
         let mut paused = false;
-        assert_eq!(active_gate_decision(Some(false), &mut paused), ActiveGate::Wait);
+        assert_eq!(
+            active_gate_decision(Some(false), &mut paused),
+            ActiveGate::Wait
+        );
         assert_eq!(
             active_gate_decision(None, &mut paused),
             ActiveGate::Wait,
             "an unresolved read must never un-pause a confirmed-paused machine"
         );
         // …and once the owner resumes (Some(true)), it serves.
-        assert_eq!(active_gate_decision(Some(true), &mut paused), ActiveGate::Serve);
+        assert_eq!(
+            active_gate_decision(Some(true), &mut paused),
+            ActiveGate::Serve
+        );
     }
 
     #[test]
@@ -3400,8 +3435,16 @@ mod offline_marker_tests {
 
         let merged = merge_agent_provider_fields(&live, &offline);
 
-        assert_eq!(merged.get("active"), Some(&serde_json::json!(false)), "pause preserved");
-        assert_eq!(merged.get("serving"), Some(&serde_json::json!(false)), "agent serving=false applied");
+        assert_eq!(
+            merged.get("active"),
+            Some(&serde_json::json!(false)),
+            "pause preserved"
+        );
+        assert_eq!(
+            merged.get("serving"),
+            Some(&serde_json::json!(false)),
+            "agent serving=false applied"
+        );
     }
 
     /// The reverse must also hold: quitting a SERVING machine must not
@@ -3438,9 +3481,15 @@ mod offline_marker_tests {
         assert_eq!(merged.get("payoutsEnabled"), Some(&serde_json::json!(true)));
         assert_eq!(
             merged.get("desiredModels"),
-            Some(&serde_json::json!(["mlx-community/Qwen2.5-3B-Instruct-4bit", "stub"]))
+            Some(&serde_json::json!([
+                "mlx-community/Qwen2.5-3B-Instruct-4bit",
+                "stub"
+            ]))
         );
-        assert_eq!(merged.get("desiredTier"), Some(&serde_json::json!("attested-confidential")));
+        assert_eq!(
+            merged.get("desiredTier"),
+            Some(&serde_json::json!("attested-confidential"))
+        );
         assert_eq!(
             merged.get("proBono"),
             Some(&serde_json::json!({ "mode": "direct", "dids": ["did:plc:friend"] }))
@@ -3473,7 +3522,8 @@ mod offline_marker_tests {
     #[test]
     fn merge_overwrites_agent_fields_and_clears_absent_ones() {
         let mut rebuilt = agent_built_record();
-        rebuilt.supportedModels = vec!["mlx-community/gemma-3-4b-it-qat-4bit".into(), "stub".into()];
+        rebuilt.supportedModels =
+            vec!["mlx-community/gemma-3-4b-it-qat-4bit".into(), "stub".into()];
         // Healthy this serve: no fault, not confidential, not sharing location.
         rebuilt.engineFault = None;
         rebuilt.tier = None;
@@ -3491,7 +3541,10 @@ mod offline_marker_tests {
         // Always-present agent field overwritten.
         assert_eq!(
             merged.get("supportedModels"),
-            Some(&serde_json::json!(["mlx-community/gemma-3-4b-it-qat-4bit", "stub"]))
+            Some(&serde_json::json!([
+                "mlx-community/gemma-3-4b-it-qat-4bit",
+                "stub"
+            ]))
         );
         // Stale agent-authored optional fields cleared.
         assert_eq!(merged.get("engineFault"), None, "cleared fault");
@@ -3512,7 +3565,11 @@ mod offline_marker_tests {
 
         let merged = merge_agent_provider_fields(&live, &rebuilt);
 
-        assert_eq!(merged.get("active"), Some(&serde_json::json!(false)), "owner value wins");
+        assert_eq!(
+            merged.get("active"),
+            Some(&serde_json::json!(false)),
+            "owner value wins"
+        );
         assert_eq!(
             merged.get("desiredModels"),
             Some(&serde_json::json!(["owner-choice"])),
@@ -3528,7 +3585,10 @@ mod offline_marker_tests {
         let merged = merge_agent_provider_fields(&serde_json::json!({}), &rebuilt);
 
         assert_eq!(merged.get("chip"), Some(&serde_json::json!("Apple M1")));
-        assert_eq!(merged.get("supportedModels"), Some(&serde_json::json!(["stub"])));
+        assert_eq!(
+            merged.get("supportedModels"),
+            Some(&serde_json::json!(["stub"]))
+        );
         assert_eq!(merged.get("active"), None);
         assert_eq!(merged.get("desiredModels"), None);
     }
