@@ -94,6 +94,16 @@ async function putMyProviderRecord(
   record: Record<string, unknown>,
   swapRecord: string,
 ): Promise<void> {
+  // Stamp a fresh `createdAt` so this owner edit is unambiguously the newest
+  // version of the record. Provider records treat `createdAt` as a monotonic
+  // "last-published-at" — the agent bumps it on every re-publish — and both
+  // the AppView's index (see store.upsert's version guard) and the agent's
+  // dedup order conflicting writes by it. A read-modify-write that KEEPS the
+  // agent's last timestamp would leave the edit tied with the agent's prior
+  // commit; a lagging/replayed firehose delivery of that same-timestamp
+  // commit could then clobber the edit back to its pre-edit state in the
+  // dashboard. Bumping it makes the edit strictly win.
+  const next = { ...record, createdAt: new Date().toISOString() };
   const res = await session.handle(`/xrpc/com.atproto.repo.putRecord`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -101,7 +111,7 @@ async function putMyProviderRecord(
       repo: session.did,
       collection: PROVIDER_COLLECTION,
       rkey,
-      record,
+      record: next,
       swapRecord,
     }),
   });
@@ -117,7 +127,7 @@ async function putMyProviderRecord(
   try {
     const body = (await res.json()) as { cid?: string };
     if (body?.cid) {
-      mirrorPutToBridge({ did: session.did, rkey, cid: body.cid, record });
+      mirrorPutToBridge({ did: session.did, rkey, cid: body.cid, record: next });
     }
   } catch {
     // ignore — putRecord succeeded, only the bridge hint is missing

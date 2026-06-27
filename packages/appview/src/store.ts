@@ -10,6 +10,31 @@
 import Database from "better-sqlite3";
 import type { Database as DB } from "better-sqlite3";
 
+/** Pull a record body's `createdAt` (RFC3339 string) if present. Provider
+ *  and job records carry one; the provider agent stamps a fresh value on
+ *  every (re-)publish, and the console stamps one on every owner edit, so
+ *  for those collections `createdAt` is a monotonic "last-published-at"
+ *  version we can order conflicting writes by. Records without it (e.g.
+ *  receipts, attestations) return null and fall back to last-writer-wins. */
+function bodyCreatedAt(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const v = (body as Record<string, unknown>)["createdAt"];
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+/** Whether an incoming record version is STRICTLY older than the one we
+ *  already hold. Compared as parsed instants (not lexicographically) so
+ *  producers that serialize `createdAt` at different sub-second precisions
+ *  still order correctly. Unparseable timestamps compare as "not older" so
+ *  we never silently drop a write we can't reason about. Equal instants are
+ *  NOT older — the later arrival still wins, preserving idempotent replay. */
+function isStaleVersion(incoming: string, existing: string): boolean {
+  const a = Date.parse(incoming);
+  const b = Date.parse(existing);
+  if (Number.isNaN(a) || Number.isNaN(b)) return false;
+  return a < b;
+}
+
 export interface IndexedRecord {
   uri: string;
   cid: string;
@@ -241,6 +266,7 @@ export class Store {
   private deleteStmt;
   private getStmt;
   private getByCollectionStmt;
+  private existingVersionStmt;
 
   constructor(path: string) {
     this.db = new Database(path);
@@ -263,6 +289,9 @@ export class Store {
       `SELECT uri, cid, collection, repo, rkey, body, indexed_at as indexedAt
        FROM records WHERE collection = ?
        ORDER BY indexed_at DESC LIMIT ?`,
+    );
+    this.existingVersionStmt = this.db.prepare(
+      `SELECT json_extract(body, '$.createdAt') AS createdAt FROM records WHERE uri = ?`,
     );
   }
 
@@ -295,6 +324,26 @@ export class Store {
   }
 
   upsert(rec: Omit<IndexedRecord, "indexedAt">): void {
+    // Version guard: never let a stale, out-of-order, or replayed ingest
+    // clobber a newer record body. The AppView is a cache the dashboard
+    // reads, fed by two independent, unordered writers — the console's
+    // best-effort bridge mirror (fired the instant an owner edits a setting)
+    // and the firehose (which lags and can re-deliver older commits on
+    // reconnect/backfill). A blind `INSERT OR REPLACE` here makes the LAST
+    // ARRIVAL win regardless of which write is actually newer, so a lagging
+    // firehose replay of a pre-edit provider commit silently reverts an
+    // owner's just-saved `shareLocation` / `proBono` (and every other
+    // owner-set field) in the dashboard even though their PDS — the real
+    // source of truth — is correct. Drop the write when the incoming body
+    // is strictly older than what we hold; equal/newer still applies, so
+    // idempotent replay and legitimate updates are unaffected. Records with
+    // no comparable `createdAt` keep the prior last-writer-wins behavior.
+    const incoming = bodyCreatedAt(rec.body);
+    if (incoming !== null) {
+      const row = this.existingVersionStmt.get(rec.uri) as { createdAt: string | null } | undefined;
+      const existing = row?.createdAt ?? null;
+      if (existing !== null && isStaleVersion(incoming, existing)) return;
+    }
     this.upsertStmt.run({
       uri: rec.uri,
       cid: rec.cid,

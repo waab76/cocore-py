@@ -200,6 +200,92 @@ test("replay: same event twice is a no-op (idempotent upsert)", async () => {
   assert.equal(snapBefore, snapAfter);
 });
 
+test("stale provider re-ingest never clobbers a newer one (version guard)", () => {
+  const ix = new Indexer(newStore());
+  const uri = "at://did:plc:p/dev.cocore.compute.provider/1";
+  const base = {
+    uri,
+    cid: "v1",
+    collection: "dev.cocore.compute.provider",
+    repo: "did:plc:p",
+    rkey: "1",
+  };
+
+  // The owner's just-saved version: shareLocation on, pro bono on, newer ts.
+  ix.ingest({
+    ...base,
+    cid: "v2",
+    record: {
+      machineLabel: "MBP",
+      attestationPubKey: "A",
+      shareLocation: true,
+      proBono: { mode: "any" },
+      createdAt: "2026-05-07T12:05:00Z",
+    },
+  });
+
+  // A lagging / replayed firehose delivery of the PRE-EDIT commit (older
+  // createdAt, no owner settings) arrives afterward. It must NOT win.
+  ix.ingest({
+    ...base,
+    cid: "v1",
+    record: {
+      machineLabel: "MBP",
+      attestationPubKey: "A",
+      createdAt: "2026-05-07T12:00:00Z",
+    },
+  });
+
+  const got = ix.store.get(uri);
+  assert.ok(got);
+  const body = got.body as { shareLocation?: boolean; proBono?: unknown };
+  assert.equal(body.shareLocation, true, "owner's shareLocation must survive a stale replay");
+  assert.deepEqual(body.proBono, { mode: "any" }, "owner's proBono must survive a stale replay");
+  assert.equal(got.cid, "v2", "newer version stays current");
+});
+
+test("equal or newer provider version still applies (idempotent + real updates)", () => {
+  const ix = new Indexer(newStore());
+  const uri = "at://did:plc:p/dev.cocore.compute.provider/1";
+  const base = {
+    uri,
+    cid: "c",
+    collection: "dev.cocore.compute.provider",
+    repo: "did:plc:p",
+    rkey: "1",
+  };
+  ix.ingest({ ...base, record: { attestationPubKey: "A", createdAt: "2026-05-07T12:00:00Z" } });
+  // Equal createdAt, newer body — last-writer-wins is preserved.
+  ix.ingest({
+    ...base,
+    cid: "c2",
+    record: { attestationPubKey: "A", machineLabel: "renamed", createdAt: "2026-05-07T12:00:00Z" },
+  });
+  assert.equal((ix.store.get(uri)!.body as { machineLabel?: string }).machineLabel, "renamed");
+  // Strictly newer — applies.
+  ix.ingest({
+    ...base,
+    cid: "c3",
+    record: { attestationPubKey: "A", machineLabel: "newest", createdAt: "2026-05-07T12:10:00Z" },
+  });
+  assert.equal((ix.store.get(uri)!.body as { machineLabel?: string }).machineLabel, "newest");
+});
+
+test("records without createdAt keep last-writer-wins (no guard)", () => {
+  const ix = new Indexer(newStore());
+  const uri = "at://did:plc:p/dev.cocore.compute.receipt/1";
+  const base = {
+    uri,
+    cid: "r1",
+    collection: "dev.cocore.compute.receipt",
+    repo: "did:plc:p",
+    rkey: "1",
+  };
+  ix.ingest({ ...base, record: { model: "a" } });
+  ix.ingest({ ...base, cid: "r2", record: { model: "b" } });
+  assert.equal((ix.store.get(uri)!.body as { model?: string }).model, "b");
+});
+
 test("snapshot golden bytes (sentinel against silent body mutation)", async () => {
   const ix = new Indexer(newStore());
   const fh = new Firehose();
