@@ -348,6 +348,16 @@ struct SecureModeWizardView: View {
     /// backstop if the user navigates there another way.
     private func fastPathIfAlreadyEnrolled() {
         guard step == .intro, EnrollmentProbe.isEnrolled() else { return }
+        // Already hardware-attested (the advisor's VERIFIED standing, not a local
+        // guess) → this Mac genuinely is in Secure Mode; show the real success
+        // screen instead of re-running attestation and re-deriving a positive
+        // state. Without this gate, an enrolled-but-not-yet-attested Mac would
+        // fast-path straight into a success-looking screen on every reopen.
+        if state.trustLevel == .hardwareAttested {
+            NSLog("cocore: Secure Mode wizard opened on an attested Mac — already on")
+            advance(to: .done)
+            return
+        }
         NSLog("cocore: Secure Mode wizard opened on an already-enrolled Mac — re-attesting only")
         MenuBarController.setSecureModeDesired(true)
         state.secureModeDesired = true
@@ -378,8 +388,9 @@ struct SecureModeWizardView: View {
     }
 
     /// Terminal states show a single "Done" and drop the "Skip"/"Not now"
-    /// affordances. `pending` is terminal-but-positive (attestation requested,
-    /// landing in the background), so it reads like `done`, not a stuck step.
+    /// affordances. `pending` is terminal so the wizard isn't a stuck step, but
+    /// it is NOT a success: it states plainly that Secure Mode isn't active yet
+    /// and offers "Check again now". Only `.done` means actually attested.
     private var isTerminal: Bool { step == .done || step == .pending }
 
     private var footer: some View {
@@ -542,15 +553,22 @@ struct SecureModeWizardView: View {
     /// lights up on its own.
     private var pendingStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Attestation requested", systemImage: "clock.badge.checkmark")
-                .font(.title2).bold().foregroundStyle(Brand.accentText)
+            // Honest, NOT a success screen: the attestation has only been
+            // REQUESTED. A checkmark / accent title here reads as "Secure Mode
+            // enabled!" when it isn't yet — so use a neutral pending treatment
+            // and state plainly that it's not active.
+            Label("Attestation pending", systemImage: "clock")
+                .font(.title2).bold().foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Secure Mode is not active yet.")
+                .font(.headline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Text(
                 "We've asked this Mac to hardware-attest its identity, bound to your "
                     + "agent's signing key. Apple runs this in the background and rate-limits "
-                    + "it, so the attestation can take a while to land — sometimes hours. You "
-                    + "don't need to keep this window open: Secure Mode will turn on "
-                    + "automatically once the attestation is captured."
+                    + "it, so the attestation can take a while to land — sometimes hours. It "
+                    + "turns on automatically once the attestation is captured; you can close "
+                    + "this window and the agent keeps trying."
             )
             .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
