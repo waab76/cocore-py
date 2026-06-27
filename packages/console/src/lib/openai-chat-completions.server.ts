@@ -410,6 +410,16 @@ export function dispatchErrorToHttpResponse(errorCode: DispatchErrorCode): {
         type: "service_unavailable_error",
         code: "no_providers_for_country",
       };
+    case "no-providers-for-version":
+      // The model exists but no connected provider runs a new enough binary
+      // (e.g. an image request needs a release that parses messages-v1).
+      // 503 (capacity-shaped, retryable) — capable machines may come online
+      // as the fleet updates.
+      return {
+        status: 503,
+        type: "service_unavailable_error",
+        code: "no_providers_for_version",
+      };
     case "no-friends-available":
       return {
         status: 503,

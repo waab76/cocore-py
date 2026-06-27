@@ -70,7 +70,16 @@ interface DispatchBody {
   /** Optional DID allow-set the console resolved (pro-bono / friends /
    *  verified) and forwarded. Constrains provider selection. */
   allowedProviderDids?: unknown;
+  /** Optional explicit minimum provider binaryVersion to route to (e.g.
+   *  `0.9.32` to require a feature). When absent, an image (messages-v1)
+   *  request still derives the messages-v1 floor automatically. */
+  minProviderVersion?: unknown;
 }
+
+// Minimum provider binaryVersion required to serve a multimodal
+// (messages-v1) request. Mirrors the console's constant; configurable via
+// the same env so both surfaces move the floor together.
+const MESSAGES_V1_MIN_VERSION = process.env["COCORE_MIN_VERSION_MESSAGES_V1"] ?? "0.9.32";
 
 type ParsedDispatch = Omit<DispatchInputs, "did">;
 
@@ -121,6 +130,9 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
     }
     allowedProviderDids = new Set(body.allowedProviderDids);
   }
+  if (body.minProviderVersion !== undefined && typeof body.minProviderVersion !== "string") {
+    return "minProviderVersion must be a string when provided";
+  }
   // Build the messages-v1 envelope when the client sent images.
   let envelope: Pick<DispatchInputs, "payloadBytes" | "inputFormat"> = {};
   if (body.messages !== undefined) {
@@ -130,6 +142,14 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
       envelope = { payloadBytes: buildEnvelopeBytes(coerced), inputFormat: MESSAGES_V1 };
     }
   }
+  // An explicit floor wins; otherwise an image request derives the
+  // messages-v1 floor so it only reaches providers that can parse it.
+  const minProviderVersion =
+    typeof body.minProviderVersion === "string"
+      ? body.minProviderVersion
+      : envelope.inputFormat === MESSAGES_V1
+        ? MESSAGES_V1_MIN_VERSION
+        : undefined;
   return {
     model: body.model,
     prompt: body.prompt,
@@ -144,6 +164,7 @@ function parseDispatch(body: DispatchBody): ParsedDispatch | string {
       : {}),
     ...(country ? { country } : {}),
     ...(allowedProviderDids ? { allowedProviderDids } : {}),
+    ...(minProviderVersion ? { minProviderVersion } : {}),
   };
 }
 

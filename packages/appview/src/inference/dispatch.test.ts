@@ -5,11 +5,14 @@ import {
   NoProvidersConnectedError,
   NoProvidersForCountryError,
   NoProvidersForModelError,
+  NoProvidersForVersionError,
   ProviderPayoutsNotEligibleError,
   TargetProviderNotConnectedError,
   classifyDispatchError,
   filterByAllowedDids,
+  filterByMinVersion,
   filterByPayoutsEligibility,
+  meetsMinVersion,
   openFromProvider,
   sealToProvider,
 } from "./dispatch.ts";
@@ -116,9 +119,33 @@ describe("classifyDispatchError", () => {
     expect(classifyDispatchError(new NoProvidersForCountryError("m", "US", 3))).toBe(
       "no-providers-for-country",
     );
+    expect(classifyDispatchError(new NoProvidersForVersionError("0.9.32", "none"))).toBe(
+      "no-providers-for-version",
+    );
   });
 
   it("falls back to advisor-transport for unknown errors", () => {
     expect(classifyDispatchError(new Error("socket hang up"))).toBe("advisor-transport");
+  });
+});
+
+describe("filterByMinVersion — version-gated routing", () => {
+  const NEW = { did: "did:plc:new", binaryVersion: "0.9.32" };
+  const OLD = { did: "did:plc:old", binaryVersion: "0.9.31" };
+  const LEGACY: { did: string; binaryVersion?: string } = { did: "did:plc:legacy" };
+
+  it("passes through when no floor is set", () => {
+    expect(filterByMinVersion([NEW, OLD, LEGACY], undefined)).toEqual([NEW, OLD, LEGACY]);
+  });
+
+  it("keeps only machines at or above the floor (fail-closed on unknown)", () => {
+    expect(filterByMinVersion([NEW, OLD, LEGACY], "0.9.32")).toEqual([NEW]);
+    expect(filterByMinVersion([LEGACY], "0.9.32")).toEqual([]);
+  });
+
+  it("meetsMinVersion is fail-closed on a missing version", () => {
+    expect(meetsMinVersion(undefined, "0.9.32")).toBe(false);
+    expect(meetsMinVersion("0.9.33", "0.9.32")).toBe(true);
+    expect(meetsMinVersion("0.9.31", "0.9.32")).toBe(false);
   });
 });

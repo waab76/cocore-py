@@ -60,6 +60,20 @@ import {
 // well above the DEFAULT_MAX_TOKENS of 1024 and most real requests.
 const DEFAULT_PRICE_CEILING = { amount: 100_000, currency: "CC" };
 
+// Minimum provider binaryVersion required to serve a multimodal
+// (`messages-v1`) request — i.e. one carrying images. Image support and the
+// Register-frame version reporting that lets the advisor enforce this both
+// land in the same release, so the floor is that release. Configurable via
+// env for when a later release moves it; the default is the first version
+// that reports its version AND parses images. A text request has no floor.
+const MESSAGES_V1_MIN_VERSION = process.env["COCORE_MIN_VERSION_MESSAGES_V1"] ?? "0.9.32";
+
+/** The provider version floor implied by an input format. Images
+ *  (`messages-v1`) require a capable provider; plain text has no floor. */
+function minVersionForInput(inputFormat: string | undefined): string | undefined {
+  return inputFormat === "messages-v1" ? MESSAGES_V1_MIN_VERSION : undefined;
+}
+
 // The method NSID a service-auth token must be minted for (its `lxm`
 // claim) to authenticate inference. The OpenAI-compatible surface forwards
 // to `dev.cocore.inference.dispatch`, so we bind to that NSID — one token
@@ -186,6 +200,9 @@ export async function handleChatCompletions(request: Request): Promise<Response>
     prompt: "",
     payloadBytes: payload.payloadBytes,
     inputFormat: payload.inputFormat,
+    // Image requests must only reach providers running a release that
+    // supports the messages-v1 envelope (fail-closed at the advisor).
+    minProviderVersion: minVersionForInput(payload.inputFormat),
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     country: parsed.country,
@@ -244,6 +261,9 @@ export async function handlePrivateChatCompletions(request: Request): Promise<Re
     prompt: "",
     payloadBytes: payload.payloadBytes,
     inputFormat: payload.inputFormat,
+    // Image requests must only reach providers running a release that
+    // supports the messages-v1 envelope (fail-closed at the advisor).
+    minProviderVersion: minVersionForInput(payload.inputFormat),
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     // `allowedProviderDids` here is what tips runDispatch into
@@ -332,6 +352,9 @@ export async function handleVerifiedChatCompletions(request: Request): Promise<R
     prompt: "",
     payloadBytes: payload.payloadBytes,
     inputFormat: payload.inputFormat,
+    // Image requests must only reach providers running a release that
+    // supports the messages-v1 envelope (fail-closed at the advisor).
+    minProviderVersion: minVersionForInput(payload.inputFormat),
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     // Same mechanism as the friends path, but the set is the proof-backed
@@ -407,6 +430,9 @@ export async function handleProBonoChatCompletions(request: Request): Promise<Re
     prompt: "",
     payloadBytes: payload.payloadBytes,
     inputFormat: payload.inputFormat,
+    // Image requests must only reach providers running a release that
+    // supports the messages-v1 envelope (fail-closed at the advisor).
+    minProviderVersion: minVersionForInput(payload.inputFormat),
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     // Constrain routing to providers that serve this requester free — same

@@ -1623,6 +1623,9 @@ async fn cmd_serve(
         apns_device_token: cocore_provider::push_host::current_device_token(),
         #[cfg(not(all(target_os = "macos", feature = "apns")))]
         apns_device_token: None,
+        // Echo our binary version live so the advisor can route version-gated
+        // jobs (e.g. image input requires a release that supports messages-v1).
+        binary_version: Some(env!("CARGO_PKG_VERSION").to_string()),
     };
 
     // Periodic re-attestation. Attestations expire after 24h; without this the

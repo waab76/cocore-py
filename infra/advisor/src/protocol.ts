@@ -57,6 +57,12 @@ export interface Register {
    *  advisor sends the code-identity challenge here. Omitted on headless
    *  installs, which therefore stay best-effort. Additive. */
   apns_device_token?: string;
+  /** This agent binary's version (e.g. `0.9.32`), echoed live so the advisor
+   *  can route version-gated jobs (a request needing a feature only present
+   *  from some release is steered to machines at/above a minimum version).
+   *  Additive — pre-version agents omit it, and a version floor treats a
+   *  machine that omits it as below the floor (fail-closed). */
+  binary_version?: string;
 }
 
 /** Content-free crash signature the provider folds into its heartbeat
