@@ -457,6 +457,30 @@ ${inner}
 `;
 }
 
+/** NanoMDM answers `/v1/enqueue` with a 500 + a database foreign-key violation
+ *  on its `enrollment_queue` table when the enqueue target has no enrollment row
+ *  yet — i.e. the Mac reports MDM-enrolled locally (`profiles status`) but its
+ *  NanoMDM check-in (Authenticate/TokenUpdate, which creates that row) hasn't
+ *  landed. That is a transient race right after profile install, NOT a
+ *  misconfiguration, so callers downgrade it to a soft "pending" instead of a
+ *  hard "error" that would dead-end the wizard with `secure-mode/push-failed`.
+ *
+ *  Matches the Postgres phrasing seen in the field
+ *  (`violates foreign key constraint "enrollment_queue_id_fkey"`) and the MySQL
+ *  one (`a foreign key constraint fails` referencing `enrollment_queue`). */
+export function enqueueTargetNotEnrolled(httpStatus: number, body: string): boolean {
+  if (httpStatus !== 500) return false;
+  const b = body.toLowerCase();
+  return b.includes("enrollment_queue") && (b.includes("foreign key") || b.includes("constraint"));
+}
+
+/** Operator/owner-facing detail for the `enqueueTargetNotEnrolled` race. */
+const NOT_YET_ENROLLED_DETAIL =
+  "device not yet registered with NanoMDM — it reports MDM-enrolled locally but " +
+  "its check-in hasn't created an enrollment row yet, so the attestation can't be " +
+  "queued. This clears on its own once the check-in lands; the agent's background " +
+  "flow re-requests until it does.";
+
 /** Wrap a mobileconfig in NanoMDM's InstallProfile command plist. */
 function buildInstallProfileCommand(commandUuid: string, profile: string): string {
   const payloadB64 = Buffer.from(profile, "utf8").toString("base64");
@@ -533,6 +557,15 @@ export async function pushAttestationCommand(
     });
     if (!enqueueResp.ok) {
       const text = await enqueueResp.text().catch(() => "");
+      if (enqueueTargetNotEnrolled(enqueueResp.status, text)) {
+        return {
+          queued: false,
+          commandUuid,
+          status: "pending",
+          stubbed: false,
+          detail: NOT_YET_ENROLLED_DETAIL,
+        };
+      }
       return {
         queued: false,
         commandUuid,
@@ -779,6 +812,15 @@ export async function requestDeviceInformationAttestation(
     });
     if (!enqueueResp.ok) {
       const text = await enqueueResp.text().catch(() => "");
+      if (enqueueTargetNotEnrolled(enqueueResp.status, text)) {
+        return {
+          queued: false,
+          commandUuid,
+          status: "pending",
+          stubbed: false,
+          detail: NOT_YET_ENROLLED_DETAIL,
+        };
+      }
       return {
         queued: false,
         commandUuid,

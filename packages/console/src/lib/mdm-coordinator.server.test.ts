@@ -13,6 +13,7 @@ import {
   authenticateNanomdmWebhook,
   buildDeviceInformationAttestationCommand,
   buildEnrollmentProfile,
+  enqueueTargetNotEnrolled,
   isValidSerial,
   isValidUdid,
   parseNanomdmAttestationWebhook,
@@ -183,6 +184,34 @@ describe("pushAttestationCommand — tolerance (no 400 for the shipped wizard)",
     expect(r.queued).toBe(true);
     expect(r.stubbed).toBe(true);
     expect(r.status).toBe("queued");
+  });
+});
+
+describe("enqueueTargetNotEnrolled — transient not-yet-registered race", () => {
+  it("matches the field Postgres enrollment_queue FK violation on a 500", () => {
+    // The exact NanoMDM body the reporting user pasted from the wizard.
+    const body = JSON.stringify({
+      command_error:
+        'pq: insert or update on table "enrollment_queue" violates foreign key constraint "enrollment_queue_id_fkey"',
+      command_uuid: "A9D544A1-294C-4158-A2EC-E48A45A7DE65",
+    });
+    expect(enqueueTargetNotEnrolled(500, body)).toBe(true);
+  });
+
+  it("matches the MySQL foreign-key phrasing referencing enrollment_queue", () => {
+    expect(
+      enqueueTargetNotEnrolled(
+        500,
+        "Error 1452: Cannot add or update a child row: a foreign key constraint fails (`nanomdm`.`enrollment_queue`, ...)",
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores unrelated 500s and non-500 statuses", () => {
+    expect(enqueueTargetNotEnrolled(500, "internal server error")).toBe(false);
+    expect(enqueueTargetNotEnrolled(503, "enrollment_queue foreign key")).toBe(false);
+    expect(enqueueTargetNotEnrolled(400, "bad request")).toBe(false);
+    expect(enqueueTargetNotEnrolled(200, "")).toBe(false);
   });
 });
 

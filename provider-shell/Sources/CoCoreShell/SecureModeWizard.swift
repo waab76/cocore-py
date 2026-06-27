@@ -180,6 +180,11 @@ struct AttestationDiagnostic {
     /// least-specific so the first matching cause wins.
     var code: String {
         if !enrolled { return "secure-mode/not-enrolled" }
+        // The coordinator reports `pending` when NanoMDM has no enrollment row
+        // for this device yet (its check-in hasn't landed) — a benign race right
+        // after profile install, NOT a queue failure. Classify it ahead of
+        // `push-failed` so it never surfaces as a red error.
+        if requestStatus == "pending" { return "secure-mode/awaiting-mdm-checkin" }
         if requestStatus == "error" { return "secure-mode/push-failed" }
         if chainStatus == "error" || chainHTTP != nil { return "secure-mode/chain-store-error" }
         return "secure-mode/chain-not-captured"
@@ -192,6 +197,11 @@ struct AttestationDiagnostic {
             return "This Mac doesn't report MDM enrollment, so it can't be asked "
                 + "to hardware-attest. Re-run the enroll step and Allow + Touch ID "
                 + "the management profile."
+        case "secure-mode/awaiting-mdm-checkin":
+            return "This Mac is enrolled, but co/core's device-management server hasn't "
+                + "registered its check-in yet, so the attestation can't be requested just "
+                + "this moment. This clears on its own within a few minutes — Secure Mode "
+                + "turns on automatically once it does, no action needed."
         case "secure-mode/push-failed":
             return "The coordinator couldn't queue the attestation request "
                 + "(\(requestDetail ?? "no detail"))."
@@ -211,6 +221,12 @@ struct AttestationDiagnostic {
         switch code {
         case "secure-mode/not-enrolled":
             return "agent: mdm_enrolled() is false; confirm `profiles status -type enrollment`."
+        case "secure-mode/awaiting-mdm-checkin":
+            return "NanoMDM has no enrollment row for this UDID yet (enqueue FK violation on "
+                + "enrollment_queue). The device reports enrolled locally but its "
+                + "Authenticate/TokenUpdate check-in hasn't landed; the agent's background "
+                + "option-B flow re-requests until it does. Confirm the device reaches the "
+                + "MDM ServerURL so its check-in registers."
         case "secure-mode/push-failed":
             return "check NanoMDM /v1/enqueue + /v1/push and that the device's UDID is a valid NanoMDM target."
         case "secure-mode/chain-store-error":
@@ -238,7 +254,9 @@ struct AttestationDiagnostic {
         // shown on the positive pending screen — say "pending" there, not
         // "failed", so the copyable detail doesn't read as an error. Genuine
         // faults keep the "failed" header.
-        let verb = code == "secure-mode/chain-not-captured" ? "pending" : "failed"
+        let verb =
+            (code == "secure-mode/chain-not-captured" || code == "secure-mode/awaiting-mdm-checkin")
+            ? "pending" : "failed"
         return [
             "co/core Secure Mode attestation \(verb) [\(code)]",
             "serial=\(serial) enrolled=\(enrolled) elapsed=\(elapsedSeconds)s polls=\(polls)",
@@ -748,6 +766,33 @@ struct SecureModeWizardView: View {
             let requestStart = Date()
             do {
                 try await requestAttestation()
+                // The coordinator can report `pending` — this Mac isn't on file with
+                // the device-management server yet (enrolled locally, but its MDM
+                // check-in, which registers it, hasn't landed). The attestation can't
+                // be queued until then, so polling for a chain this session is doomed:
+                // present the benign "pending" state now and let the agent's background
+                // flow finish the bind once the check-in registers.
+                if requestStatus == "pending" {
+                    working = false
+                    let diag = AttestationDiagnostic(
+                        serial: serial,
+                        enrolled: EnrollmentProbe.isEnrolled(),
+                        elapsedSeconds: Int(Date().timeIntervalSince(requestStart)),
+                        polls: 0,
+                        requestStatus: requestStatus,
+                        requestStubbed: requestStubbed,
+                        requestDetail: requestDetail,
+                        chainStatus: nil,
+                        chainDetail: nil,
+                        chainHTTP: nil
+                    )
+                    NSLog("cocore: %@", diag.report)
+                    MenuBarController.setSecureModeDesired(true)
+                    state.secureModeDesired = true
+                    pendingDetail = diag.report
+                    advance(to: .pending)
+                    return
+                }
                 progress = "Building the attestation chain…"
                 pollForAttestationChain()
             } catch {
@@ -922,7 +967,8 @@ struct SecureModeWizardView: View {
                 // agent keeps re-driving it until the chain lands. Genuine
                 // faults (not-enrolled / request-failed / store-error) still
                 // surface as an error the owner must act on.
-                if diag.code == "secure-mode/chain-not-captured" {
+                if diag.code == "secure-mode/chain-not-captured"
+                    || diag.code == "secure-mode/awaiting-mdm-checkin" {
                     MenuBarController.setSecureModeDesired(true)
                     state.secureModeDesired = true
                     pendingDetail = diag.report
