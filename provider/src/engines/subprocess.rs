@@ -277,16 +277,22 @@ pub fn apply_hf_download_env(cmd: &mut Command) {
 /// valid "transfer is alive" signal the stall watchdog can fall back on.
 /// Best-effort; 0 on any read error.
 fn xet_activity_mtime() -> u64 {
-    let Ok(home) = std::env::var("HOME") else {
-        return 0;
+    // Mirror huggingface_hub's cache-root resolution:
+    // HF_HOME > XDG_CACHE_HOME/huggingface > ~/.cache/huggingface.
+    let hf_cache_root = if let Ok(hf_home) = std::env::var("HF_HOME").filter(|v| !v.is_empty()) {
+        PathBuf::from(hf_home)
+    } else if let Ok(xdg) = std::env::var("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
+        Path::new(&xdg).join("huggingface")
+    } else {
+        let Ok(home) = std::env::var("HOME") else {
+            return 0;
+        };
+        if home.is_empty() {
+            return 0;
+        }
+        Path::new(&home).join(".cache").join("huggingface")
     };
-    if home.is_empty() {
-        return 0;
-    }
-    let dir = Path::new(&home)
-        .join(".cache")
-        .join("huggingface")
-        .join("xet");
+    let dir = hf_cache_root.join("xet");
     newest_mtime_secs(&dir)
 }
 
