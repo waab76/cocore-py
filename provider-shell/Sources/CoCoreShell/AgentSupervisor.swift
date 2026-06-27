@@ -760,15 +760,32 @@ final class AgentSupervisor {
         p.standardError = FileHandle.nullDevice
         do {
             try p.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            p.waitUntilExit()
-            guard p.terminationStatus == 0 else { return nil }
-            let out = (String(data: data, encoding: .utf8) ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return out.isEmpty ? nil : out
         } catch {
             return nil
         }
+        // Bound the wait. `readDataToEndOfFile()` blocks until the child closes
+        // stdout, so a wedged `cocore agent pubkey` (Secure Enclave contention,
+        // a hung keychain prompt) would otherwise pin this thread forever and
+        // leave the wizard's attesting step spinning. 15s is generous for an
+        // enclave key read; past it we kill the child and give up — the caller
+        // then falls back to the agent's background attestation. (We poll
+        // termination rather than read-then-wait precisely so the read can't be
+        // the thing that hangs.)
+        let deadline = Date().addingTimeInterval(15)
+        while p.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        if p.isRunning {
+            p.terminate()
+            return nil
+        }
+        guard p.terminationStatus == 0 else { return nil }
+        // Output is a single ~88-char base64 line — far under the pipe buffer,
+        // so the child never blocks on write and this read returns promptly.
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let out = (String(data: data, encoding: .utf8) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return out.isEmpty ? nil : out
     }
 
     /// The binary to run for `agent serve`. On a machine the owner opted into

@@ -234,8 +234,13 @@ struct AttestationDiagnostic {
         // (request-failed path) — distinguish them via polls so the log never
         // shows a fabricated "200" for a leg that never executed.
         let http = chainHTTP.map { "\($0)" } ?? (polls == 0 ? "n/a" : "200")
+        // `chain-not-captured` is the benign "requested, still landing" outcome
+        // shown on the positive pending screen — say "pending" there, not
+        // "failed", so the copyable detail doesn't read as an error. Genuine
+        // faults keep the "failed" header.
+        let verb = code == "secure-mode/chain-not-captured" ? "pending" : "failed"
         return [
-            "co/core Secure Mode attestation failed [\(code)]",
+            "co/core Secure Mode attestation \(verb) [\(code)]",
             "serial=\(serial) enrolled=\(enrolled) elapsed=\(elapsedSeconds)s polls=\(polls)",
             "request-attestation: status=\(requestStatus ?? "—") stubbed=\(stub) detail=\(requestDetail ?? "—")",
             "chain-store: status=\(chainStatus ?? "—") http=\(http) detail=\(chainDetail ?? "—")",
