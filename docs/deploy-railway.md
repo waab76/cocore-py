@@ -137,8 +137,22 @@ railway variables --service advisor \
 
 The advisor reuses [infra/Dockerfile.node](../infra/Dockerfile.node) —
 the `WORKSPACE` env var is picked up as a Docker build ARG and
-selects the workspace to run. No volume needed (state is in-memory;
-providers reconnect after restart).
+selects the workspace to run. Registry/session state stays in-memory
+(providers reconnect after restart) — but the rolling **latency
+windows** (`/ack`, `/ttft`) are otherwise lost on restart too, which
+leaves the public "time to ack" headline blank ("—") until jobs flow
+again.
+
+To keep that headline populated across redeploys, attach a Railway
+volume to the advisor (same GraphQL pattern as the `services` volume
+above, with the advisor's `serviceId`). The advisor auto-detects it
+via `$RAILWAY_VOLUME_MOUNT_PATH` and persists the windows under an
+`advisor/` subdir — on the next boot it hydrates them and serves the
+last known figures (flagged `cached`) until live traffic refills the
+window. Override the location with `COCORE_ADVISOR_DATA_DIR=/some/path`
+and the flush cadence with `COCORE_ADVISOR_LATENCY_PERSIST_INTERVAL_MS`
+(default 30000). Without a volume the advisor runs exactly as before
+(in-memory, blank headline after a restart).
 
 ## Deploy
 
@@ -290,6 +304,10 @@ route it through the public edge (slower + subject to edge connection churn).
   - rate-limiting / per-requester quotas
   - retry / failover when a chosen provider drops mid-stream
 - **Advisor in-memory** — like the console's pair store, advisor
-  state is in-memory. Providers automatically reconnect on advisor
-  restart; the only side effect is a brief gap where
-  `/providers` shows zero connected DIDs.
+  registry/session state is in-memory. Providers automatically
+  reconnect on advisor restart; the only side effect is a brief gap
+  where `/providers` shows zero connected DIDs. The one exception is
+  the rolling latency windows (`/ack`, `/ttft`): when a volume is
+  attached they're persisted to disk and hydrated on boot so the
+  public latency headline doesn't blank out across a redeploy (see
+  "Configure the advisor service" above).

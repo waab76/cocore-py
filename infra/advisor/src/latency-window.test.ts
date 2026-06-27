@@ -12,6 +12,7 @@ describe("LatencyWindow", () => {
       p95Ms: null,
       avgMs: null,
       lastMs: null,
+      cached: false,
     });
   });
 
@@ -49,6 +50,40 @@ describe("LatencyWindow", () => {
     const s = w.stats();
     expect(s.sampleCount).toBe(2);
     expect(s.avgMs).toBe(100);
+  });
+
+  it("flags hydrated samples as cached until a live sample lands", () => {
+    const w = new LatencyWindow(100);
+    w.hydrate([100, 200, 300]);
+    // Served straight from the disk snapshot: real percentiles, marked cached.
+    const before = w.stats();
+    expect(before.sampleCount).toBe(3);
+    expect(before.p50Ms).toBe(200);
+    expect(before.cached).toBe(true);
+    // One fresh sample flips it to live (even while old samples remain).
+    w.record(400);
+    const after = w.stats();
+    expect(after.sampleCount).toBe(4);
+    expect(after.cached).toBe(false);
+  });
+
+  it("hydrate honors capacity and validation, and snapshot round-trips", () => {
+    const w = new LatencyWindow(3);
+    // Five offered, only the last 3 kept; the negative is dropped first.
+    w.hydrate([-1, 10, 20, 30, 40]);
+    expect(w.snapshot()).toEqual([20, 30, 40]);
+    expect(w.stats().sampleCount).toBe(3);
+  });
+
+  it("snapshot reflects live records and can re-seed a fresh window", () => {
+    const a = new LatencyWindow(100);
+    for (const ms of [100, 200, 300]) a.record(ms);
+    const snap = a.snapshot();
+    const b = new LatencyWindow(100);
+    b.hydrate(snap);
+    // Same numbers survive the round-trip, but the re-seeded window is cached.
+    expect(b.stats().p50Ms).toBe(a.stats().p50Ms);
+    expect(b.stats().cached).toBe(true);
   });
 });
 

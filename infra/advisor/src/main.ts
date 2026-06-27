@@ -19,9 +19,10 @@
 
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
+import { join } from "node:path";
 
 import { HttpRouter } from "@effect/platform";
-import { Config, Effect, Metric } from "effect";
+import { Config, Effect, Metric, Option } from "effect";
 import { WebSocketServer } from "ws";
 
 import { makeRuntime, record } from "@cocore/o11y";
@@ -31,6 +32,7 @@ import { loadApnsConfig } from "./apns.ts";
 import { handleConnection } from "./connection.ts";
 import { jobsRoute } from "./jobs.ts";
 import { KnownGoodSet } from "./known-good.ts";
+import { hydrateLatencyWindow, persistLatencyWindow } from "./latency-store.ts";
 import { LatencyWindow } from "./latency-window.ts";
 import { ackMs, onlineProviders, ttftMs } from "./metrics.ts";
 import { ProviderRegistry } from "./registry.ts";
@@ -88,6 +90,14 @@ const CONFIG = Effect.runSync(
       Config.withDefault(1500),
     ),
     ttftWindowSamples: Config.integer("COCORE_ADVISOR_TTFT_SAMPLES").pipe(Config.withDefault(100)),
+    // Disk-backed latency cache. `COCORE_ADVISOR_DATA_DIR` wins; otherwise we
+    // derive a subdir under the mounted Railway volume so prod persists by
+    // default. Neither set (dev/CI) → no persistence, windows stay in-memory.
+    dataDir: Config.string("COCORE_ADVISOR_DATA_DIR").pipe(Config.option),
+    railwayVolumeMountPath: Config.string("RAILWAY_VOLUME_MOUNT_PATH").pipe(Config.option),
+    latencyPersistIntervalMs: Config.integer("COCORE_ADVISOR_LATENCY_PERSIST_INTERVAL_MS").pipe(
+      Config.withDefault(30_000),
+    ),
   }),
 );
 
@@ -162,6 +172,19 @@ const REPROBE_TIMEOUT_MS = CONFIG.reprobeTimeoutMs;
 /** How many recent jobs the time-to-first-token window keeps. Matches the
  *  "last 100 jobs" the console headline advertises. */
 const TTFT_WINDOW_SAMPLES = CONFIG.ttftWindowSamples;
+/** Directory the rolling latency windows are persisted to so the public
+ *  latency headline survives a restart. Explicit `COCORE_ADVISOR_DATA_DIR`
+ *  wins; otherwise an `advisor/` subdir of the mounted Railway volume; else
+ *  undefined → persistence off (dev/CI keep the windows purely in-memory). */
+const RAILWAY_VOLUME_MOUNT_PATH = Option.getOrUndefined(CONFIG.railwayVolumeMountPath);
+const DATA_DIR =
+  Option.getOrUndefined(CONFIG.dataDir) ??
+  (RAILWAY_VOLUME_MOUNT_PATH
+    ? join(RAILWAY_VOLUME_MOUNT_PATH.replace(/\/$/, ""), "advisor")
+    : undefined);
+/** How often to flush the latency windows to disk. A hard crash loses at most
+ *  this much tail — acceptable for a "typical recent latency" headline. */
+const LATENCY_PERSIST_INTERVAL_MS = CONFIG.latencyPersistIntervalMs;
 
 async function main(): Promise<void> {
   // One o11y runtime drives the WebSocket side + the periodic gauge/TTFT
@@ -193,6 +216,18 @@ async function main(): Promise<void> {
   // the chosen worker's socket), surfaced at GET /ack for the console's public
   // latency headline — the brokerage number, excluding worker-side time.
   const ack = new LatencyWindow(TTFT_WINDOW_SAMPLES);
+
+  // Disk-backed latency cache. When a data dir is configured (prod mounts a
+  // volume), seed both windows from the last persisted snapshot so /ack and
+  // /ttft serve the last known figures right after a restart instead of the
+  // blank "—" headline they'd otherwise show until jobs flow again. Hydrated
+  // samples report `cached: true` until live traffic refills the window.
+  // The file names identify which window, and hydrateLatencyWindow logs the
+  // resident count + snapshot age itself, so no extra logging is needed here.
+  const ackLatencyPath = DATA_DIR ? join(DATA_DIR, "ack-latency.json") : null;
+  const ttftLatencyPath = DATA_DIR ? join(DATA_DIR, "ttft-latency.json") : null;
+  if (ackLatencyPath) await hydrateLatencyWindow(ack, ackLatencyPath);
+  if (ttftLatencyPath) await hydrateLatencyWindow(ttft, ttftLatencyPath);
   const sessions = new SessionManager({
     idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
     firstChunkTimeoutMs: SESSION_FIRST_CHUNK_TIMEOUT_MS,
@@ -444,6 +479,32 @@ async function main(): Promise<void> {
     }
   }, REPROBE_INTERVAL_MS);
   reprober.unref();
+
+  // --- Latency cache: flush the rolling windows to disk --------
+  // Periodic + on graceful shutdown, so the public latency headline survives
+  // a redeploy. Only active when a data dir is configured (prod volume).
+  if (DATA_DIR) {
+    const flushLatency = async (): Promise<void> => {
+      const now = new Date().toISOString();
+      await Promise.allSettled([
+        ackLatencyPath ? persistLatencyWindow(ack, ackLatencyPath, now) : Promise.resolve(),
+        ttftLatencyPath ? persistLatencyWindow(ttft, ttftLatencyPath, now) : Promise.resolve(),
+      ]);
+    };
+    const latencyFlusher = setInterval(() => void flushLatency(), LATENCY_PERSIST_INTERVAL_MS);
+    latencyFlusher.unref();
+    // Railway sends SIGTERM on redeploy; flush the freshest samples first.
+    for (const sig of ["SIGTERM", "SIGINT"] as const) {
+      process.once(sig, () => {
+        void flushLatency().finally(() => process.exit(0));
+      });
+    }
+    console.error(
+      `[advisor] latency cache ON dir=${DATA_DIR} flush-interval=${LATENCY_PERSIST_INTERVAL_MS}ms`,
+    );
+  } else {
+    console.error("[advisor] latency cache OFF (no COCORE_ADVISOR_DATA_DIR / volume) — in-memory");
+  }
 
   await new Promise<void>((r) => http.listen(PORT, r));
   console.error(
