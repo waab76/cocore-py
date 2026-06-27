@@ -39,12 +39,16 @@ export async function resolveBearerKeyViaAppview(presented: string): Promise<Res
   // Cheap shape gate before a network round-trip: every cocore key is
   // `cocore-…`. A JWT or junk bearer can't be an account key, so skip the call.
   if (!presented.startsWith("cocore-")) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3_000);
   try {
     const res = await fetch(`${b}/internal/account/resolve-key`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-cocore-internal-secret": s },
       body: JSON.stringify({ key: presented }),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     if (!res.ok) return null;
     const body = (await res.json()) as { id?: string; did?: string; name?: string };
     if (typeof body.did !== "string" || body.did.length === 0) return null;
