@@ -31,10 +31,10 @@ import { loadApnsConfig } from "./apns.ts";
 import { handleConnection } from "./connection.ts";
 import { jobsRoute } from "./jobs.ts";
 import { KnownGoodSet } from "./known-good.ts";
-import { onlineProviders, ttftMs } from "./metrics.ts";
+import { LatencyWindow } from "./latency-window.ts";
+import { ackMs, onlineProviders, ttftMs } from "./metrics.ts";
 import { ProviderRegistry } from "./registry.ts";
 import { SessionManager } from "./sessions.ts";
-import { TtftWindow } from "./ttft.ts";
 
 const SERVICE = { serviceName: "cocore-advisor" };
 
@@ -187,8 +187,12 @@ async function main(): Promise<void> {
   // build set is configured). Confidential eligibility is computed per-machine.
   const registry = new ProviderRegistry(KnownGoodSet.fromEnv());
   // Rolling time-to-first-token window (received → first chunk relayed),
-  // surfaced at GET /ttft for the console's public latency stat.
-  const ttft = new TtftWindow(TTFT_WINDOW_SAMPLES);
+  // surfaced at GET /ttft. Folds in the worker's model-load/prefill/gen.
+  const ttft = new LatencyWindow(TTFT_WINDOW_SAMPLES);
+  // Rolling time-to-ack window (received → inference_request frame handed to
+  // the chosen worker's socket), surfaced at GET /ack for the console's public
+  // latency headline — the brokerage number, excluding worker-side time.
+  const ack = new LatencyWindow(TTFT_WINDOW_SAMPLES);
   const sessions = new SessionManager({
     idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
     firstChunkTimeoutMs: SESSION_FIRST_CHUNK_TIMEOUT_MS,
@@ -241,9 +245,17 @@ async function main(): Promise<void> {
     HttpRouter.get(
       "/ttft",
       // Time-to-first-token over the last ~100 jobs (received → first chunk
-      // relayed). The honest "latency" headline — distinct from a receipt's
-      // completedAt − startedAt (total generation time).
+      // relayed). Distinct from a receipt's completedAt − startedAt (total
+      // generation time); folds in the worker's model-load/prefill/gen.
       Effect.sync(() => ok(ttft.stats())).pipe(Effect.withSpan("advisor.ttft")),
+    ),
+    HttpRouter.get(
+      "/ack",
+      // Time-to-ack over the last ~100 jobs (received → inference_request frame
+      // handed to the chosen worker's socket). The brokerage-latency headline:
+      // how fast cocore routes a job to a live worker, excluding worker-side
+      // model-load/prefill/generation (that's /ttft).
+      Effect.sync(() => ok(ack.stats())).pipe(Effect.withSpan("advisor.ack")),
     ),
     HttpRouter.get(
       "/providers",
@@ -341,6 +353,12 @@ async function main(): Promise<void> {
         generateId: () => randomUUID(),
         attestationMaxAgeMs: ATTESTATION_MAX_AGE_MS,
         preflightTimeoutMs: PREFLIGHT_TIMEOUT_MS,
+        onDispatched: (ms) => {
+          ack.record(ms);
+          // Mirror the ack sample into a histogram for OTLP export (the /ack
+          // route keeps serving the rolling in-memory window).
+          record(runtime, Metric.update(ackMs, ms));
+        },
       }),
     ),
   );

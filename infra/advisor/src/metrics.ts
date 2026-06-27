@@ -25,10 +25,21 @@ export function dispatchOutcome(outcome: "ok" | "no-capacity" | "rejected") {
 }
 
 /** Time-to-first-token in ms (job received → first chunk relayed). Boundaries
- *  cover sub-ms to ~1min, matching the rolling TtftWindow the /ttft route
+ *  cover sub-ms to ~1min, matching the rolling LatencyWindow the /ttft route
  *  serves. */
 export const ttftMs = Metric.histogram(
   "cocore.advisor.ttft_ms",
   MetricBoundaries.exponential({ start: 1, factor: 2, count: 16 }),
   "time-to-first-token in milliseconds",
+);
+
+/** Time-to-ack in ms (job received → `inference_request` frame handed to the
+ *  chosen provider's socket). The brokerage latency — picking a live worker and
+ *  getting the job to it, incl. the preflight liveness round-trip, excluding the
+ *  worker's own model-load/prefill/generation. Same boundaries as ttftMs;
+ *  matches the rolling LatencyWindow the /ack route serves. */
+export const ackMs = Metric.histogram(
+  "cocore.advisor.ack_ms",
+  MetricBoundaries.exponential({ start: 1, factor: 2, count: 16 }),
+  "time-to-ack in milliseconds",
 );

@@ -22,7 +22,9 @@ interface Harness {
   sessions: SessionManager;
 }
 
-async function startHarness(opts: { attestationMaxAgeMs?: number } = {}): Promise<Harness> {
+async function startHarness(
+  opts: { attestationMaxAgeMs?: number; onDispatched?: (ms: number) => void } = {},
+): Promise<Harness> {
   const registry = new ProviderRegistry();
   const sessions = new SessionManager({ idleTimeoutMs: 2_000 });
   const server = createServer((req, res) => {
@@ -33,6 +35,7 @@ async function startHarness(opts: { attestationMaxAgeMs?: number } = {}): Promis
         sessions,
         generateId: () => "test-session",
         attestationMaxAgeMs: opts.attestationMaxAgeMs,
+        onDispatched: opts.onDispatched,
       });
       return;
     }
@@ -271,6 +274,33 @@ describe("POST /jobs", () => {
     expect(lines[1]).toContain('"seq":0');
     expect(lines[2]).toContain("event: complete");
     expect(lines[2]).toContain('"receiptUri":"at://receipt"');
+  });
+
+  it("fires onDispatched (time-to-ack) once the inference_request is handed off", async () => {
+    await new Promise<void>((r) => h.server.close(() => r()));
+    const acks: number[] = [];
+    h = await startHarness({ onDispatched: (ms) => acks.push(ms) });
+    const fp = fakeProvider(h.registry, "did:plc:ack", "pub-ack");
+
+    const linesP = readSseLines(`${h.url}/jobs`, {
+      jobUri: "at://job",
+      requesterDid: "did:plc:requester",
+      requesterPubKey: "req-pub",
+      model: "stub",
+      maxTokensOut: 32,
+      ciphertext: [1, 2, 3],
+    });
+
+    // The ack fires the instant the frame lands in the provider's queue —
+    // before any chunk is relayed, proving it measures handoff, not TTFT.
+    await vi.waitFor(() => expect(fp.sent.length).toBeGreaterThan(0), { timeout: 1_000 });
+    expect(acks.length).toBe(1);
+    expect(acks[0]).toBeGreaterThanOrEqual(0);
+    expect(acks[0]).toBeLessThan(2_000);
+
+    // Drain the stream so the request completes cleanly.
+    h.sessions.complete("test-session", { tokensIn: 1, tokensOut: 0, receiptUri: "at://receipt" });
+    await linesP;
   });
 
   it("preflights and fails over from an unresponsive provider to a live one", async () => {

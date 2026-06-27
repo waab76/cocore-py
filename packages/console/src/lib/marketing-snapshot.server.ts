@@ -44,12 +44,14 @@ export type MarketingSnapshot = {
     /** Bare integer from `tokenRate.inputPricePerMTok` (assumed equal to
      *  the output rate today; we render one number). */
     tokenRatePerMtok: number;
-    /** Network median (p50) TIME-TO-FIRST-TOKEN over the last ≤100 jobs,
-     *  in ms — measured at the advisor as (request received → first chunk
-     *  relayed to the requester). This is responsiveness, NOT a receipt's
-     *  completedAt − startedAt (total generation time, which scales with
-     *  output length). null when the advisor has no recent samples. */
-    firstTokenP50Ms: number | null;
+    /** Network median (p50) TIME-TO-ACK over the last ≤100 jobs, in ms —
+     *  measured at the advisor as (request received → `inference_request`
+     *  frame handed to the chosen worker's socket). This is the BROKERAGE
+     *  latency: how fast cocore routes a job to a live worker (incl. the
+     *  preflight liveness round-trip), deliberately excluding worker-side
+     *  model-load/prefill/first-token time (that's our /ttft signal, not
+     *  the public headline). null when the advisor has no recent samples. */
+    ackP50Ms: number | null;
   };
   /** A live, sampled glimpse of the network for the landing page:
    *  some real members, some real machines, and a few real receipts.
@@ -112,7 +114,7 @@ const FALLBACK = {
     totalCpuCores: 0,
     tokenGrant: 1_000_000,
     tokenRatePerMtok: 1_000_000,
-    firstTokenP50Ms: null,
+    ackP50Ms: null,
   },
   live: {
     people: [] as MarketingSnapshot["live"]["people"],
@@ -333,16 +335,18 @@ function sumProviderHardware(rows: AppviewIndexedRecord[]): {
   return { totalRamGB, totalCpuCores };
 }
 
-/** Fetch the advisor's rolling time-to-first-token p50 (ms) for the public
- *  latency headline — (request received → first chunk relayed), the honest
- *  "latency" number. Best-effort: a slow/unreachable advisor must not stall
- *  or fail the marketing page, so we time out fast and return null (the
- *  stat then renders its fallback). `advisorUrl` is the HTTP base (same one
- *  dispatch hits for `/providers` and `/jobs`). */
-async function fetchAdvisorTtftP50Ms(): Promise<number | null> {
+/** Fetch the advisor's rolling time-to-ack p50 (ms) for the public latency
+ *  headline — (request received → `inference_request` frame handed to the
+ *  chosen worker's socket), the brokerage number: how fast we route a job to
+ *  a live worker, excluding the worker's own model-load/prefill/generation.
+ *  Best-effort: a slow/unreachable advisor must not stall or fail the
+ *  marketing page, so we time out fast and return null (the stat then renders
+ *  its fallback). `advisorUrl` is the HTTP base (same one dispatch hits for
+ *  `/providers` and `/jobs`). */
+async function fetchAdvisorAckP50Ms(): Promise<number | null> {
   try {
     const base = cocoreConfig().advisorUrl.replace(/\/$/, "");
-    const r = await fetch(`${base}/ttft`, {
+    const r = await fetch(`${base}/ack`, {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(2_000),
     });
@@ -357,7 +361,7 @@ async function fetchAdvisorTtftP50Ms(): Promise<number | null> {
 async function buildMarketingSnapshot(): Promise<MarketingSnapshot> {
   const generatedAt = new Date().toISOString();
 
-  const [[receiptsR, providersR, activityR, accountsR, profilesR], firstTokenP50Ms, policy] =
+  const [[receiptsR, providersR, activityR, accountsR, profilesR], ackP50Ms, policy] =
     await Promise.all([
       // One root span, five concurrent child `appview.request` spans —
       // each appview effect carries its own span (see appview.server.ts).
@@ -374,7 +378,7 @@ async function buildMarketingSnapshot(): Promise<MarketingSnapshot> {
           { concurrency: "unbounded" },
         ),
       ),
-      fetchAdvisorTtftP50Ms(),
+      fetchAdvisorAckP50Ms(),
       fetchPolicySnapshot(),
     ]);
 
@@ -395,7 +399,7 @@ async function buildMarketingSnapshot(): Promise<MarketingSnapshot> {
     totalCpuCores,
     tokenGrant: policy?.tokenGrant ?? FALLBACK.stats.tokenGrant,
     tokenRatePerMtok: policy?.tokenRatePerMtok ?? FALLBACK.stats.tokenRatePerMtok,
-    firstTokenP50Ms,
+    ackP50Ms,
   };
 
   // ── Live glimpse: real members, machines, receipts. ──────────

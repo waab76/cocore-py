@@ -251,6 +251,11 @@ export interface JobsContext {
    *  candidate. Small by design — a healthy serve loop answers in a few
    *  ms; this only needs to clear network RTT. Defaults to 1500ms. */
   preflightTimeoutMs?: number;
+  /** Called once per successful dispatch with the time-to-ack in ms
+   *  (`/jobs` received → `inference_request` frame handed to the chosen
+   *  provider's socket). The brokerage-latency headline; main.ts feeds it
+   *  into the rolling window the `/ack` route serves + an OTLP histogram. */
+  onDispatched?: (ms: number) => void;
 }
 
 /** Outcome of selecting + preflighting a provider for a parsed job. */
@@ -452,6 +457,12 @@ function dispatch(
 
   try {
     provider.send(inferenceFrame);
+    // Time-to-ack: the frame is now on the chosen provider's socket. This is
+    // the brokerage latency — received → handed off to a live worker (the
+    // preflight ping already proved it answers) — and explicitly NOT the
+    // worker's model-load/prefill/first-token time. Recorded only on a
+    // successful send so a dead-socket throw doesn't log a bogus 0.
+    ctx.onDispatched?.(Date.now() - receivedAt);
     // Account the dispatch for silent-failure detection. `recordDispatch`
     // returns true on the heartbeat-free edge where this dispatch is the one
     // that tips the provider over the threshold with still-zero completions

@@ -1,32 +1,36 @@
-// Time-to-first-token (TTFT) tracker.
+// Rolling latency window.
 //
-// The advisor is the one place that sees both ends of the user-facing
-// latency: it receives a `/jobs` request and relays the provider's first
-// `inference_chunk` back to the requester. TTFT = (first chunk relayed) −
-// (job received). That's the "how fast does it START responding" number —
-// what people actually mean by latency — as opposed to a receipt's
-// `completedAt − startedAt`, which is total generation time and scales with
-// output length, not responsiveness.
+// A tiny in-memory ring of the last `capacity` millisecond samples, with
+// percentile/avg/last readouts. The advisor uses it for the two user-facing
+// latency headlines it can measure first-hand:
+//
+//   * time-to-ack  — (job received → `inference_request` frame handed to the
+//     chosen provider's socket). The brokerage number: how fast cocore picks a
+//     live worker and gets the job to it, including the preflight liveness
+//     round-trip. Excludes everything the worker then does.
+//   * TTFT         — (job received → first `inference_chunk` relayed back).
+//     The end-to-end "how fast does it START responding" number, which folds in
+//     the worker's model-load + prefill + first-token generation.
 //
 // In-memory, rolling: we keep the last `capacity` samples and report
 // percentiles over them. Lost on restart (the advisor's whole registry is),
-// which is fine — it's a "typical RECENT latency" headline, not an SLA
-// ledger, and it repopulates within a handful of jobs.
+// which is fine — these are "typical RECENT latency" headlines, not an SLA
+// ledger, and they repopulate within a handful of jobs.
 
-export interface TtftStats {
+export interface LatencyStats {
   /** Samples currently in the window (≤ capacity). */
   sampleCount: number;
-  /** Median TTFT in ms, or null when there are no samples. */
+  /** Median latency in ms, or null when there are no samples. */
   p50Ms: number | null;
-  /** 95th-percentile TTFT in ms, or null when there are no samples. */
+  /** 95th-percentile latency in ms, or null when there are no samples. */
   p95Ms: number | null;
-  /** Mean TTFT in ms, or null when there are no samples. */
+  /** Mean latency in ms, or null when there are no samples. */
   avgMs: number | null;
-  /** The most recent sample's TTFT in ms, or null. */
+  /** The most recent sample's latency in ms, or null. */
   lastMs: number | null;
 }
 
-export class TtftWindow {
+export class LatencyWindow {
   private readonly samples: number[] = [];
   private readonly capacity: number;
 
@@ -34,7 +38,7 @@ export class TtftWindow {
     this.capacity = Math.max(1, capacity);
   }
 
-  /** Record one TTFT sample (ms). Non-finite or negative values are
+  /** Record one latency sample (ms). Non-finite or negative values are
    *  dropped — a clock skew or a malformed timing shouldn't poison the
    *  median. Oldest sample falls off once the window is full. */
   record(ms: number): void {
@@ -43,7 +47,7 @@ export class TtftWindow {
     if (this.samples.length > this.capacity) this.samples.shift();
   }
 
-  stats(): TtftStats {
+  stats(): LatencyStats {
     const n = this.samples.length;
     if (n === 0) return { sampleCount: 0, p50Ms: null, p95Ms: null, avgMs: null, lastMs: null };
     const sorted = [...this.samples].sort((a, b) => a - b);

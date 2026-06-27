@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { LatencyWindow } from "./latency-window.ts";
 import { SessionManager } from "./sessions.ts";
-import { TtftWindow } from "./ttft.ts";
 
-describe("TtftWindow", () => {
+describe("LatencyWindow", () => {
   it("reports null stats when empty", () => {
-    const w = new TtftWindow(100);
+    const w = new LatencyWindow(100);
     expect(w.stats()).toEqual({
       sampleCount: 0,
       p50Ms: null,
@@ -16,7 +16,7 @@ describe("TtftWindow", () => {
   });
 
   it("computes p50/p95/avg/last over the window", () => {
-    const w = new TtftWindow(100);
+    const w = new LatencyWindow(100);
     for (const ms of [100, 200, 300, 400, 500]) w.record(ms);
     const s = w.stats();
     expect(s.sampleCount).toBe(5);
@@ -27,7 +27,7 @@ describe("TtftWindow", () => {
   });
 
   it("rolls off the oldest sample past capacity", () => {
-    const w = new TtftWindow(3);
+    const w = new LatencyWindow(3);
     w.record(1000);
     w.record(10);
     w.record(20);
@@ -40,7 +40,7 @@ describe("TtftWindow", () => {
   });
 
   it("drops non-finite / negative samples (clock skew must not poison the median)", () => {
-    const w = new TtftWindow(100);
+    const w = new LatencyWindow(100);
     w.record(50);
     w.record(-5);
     w.record(Number.NaN);

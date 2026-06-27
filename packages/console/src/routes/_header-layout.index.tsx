@@ -1489,16 +1489,16 @@ function MarketingPage() {
           </div>
         </div>
         <div {...stylex.props(styles.statItem)}>
-          <div {...stylex.props(styles.statLabel)}>time to first token</div>
+          <div {...stylex.props(styles.statLabel)}>time to ack</div>
           <div {...stylex.props(styles.statValue)}>
-            {marketing.stats.firstTokenP50Ms !== null ? (
+            {marketing.stats.ackP50Ms !== null ? (
               <>
-                {formatLatencyMs(marketing.stats.firstTokenP50Ms)}
+                {formatLatencyMs(marketing.stats.ackP50Ms)}
                 <span {...stylex.props(styles.statUnit)}>p50</span>
               </>
             ) : (
               <>
-                1<span {...stylex.props(styles.statUnit)}>token in/out</span>
+                —<span {...stylex.props(styles.statUnit)}>p50</span>
               </>
             )}
           </div>
