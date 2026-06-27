@@ -2830,7 +2830,6 @@ fn is_weight_download_incomplete(last_err: Option<&str>) -> bool {
         || e.contains("never became ready")
         || e.contains("unauthenticated requests to the HF Hub")
         || e.contains("Too Many Requests")
-        || e.contains("429")
 }
 
 /// Try to start one model's inference subprocess, retrying transient
