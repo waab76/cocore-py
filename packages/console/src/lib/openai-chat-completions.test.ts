@@ -168,6 +168,47 @@ describe("dispatchErrorToHttpResponse", () => {
     assert.equal(out.status, 403);
     assert.equal(out.type, "permission_error");
   });
+
+  test("no-providers-for-version becomes 503 (retryable as the fleet updates)", () => {
+    const out = dispatchErrorToHttpResponse("no-providers-for-version");
+    assert.equal(out.status, 503);
+    assert.equal(out.type, "service_unavailable_error");
+    assert.equal(out.code, "no_providers_for_version");
+  });
+});
+
+describe("parseRequest min_provider_version", () => {
+  const base = { model: "stub", messages: [{ role: "user", content: "hi" }] };
+
+  test("accepts a dotted-numeric version and normalizes nothing", () => {
+    const parsed = parseRequest({ ...base, min_provider_version: "0.9.32" });
+    assert.notEqual(typeof parsed, "string");
+    if (typeof parsed === "string") return;
+    assert.equal(parsed.minProviderVersion, "0.9.32");
+  });
+
+  test("tolerates a leading v and trims whitespace", () => {
+    const parsed = parseRequest({ ...base, min_provider_version: " v1.2.3 " });
+    assert.notEqual(typeof parsed, "string");
+    if (typeof parsed === "string") return;
+    assert.equal(parsed.minProviderVersion, "v1.2.3");
+  });
+
+  test("treats null/absent as no floor", () => {
+    for (const v of [undefined, null]) {
+      const parsed = parseRequest({ ...base, min_provider_version: v });
+      assert.notEqual(typeof parsed, "string");
+      if (typeof parsed === "string") return;
+      assert.equal(parsed.minProviderVersion, undefined);
+    }
+  });
+
+  test("rejects a non-version string with a 400-shaped message", () => {
+    const parsed = parseRequest({ ...base, min_provider_version: "latest" });
+    assert.equal(typeof parsed, "string");
+    if (typeof parsed !== "string") return;
+    assert.match(parsed, /min_provider_version/);
+  });
 });
 
 async function* yieldEvents(events: DispatchEvent[]): AsyncIterable<DispatchEvent> {

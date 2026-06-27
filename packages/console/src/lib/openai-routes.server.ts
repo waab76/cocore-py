@@ -27,6 +27,7 @@ import { isAppviewForwardConfigured } from "@/lib/appview-pds-forward.server.ts"
 import {
   type AdvisorProviderRow,
   type DispatchInputs,
+  meetsMinVersion,
   runDispatch,
 } from "@/lib/inference-dispatch.server.ts";
 import { listMyFriendDids } from "@/lib/friends.server.ts";
@@ -77,6 +78,22 @@ const MESSAGES_V1_MIN_VERSION = process.env["COCORE_MIN_VERSION_MESSAGES_V1"] ??
  *  (`messages-v1`) require a capable provider; plain text has no floor. */
 function minVersionForInput(inputFormat: string | undefined): string | undefined {
   return inputFormat === "messages-v1" ? MESSAGES_V1_MIN_VERSION : undefined;
+}
+
+/** Combine a caller-requested provider floor with the automatic floor an
+ *  input format implies. The effective floor is whichever is HIGHER: a
+ *  caller asking for `0.9.40` on an image request must not be relaxed to the
+ *  `messages-v1` floor, and an image request must not be relaxed below it by
+ *  a lower caller value. Returns undefined when neither floor applies. */
+function effectiveMinVersion(
+  callerMin: string | undefined,
+  inputFormat: string | undefined,
+): string | undefined {
+  const auto = minVersionForInput(inputFormat);
+  if (!callerMin) return auto;
+  if (!auto) return callerMin;
+  // meetsMinVersion(a, b) === a >= b, so keep callerMin when it's the higher.
+  return meetsMinVersion(callerMin, auto) ? callerMin : auto;
 }
 
 // The method NSID a service-auth token must be minted for (its `lxm`
@@ -266,9 +283,10 @@ export async function handleChatCompletions(request: Request): Promise<Response>
     prompt: "",
     payloadBytes: payload.payloadBytes,
     inputFormat: payload.inputFormat,
-    // Image requests must only reach providers running a release that
-    // supports the messages-v1 envelope (fail-closed at the advisor).
-    minProviderVersion: minVersionForInput(payload.inputFormat),
+    // A caller may pin a minimum provider release (min_provider_version);
+    // image requests also derive the messages-v1 floor. The higher of the
+    // two wins, fail-closed at the advisor.
+    minProviderVersion: effectiveMinVersion(parsed.minProviderVersion, payload.inputFormat),
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     country: parsed.country,
@@ -336,9 +354,10 @@ export async function handlePrivateChatCompletions(request: Request): Promise<Re
     prompt: "",
     payloadBytes: payload.payloadBytes,
     inputFormat: payload.inputFormat,
-    // Image requests must only reach providers running a release that
-    // supports the messages-v1 envelope (fail-closed at the advisor).
-    minProviderVersion: minVersionForInput(payload.inputFormat),
+    // A caller may pin a minimum provider release (min_provider_version);
+    // image requests also derive the messages-v1 floor. The higher of the
+    // two wins, fail-closed at the advisor.
+    minProviderVersion: effectiveMinVersion(parsed.minProviderVersion, payload.inputFormat),
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     // `allowedProviderDids` here is what tips runDispatch into
@@ -431,9 +450,10 @@ export async function handleVerifiedChatCompletions(request: Request): Promise<R
     prompt: "",
     payloadBytes: payload.payloadBytes,
     inputFormat: payload.inputFormat,
-    // Image requests must only reach providers running a release that
-    // supports the messages-v1 envelope (fail-closed at the advisor).
-    minProviderVersion: minVersionForInput(payload.inputFormat),
+    // A caller may pin a minimum provider release (min_provider_version);
+    // image requests also derive the messages-v1 floor. The higher of the
+    // two wins, fail-closed at the advisor.
+    minProviderVersion: effectiveMinVersion(parsed.minProviderVersion, payload.inputFormat),
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     // Same mechanism as the friends path, but the set is the proof-backed
@@ -513,9 +533,10 @@ export async function handleProBonoChatCompletions(request: Request): Promise<Re
     prompt: "",
     payloadBytes: payload.payloadBytes,
     inputFormat: payload.inputFormat,
-    // Image requests must only reach providers running a release that
-    // supports the messages-v1 envelope (fail-closed at the advisor).
-    minProviderVersion: minVersionForInput(payload.inputFormat),
+    // A caller may pin a minimum provider release (min_provider_version);
+    // image requests also derive the messages-v1 floor. The higher of the
+    // two wins, fail-closed at the advisor.
+    minProviderVersion: effectiveMinVersion(parsed.minProviderVersion, payload.inputFormat),
     maxTokensOut: parsed.maxTokens,
     priceCeiling: DEFAULT_PRICE_CEILING,
     // Constrain routing to providers that serve this requester free — same

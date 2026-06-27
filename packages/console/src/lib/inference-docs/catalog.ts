@@ -40,7 +40,7 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
     method: "POST",
     path: "/chat/completions",
     description:
-      "OpenAI-compatible chat completion. Routes to an attested provider serving the requested model. Set country to an ISO 3166-1 alpha-2 code (e.g. US) to route only to providers advertising that region — an advisory provider self-claim — failing closed with no_providers_for_country when none match.",
+      "OpenAI-compatible chat completion. Routes to an attested provider serving the requested model. Set country to an ISO 3166-1 alpha-2 code (e.g. US) to route only to providers advertising that region — an advisory provider self-claim — failing closed with no_providers_for_country when none match. Set min_provider_version (e.g. 0.9.32) to require a minimum provider release, failing closed with no_providers_for_version when none qualify (see Provider version below).",
     auth: "required",
     params: [
       { name: "model", type: "string", required: true },
@@ -48,6 +48,7 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
       { name: "stream", type: "boolean" },
       { name: "max_tokens", type: "integer" },
       { name: "country", type: "string" },
+      { name: "min_provider_version", type: "string" },
     ],
     controls: [
       { kind: "text", param: "model", label: "model", placeholder: "stub" },
@@ -59,6 +60,12 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
       },
       { kind: "text", param: "max_tokens", label: "max_tokens", placeholder: "256" },
       { kind: "text", param: "country", label: "country", placeholder: "US" },
+      {
+        kind: "text",
+        param: "min_provider_version",
+        label: "min_provider_version",
+        placeholder: "0.9.32",
+      },
     ],
     example: { body: CHAT_BODY, canRun: false },
   },
@@ -99,6 +106,7 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
       { name: "stream", type: "boolean" },
       { name: "max_tokens", type: "integer" },
       { name: "country", type: "string" },
+      { name: "min_provider_version", type: "string" },
     ],
     controls: [
       { kind: "text", param: "model", label: "model", placeholder: "stub" },
@@ -110,6 +118,12 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
       },
       { kind: "text", param: "max_tokens", label: "max_tokens", placeholder: "256" },
       { kind: "text", param: "country", label: "country", placeholder: "US" },
+      {
+        kind: "text",
+        param: "min_provider_version",
+        label: "min_provider_version",
+        placeholder: "0.9.32",
+      },
     ],
     example: { body: CHAT_BODY, canRun: false },
   },
@@ -128,6 +142,7 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
       { name: "stream", type: "boolean" },
       { name: "max_tokens", type: "integer" },
       { name: "country", type: "string" },
+      { name: "min_provider_version", type: "string" },
     ],
     controls: [
       { kind: "text", param: "model", label: "model", placeholder: "stub" },
@@ -145,6 +160,12 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
       },
       { kind: "text", param: "max_tokens", label: "max_tokens", placeholder: "256" },
       { kind: "text", param: "country", label: "country", placeholder: "US" },
+      {
+        kind: "text",
+        param: "min_provider_version",
+        label: "min_provider_version",
+        placeholder: "0.9.32",
+      },
     ],
     example: { body: CHAT_BODY, canRun: false },
   },
@@ -162,6 +183,7 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
       { name: "stream", type: "boolean" },
       { name: "max_tokens", type: "integer" },
       { name: "country", type: "string" },
+      { name: "min_provider_version", type: "string" },
     ],
     controls: [
       { kind: "text", param: "model", label: "model", placeholder: "stub" },
@@ -173,6 +195,12 @@ export const INFERENCE_API_CATALOG: Array<InferenceApiCatalogEntry> = [
       },
       { kind: "text", param: "max_tokens", label: "max_tokens", placeholder: "256" },
       { kind: "text", param: "country", label: "country", placeholder: "US" },
+      {
+        kind: "text",
+        param: "min_provider_version",
+        label: "min_provider_version",
+        placeholder: "0.9.32",
+      },
     ],
     example: { body: CHAT_BODY, canRun: false },
   },
@@ -185,6 +213,13 @@ export const INFERENCE_API_TOPIC_SECTIONS = [
     title: "Image input",
     description:
       "Vision-capable models accept images alongside text using OpenAI's multimodal content parts. Carried inline as base64 or fetched from a URL; no separate upload step.",
+  },
+  {
+    id: "inference-api-provider-version",
+    navLabel: "provider version",
+    title: "Provider version",
+    description:
+      "Pin a minimum tray-provider release so your request only reaches machines new enough to honor a feature, failing closed when none qualify.",
   },
 ] as const;
 
