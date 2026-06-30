@@ -78,8 +78,13 @@ export class AppPasswordSession {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly refreshSkewMs: number;
+  // Explicit field + assignment (not a constructor parameter property):
+  // the services container runs the TS source under Node's strip-only type
+  // stripping, which rejects `constructor(private ...)` parameter properties.
+  private readonly opts: AppPasswordSessionOptions;
 
-  constructor(private readonly opts: AppPasswordSessionOptions) {
+  constructor(opts: AppPasswordSessionOptions) {
+    this.opts = opts;
     this.pds = opts.pdsEndpoint?.replace(/\/$/, "") ?? null;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.now = opts.now ?? (() => Date.now());

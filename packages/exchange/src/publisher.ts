@@ -181,7 +181,14 @@ export class ConsoleProxySettlementTransport implements SettlementTransport {
  *  write can never be blocked by an expired OAuth session needing a human
  *  re-auth (the 2026-06 root cause), nor by the console→appview hop. */
 export class AppPasswordSettlementTransport implements SettlementTransport {
-  constructor(private readonly session: AppPasswordSession) {}
+  // Explicit field + assignment, not a constructor parameter property — the
+  // services container runs the TS source under Node's strip-only type
+  // stripping, which rejects `constructor(private ...)`.
+  private readonly session: AppPasswordSession;
+
+  constructor(session: AppPasswordSession) {
+    this.session = session;
+  }
 
   async publish(exchangeDid: string, record: SettlementRecord): Promise<PublishedRecord> {
     const effect = Effect.tryPromise({
