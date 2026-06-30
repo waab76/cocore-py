@@ -2,7 +2,12 @@ import { test } from "vitest";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { derToRawSignature, verifyP256, verifyReceiptSignature } from "./p256.ts";
+import {
+  derToRawSignature,
+  verifyP256,
+  verifyReceiptSignature,
+  verifyAttestationSignature,
+} from "./p256.ts";
 import { canonicalize } from "./canonical.ts";
 
 test("derToRawSignature: 64 bytes for any P-256 sig", () => {
@@ -141,6 +146,77 @@ test("verifyReceiptSignature: ignores $type lexicon framing (2026-06 stall regre
     true,
     "stored body (with $type) must verify — $type must be stripped",
   );
+});
+
+test("verifyAttestationSignature: tolerates legacy signed-vs-stored divergence (2026-06 settlement stall)", async () => {
+  // The pre-2026-07 provider signed a canonical attestation body that differed
+  // from the record it actually wrote to its PDS in two ways, so every stored
+  // attestation failed selfSignature verification — which silently blocked
+  // settlement (verifyForChargeStrict checks the attestation selfSig):
+  //
+  //   1. mdaCertChain — signed as `[]`, but serde's skip_serializing_if dropped
+  //      the empty array from the stored record (the self-attested common case).
+  //   2. timestamps — signed at seconds precision (RFC3339 SecondsFormat::Secs),
+  //      but stored at chrono's default sub-second precision.
+  //
+  // Those records can't be re-signed (the key is enclave-bound), so the
+  // verifier must reconstruct what was signed. This test signs the LEGACY form
+  // and verifies the STORED form, exactly as the live records present.
+  const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ]);
+  const rawPub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+  const pubB64 = btoa(String.fromCharCode(...rawPub.subarray(1)));
+
+  // Fields common to both forms.
+  const common = {
+    publicKey: pubB64,
+    encryptionPubKey: "enc",
+    chipName: "Apple M5 Max",
+    tier: "best-effort",
+    sipEnabled: true,
+  };
+  // SIGNED form: mdaCertChain present as [], timestamps at seconds precision.
+  const signedBody = {
+    ...common,
+    mdaCertChain: [],
+    attestedAt: "2026-06-29T21:21:08Z",
+    expiresAt: "2026-06-30T21:21:08Z",
+  };
+  const msg = new TextEncoder().encode(canonicalize(signedBody));
+  const rawSig = new Uint8Array(
+    await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, kp.privateKey, msg),
+  );
+  const selfSignature = btoa(String.fromCharCode(...rawToDer(rawSig)));
+
+  // STORED form: mdaCertChain dropped (empty), timestamps at sub-second
+  // precision, $type added by atproto. This is what the indexer presents.
+  const stored = {
+    $type: "dev.cocore.compute.attestation",
+    ...common,
+    attestedAt: "2026-06-29T21:21:08.384834Z",
+    expiresAt: "2026-06-30T21:21:08.384834Z",
+    selfSignature,
+  };
+  assert.equal(
+    await verifyAttestationSignature(stored, pubB64),
+    true,
+    "stored attestation (mdaCertChain dropped, sub-second timestamps) must verify against the legacy signed form",
+  );
+
+  // A post-fix attestation that stores exactly what it signs must ALSO verify
+  // (the as-stored attempt, no reconstruction needed).
+  const postFix = { $type: "dev.cocore.compute.attestation", ...signedBody, selfSignature };
+  assert.equal(
+    await verifyAttestationSignature(postFix, pubB64),
+    true,
+    "post-fix attestation (signed bytes == stored bytes) must verify as-stored",
+  );
+
+  // Tampering with a signed field must still fail.
+  const tampered = { ...stored, tier: "attested-confidential" };
+  assert.equal(await verifyAttestationSignature(tampered, pubB64), false);
 });
 
 /** Inverse of {@link derToRawSignature}: P-1363 raw r||s (64 bytes, what

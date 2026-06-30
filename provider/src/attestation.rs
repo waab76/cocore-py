@@ -110,8 +110,16 @@ pub struct AttestationRecord {
     /// Bytes — Secure Enclave P-256 signature over canonical JSON of
     /// every other field in this struct.
     pub selfSignature: String, // base64
-    pub attestedAt: DateTime<Utc>,
-    pub expiresAt: DateTime<Utc>,
+    // Seconds-precision RFC3339 strings, NOT `DateTime<Utc>`. The signed
+    // canonical body uses `rfc3339()` (SecondsFormat::Secs); storing a
+    // `DateTime` here would re-serialize at chrono's default sub-second
+    // precision, so the stored record would no longer match the bytes that
+    // were signed and every selfSignature check would fail. Storing the exact
+    // signed string keeps stored-bytes == signed-bytes. (This mirrors
+    // `receipt.rs`, whose `startedAt`/`completedAt` are `String` for the same
+    // reason — the divergence here is what stalled settlement in 2026-06.)
+    pub attestedAt: String,
+    pub expiresAt: String,
 }
 
 /// Sensible defaults for a self-attested provider — what cocore
@@ -345,7 +353,6 @@ pub fn build(
         "secureEnclaveAvailable": inputs.secure_enclave_available,
         "authenticatedRootEnabled": inputs.authenticated_root_enabled,
         "rdmaDisabled": inputs.rdma_disabled,
-        "mdaCertChain": mda_chain_b64,
         "hardenedRuntime": inputs.hardened_runtime,
         "libraryValidation": inputs.library_validation,
         "getTaskAllow": inputs.get_task_allow,
@@ -358,6 +365,15 @@ pub fn build(
         "expiresAt": rfc3339(expires_at),
     });
     if let Value::Object(map) = &mut unsigned {
+        // Sign `mdaCertChain` only when non-empty, mirroring the stored
+        // record's `#[serde(skip_serializing_if = "Vec::is_empty")]`. An empty
+        // chain (the self-attested common case) is absent from BOTH the signed
+        // bytes and the stored record, so they stay byte-identical. Signing an
+        // empty `[]` that storage then dropped is exactly what made every
+        // self-attested attestation unverifiable in 2026-06.
+        if !mda_chain_b64.is_empty() {
+            map.insert("mdaCertChain".into(), json!(mda_chain_b64));
+        }
         if let Some(cd) = &inputs.cd_hash {
             map.insert("cdHash".into(), Value::String(cd.clone()));
         }
@@ -410,13 +426,15 @@ pub fn build(
         envScrubbed: inputs.env_scrubbed,
         tier,
         selfSignature: B64.encode(&sig),
-        attestedAt: attested_at,
-        expiresAt: expires_at,
+        // Store the exact seconds-precision strings that were signed (NOT the
+        // `DateTime`s), so stored-bytes == signed-bytes.
+        attestedAt: rfc3339(attested_at),
+        expiresAt: rfc3339(expires_at),
     })
 }
 
-fn rfc3339(t: DateTime<Utc>) -> Value {
-    Value::String(t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+fn rfc3339(t: DateTime<Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 fn hash_serial(serial: &str, did: &str) -> String {
@@ -486,6 +504,85 @@ mod tests {
         // is irrelevant to the tier; it gates trustLevel only.)
         assert_eq!(rec.tier, "best-effort");
         assert!(!rec.inProcessBackend);
+    }
+
+    #[test]
+    fn stored_record_canonicalizes_to_the_signed_bytes() {
+        // Regression guard for the 2026-06 settlement stall. The record we
+        // WRITE to the PDS (serde of `AttestationRecord`) must canonicalize to
+        // the EXACT bytes we SIGNED. The stall had two causes, both reproduced
+        // here as a single invariant:
+        //   * a field signed but dropped on store (`mdaCertChain: []`), and
+        //   * timestamps signed at seconds precision but stored as `DateTime`
+        //     at sub-second precision.
+        // Either makes the stored record's canonical bytes differ from the
+        // signed bytes, so the enclave selfSignature no longer verifies against
+        // what a consumer reads back — and settlement silently rejects every
+        // receipt. Verify the STORED form cryptographically, the way the
+        // AppView/exchange does.
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+        use p256::EncodedPoint;
+
+        let _g = identity_lock();
+        let signer = load_or_create_identity().unwrap();
+        // Self-attested common case: empty MDA chain, so `mdaCertChain` is
+        // absent from BOTH signed and stored forms.
+        let inputs = AttestationInputs {
+            provider_did: "did:plc:test".into(),
+            encryption_pub_key_b64: "abc".into(),
+            chip_name: "Apple M5 Max".into(),
+            hardware_model: "Mac17,6".into(),
+            serial_number: "STORE-EQ".into(),
+            os_version: "26.5.2".into(),
+            binary_path: std::path::PathBuf::from("/nonexistent"),
+            sip_enabled: true,
+            secure_boot_enabled: true,
+            secure_enclave_available: false,
+            authenticated_root_enabled: false,
+            rdma_disabled: true,
+            mda_cert_chain: vec![],
+            app_attest: None,
+            cd_hash: Some("ab".repeat(20)),
+            team_id: Some("4L45P7CP9M".into()),
+            hardened_runtime: true,
+            library_validation: false,
+            get_task_allow: false,
+            metallib_hash: None,
+            engine_lib_hash: None,
+            in_process_backend: false,
+            anti_debug: true,
+            core_dumps_disabled: true,
+            env_scrubbed: true,
+        };
+        let rec = build(inputs, &*signer).unwrap();
+
+        // Serialize exactly as written to the PDS, strip the signature, and
+        // canonicalize — this is precisely what a verifier reconstructs.
+        let mut stored: Value = serde_json::to_value(&rec).unwrap();
+        let map = stored.as_object_mut().unwrap();
+        let sig_der = B64
+            .decode(map.remove("selfSignature").unwrap().as_str().unwrap())
+            .unwrap();
+        // The empty self-attested chain must NOT be present in the stored form
+        // (and so must not be in the signed form either).
+        assert!(
+            !map.contains_key("mdaCertChain"),
+            "an empty mdaCertChain must be absent from the stored record"
+        );
+        let canonical = to_canonical_bytes(&stored).unwrap();
+
+        let pub_bytes = B64.decode(rec.publicKey.as_bytes()).unwrap();
+        let mut uncompressed = [0u8; 65];
+        uncompressed[0] = 0x04;
+        uncompressed[1..].copy_from_slice(&pub_bytes);
+        let vk = VerifyingKey::from_encoded_point(
+            &EncodedPoint::from_bytes(uncompressed).unwrap(),
+        )
+        .unwrap();
+        let sig = Signature::from_der(&sig_der).unwrap();
+        vk.verify(&canonical, &sig)
+            .expect("stored record must verify against the signed canonical bytes");
     }
 
     #[test]

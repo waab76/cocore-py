@@ -101,13 +101,54 @@ export async function verifyAttestationSignature(
   const sig = attestation.selfSignature;
   if (!sig) return false;
   const { selfSignature: _omit, $type: _type, ...signed } = attestation as Record<string, unknown>;
-  const message = new TextEncoder().encode(canonicalize(signed));
-  try {
-    return await verifyP256(publicKeyB64, sig, message);
-  } catch (e) {
-    if (e instanceof SignatureVerifyError) return false;
-    throw e;
+  // Try the record exactly as stored first (correct for any attestation whose
+  // signed canonical bytes equal its stored bytes — the post-fix provider).
+  // Fall back to the LEGACY reconstruction for attestations published by the
+  // pre-2026-07 provider, whose signed bytes differed from the stored record
+  // in two ways (see legacyAttestationBody). Those records can't be re-signed
+  // (the signature is enclave-bound), so the verifier reconstructs what was
+  // signed. The exact-as-stored form is always tried first, so this fallback
+  // never weakens verification of a correctly-signed record — it only rescues
+  // records that would otherwise be unverifiable forever.
+  for (const body of [signed, legacyAttestationBody(signed)]) {
+    const message = new TextEncoder().encode(canonicalize(body));
+    try {
+      if (await verifyP256(publicKeyB64, sig, message)) return true;
+    } catch (e) {
+      if (e instanceof SignatureVerifyError) continue;
+      throw e;
+    }
   }
+  return false;
+}
+
+/** Reconstruct the canonical body the pre-2026-07 provider actually SIGNED,
+ *  given the attestation as STORED on the PDS. Two divergences existed between
+ *  what `provider/src/attestation.rs` signed and what it wrote:
+ *
+ *  1. `mdaCertChain` — the signed `unsigned` JSON always carried
+ *     `"mdaCertChain":[]`, but the stored record used
+ *     `#[serde(skip_serializing_if = "Vec::is_empty")]`, dropping the field
+ *     entirely for the (overwhelmingly common) self-attested case. So restore
+ *     `[]` when the field is absent. A NON-empty chain is stored verbatim and
+ *     was signed verbatim, so leave it untouched.
+ *  2. timestamps — the signed form used seconds-precision RFC3339
+ *     (`SecondsFormat::Secs`), but the stored record serialized
+ *     `DateTime<Utc>` at chrono's default sub-second precision
+ *     (`...:08.384834Z`). Truncate the fractional seconds back off to recover
+ *     the signed string.
+ *
+ *  This mirrors the post-fix provider, which now stores exactly what it signs
+ *  (seconds-precision String timestamps, mdaCertChain only when non-empty) —
+ *  so post-fix records verify on the as-stored attempt and never reach here. */
+function legacyAttestationBody(signed: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...signed };
+  if (!("mdaCertChain" in out)) out.mdaCertChain = [];
+  for (const key of ["attestedAt", "expiresAt"]) {
+    const v = out[key];
+    if (typeof v === "string") out[key] = v.replace(/\.\d+(Z|[+-]\d\d:\d\d)$/, "$1");
+  }
+  return out;
 }
 
 // ---- internals -------------------------------------------------------
