@@ -20,6 +20,7 @@ import { makeRuntime } from "@cocore/o11y";
 import { Effect } from "effect";
 
 import type { Money, SettlementRecord, StrongRef } from "@cocore/sdk/types";
+import { AppPasswordSession, createRecordViaSession } from "./app-password-session.ts";
 
 export interface PublishedRecord {
   uri: string;
@@ -169,6 +170,29 @@ export class ConsoleProxySettlementTransport implements SettlementTransport {
       exchangeDid,
       errorMessage: (status, text) => `proxy settlement createRecord ${status}: ${text}`,
     });
+  }
+}
+
+/** Production transport that writes settlements DIRECTLY to the exchange's
+ *  PDS using a self-managed app-password session — no console proxy, no
+ *  OAuth. This is the lapse-proof replacement for {@link
+ *  ConsoleProxySettlementTransport}: the session mints/refreshes itself from a
+ *  long-lived app password (see app-password-session.ts), so a settlement
+ *  write can never be blocked by an expired OAuth session needing a human
+ *  re-auth (the 2026-06 root cause), nor by the console→appview hop. */
+export class AppPasswordSettlementTransport implements SettlementTransport {
+  constructor(private readonly session: AppPasswordSession) {}
+
+  async publish(exchangeDid: string, record: SettlementRecord): Promise<PublishedRecord> {
+    const effect = Effect.tryPromise({
+      try: () =>
+        createRecordViaSession(this.session, {
+          collection: "dev.cocore.compute.settlement",
+          record,
+        }),
+      catch: (e) => (e instanceof Error ? e : new Error(String(e))),
+    }).pipe(Effect.withSpan("exchange.appPassword.publish", { attributes: { exchangeDid } }));
+    return runtime.runPromise(effect);
   }
 }
 

@@ -102,3 +102,20 @@ const mirrorFailures = Metric.counter("cocore.mirror.failed", {
 
 /** Counter for mirror publish failures. */
 export const mirrorFailed = mirrorFailures;
+
+/** Exchange app-password session lifecycle events. The exchange writes its own
+ *  PDS records (settlements, policy, attestation) with a self-managed
+ *  app-password session instead of a lapse-prone OAuth session. "created" /
+ *  "refreshed" are healthy; a rising "refresh_failed" (recoverable — it
+ *  re-creates from the app password) or any "create_failed" (the app password
+ *  itself is bad/revoked → writes are down) is the signal to act. */
+const exchangeSessionOps = Metric.counter("cocore.exchange.session", {
+  description: "exchange app-password session lifecycle events by outcome",
+});
+
+/** Counter for exchange session lifecycle events, tagged by event. */
+export function exchangeSession(
+  event: "created" | "refreshed" | "refresh_failed" | "create_failed",
+) {
+  return exchangeSessionOps.pipe(Metric.tagged("event", event));
+}

@@ -33,8 +33,16 @@ const runtime = makeRuntime({ serviceName: "cocore-exchange" });
 
 export interface BootstrapInputs {
   exchangeDid: string;
-  apiBase: string;
-  apiKey: string;
+  /** Console base + bearer key for the default console-proxy write path.
+   *  Optional when `writeRecord` is supplied (the app-password path writes
+   *  directly to the PDS and needs neither). */
+  apiBase?: string;
+  apiKey?: string;
+  /** Record-write seam. When provided, policy + attestation are written via
+   *  this (the app-password direct-to-PDS path); otherwise they go through the
+   *  console proxy using apiBase/apiKey. Lets the bootstrap share the exact
+   *  same lapse-proof write path the settlement transport uses. */
+  writeRecord?: (collection: string, record: Record<string, unknown>) => Promise<PublishedRecord>;
   feePolicy: FeePolicy;
   feeCurrency: string;
   supportedCurrencies: string[];
@@ -116,6 +124,21 @@ async function proxyCreate(
 export async function bootstrapExchangeRecords(inputs: BootstrapInputs): Promise<BootstrapResult> {
   const createdAt = new Date().toISOString();
 
+  // Prefer the injected writer (app-password direct-to-PDS); fall back to the
+  // console proxy. Either way the two bootstrap records go out the same path
+  // the settlement transport uses, so they can't diverge in auth health.
+  const write = (collection: string, record: Record<string, unknown>): Promise<PublishedRecord> => {
+    if (inputs.writeRecord) return inputs.writeRecord(collection, record);
+    if (!inputs.apiBase || !inputs.apiKey) {
+      return Promise.reject(
+        new Error(
+          "bootstrap: no writeRecord and missing apiBase/apiKey for console-proxy fallback",
+        ),
+      );
+    }
+    return proxyCreate(inputs.apiBase, inputs.apiKey, collection, record);
+  };
+
   // 1. Policy record.
   const policyRecord: Record<string, unknown> = {
     exchange: inputs.exchangeDid,
@@ -151,12 +174,7 @@ export async function bootstrapExchangeRecords(inputs: BootstrapInputs): Promise
     active: true,
     createdAt,
   };
-  const policyRef = await proxyCreate(
-    inputs.apiBase,
-    inputs.apiKey,
-    "dev.cocore.compute.exchangePolicy",
-    policyRecord,
-  );
+  const policyRef = await write("dev.cocore.compute.exchangePolicy", policyRecord);
 
   // 2. Attestation record (strong-refs the policy).
   const fingerprint = inputs.signingKey
@@ -170,12 +188,7 @@ export async function bootstrapExchangeRecords(inputs: BootstrapInputs): Promise
     ...(inputs.auditPosture ? { auditPosture: inputs.auditPosture } : {}),
     createdAt: new Date().toISOString(),
   };
-  const attestationRef = await proxyCreate(
-    inputs.apiBase,
-    inputs.apiKey,
-    "dev.cocore.compute.exchangeAttestation",
-    attestationRecord,
-  );
+  const attestationRef = await write("dev.cocore.compute.exchangeAttestation", attestationRecord);
 
   return { policyRef, attestationRef };
 }

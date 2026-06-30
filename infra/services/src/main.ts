@@ -24,18 +24,23 @@ import { timingSafeEqual } from "node:crypto";
 import Database from "better-sqlite3";
 
 import { HttpRouter } from "@effect/platform";
-import { Config, Duration, Effect, Option, Redacted, Schedule } from "effect";
+import { Config, Duration, Effect, Metric, Option, Redacted, Schedule } from "effect";
 
 import { Firehose, type IndexedRecord } from "@cocore/sdk";
 import { Indexer, RelayFirehose } from "@cocore/appview/indexer";
 import { Store } from "@cocore/appview/store";
 import { buildAppviewSplit } from "@cocore/appview/api";
 import { AccountStore } from "@cocore/appview/account-store";
-import { makeRuntime } from "@cocore/o11y";
+import { makeRuntime, metrics, record } from "@cocore/o11y";
 import { err, header, jsonBody, makeNodeHandler, ok, searchParams } from "@cocore/o11y/http";
 import { Exchange } from "@cocore/exchange";
 import { bootstrapExchangeRecords } from "@cocore/exchange/bootstrap";
-import { ConsoleProxySettlementTransport, SettlementPublisher } from "@cocore/exchange/publisher";
+import {
+  AppPasswordSettlementTransport,
+  ConsoleProxySettlementTransport,
+  SettlementPublisher,
+} from "@cocore/exchange/publisher";
+import { AppPasswordSession, createRecordViaSession } from "@cocore/exchange/app-password-session";
 import { parsePrivateJwk, signRecord } from "@cocore/exchange/signing";
 import { TokenLedger, type TokenLedgerPolicy } from "@cocore/exchange/token-balance";
 import { startAutoresponder } from "./autorespond.ts";
@@ -78,6 +83,14 @@ const CONFIG = Effect.runSync(
     exchangeApiBase: Config.string("COCORE_EXCHANGE_API_BASE").pipe(
       Config.withDefault("https://cocore.dev"),
     ),
+    // App-password credential for the exchange's own PDS writes. When set, the
+    // exchange writes settlements + bootstrap records directly to its PDS via a
+    // self-healing app-password session instead of the lapse-prone console
+    // OAuth proxy. Identifier defaults to the exchange DID; PDS is resolved
+    // from the DID unless overridden.
+    exchangeAppPassword: secretOption("COCORE_EXCHANGE_APP_PASSWORD"),
+    exchangeIdentifier: Config.string("COCORE_EXCHANGE_IDENTIFIER").pipe(Config.option),
+    exchangePdsUrl: Config.string("COCORE_EXCHANGE_PDS_URL").pipe(Config.option),
     exchangePrivateJwk: secretOption("COCORE_EXCHANGE_PRIVATE_KEY_JWK"),
     feeBps: Config.integer("COCORE_FEE_BPS").pipe(Config.withDefault(500)),
     feeMinMinor: Config.integer("COCORE_FEE_MIN_MINOR").pipe(Config.withDefault(0)),
@@ -158,6 +171,9 @@ const AUTORESPOND_PROVIDER_DID = CONFIG.autorespondProviderDid;
 // transport/fetch boundary.
 const EXCHANGE_API_KEY = CONFIG.exchangeApiKey;
 const EXCHANGE_API_BASE = CONFIG.exchangeApiBase;
+const EXCHANGE_APP_PASSWORD = CONFIG.exchangeAppPassword;
+const EXCHANGE_IDENTIFIER = Option.getOrUndefined(CONFIG.exchangeIdentifier) ?? EXCHANGE_DID;
+const EXCHANGE_PDS_URL = Option.getOrUndefined(CONFIG.exchangePdsUrl);
 
 const EXCHANGE_PRIVATE_JWK = CONFIG.exchangePrivateJwk;
 
@@ -333,12 +349,46 @@ async function main() {
 
   // 2. Exchange. Verifies receipts + publishes settlement records.
   //    Tokens move via the TokenLedger in the firehose hook below.
-  const transport = Option.isSome(EXCHANGE_API_KEY)
-    ? new ConsoleProxySettlementTransport({
-        apiBase: EXCHANGE_API_BASE,
-        apiKey: Redacted.value(EXCHANGE_API_KEY.value),
+  //
+  // o11y runtime for the processing boundary (no-op until OTEL_* is set).
+  // Created here so the exchange session, settlement transport, and dependency
+  // resolver below all share one runtime.
+  const runtime = makeRuntime({ serviceName: "cocore-services" });
+
+  const exchangeApiKeyStr = Option.isSome(EXCHANGE_API_KEY)
+    ? Redacted.value(EXCHANGE_API_KEY.value)
+    : undefined;
+
+  // App-password session for the exchange's OWN PDS writes. When configured,
+  // settlements + bootstrap records are written DIRECTLY to the exchange's PDS
+  // via a self-healing app-password session — no console OAuth proxy that can
+  // lapse and demand a human re-auth (the 2026-06 root cause), and no
+  // console→appview hop that was independently 502'ing. Falls back to the
+  // console-proxy transport when only an API key is configured.
+  const exchangeSession = Option.isSome(EXCHANGE_APP_PASSWORD)
+    ? new AppPasswordSession({
+        identifier: EXCHANGE_IDENTIFIER,
+        appPassword: Redacted.value(EXCHANGE_APP_PASSWORD.value),
+        did: EXCHANGE_DID,
+        ...(EXCHANGE_PDS_URL ? { pdsEndpoint: EXCHANGE_PDS_URL } : {}),
+        onEvent: (e) => record(runtime, Metric.increment(metrics.exchangeSession(e))),
+        log: (l) => console.error(l),
       })
     : undefined;
+  if (exchangeSession) {
+    console.error(
+      `exchange: app-password session enabled for ${EXCHANGE_IDENTIFIER} (direct PDS writes)`,
+    );
+  }
+
+  const transport = exchangeSession
+    ? new AppPasswordSettlementTransport(exchangeSession)
+    : exchangeApiKeyStr
+      ? new ConsoleProxySettlementTransport({
+          apiBase: EXCHANGE_API_BASE,
+          apiKey: exchangeApiKeyStr,
+        })
+      : undefined;
   const publisher = new SettlementPublisher(EXCHANGE_DID, transport);
   const signingKey = Option.isSome(EXCHANGE_PRIVATE_JWK)
     ? parsePrivateJwk(Redacted.value(EXCHANGE_PRIVATE_JWK.value))
@@ -346,16 +396,22 @@ async function main() {
   const feePolicy = { bps: FEE_BPS, minMinor: FEE_MIN_MINOR };
   const selfLoop = { feeWaived: SELF_LOOP_FEE_WAIVED };
 
-  // 2a. Bootstrap policy + attestation records. Skipped without an
-  //     exchange API key (no real PDS to publish to).
+  // 2a. Bootstrap policy + attestation records. Skipped without a write path
+  //     (no app-password session and no API key → no real PDS to publish to).
   let policyRef: { uri: string; cid: string } | undefined;
   let attestationRef: { uri: string; cid: string } | undefined;
-  if (Option.isSome(EXCHANGE_API_KEY)) {
+  if (exchangeSession || exchangeApiKeyStr) {
     try {
       const refs = await bootstrapExchangeRecords({
         exchangeDid: EXCHANGE_DID,
-        apiBase: EXCHANGE_API_BASE,
-        apiKey: Redacted.value(EXCHANGE_API_KEY.value),
+        // Same write path as the settlement transport: app-password direct-PDS
+        // when configured, else the console proxy.
+        ...(exchangeSession
+          ? {
+              writeRecord: (collection: string, record: Record<string, unknown>) =>
+                createRecordViaSession(exchangeSession, { collection, record }),
+            }
+          : { apiBase: EXCHANGE_API_BASE, apiKey: exchangeApiKeyStr }),
         feePolicy,
         feeCurrency: FEE_CURRENCY,
         supportedCurrencies: [FEE_CURRENCY],
@@ -393,13 +449,6 @@ async function main() {
       );
     }
   }
-
-  // o11y runtime for the processing boundary. Long-lived (the scoped OTel
-  // tracer stays open for the process lifetime); a no-op until
-  // OTEL_EXPORTER_OTLP_* is configured. Shared by the receipt pipeline for
-  // its per-receipt spans + cross-cutting metrics, and by the dependency
-  // resolver for its store/pds resolution metric.
-  const runtime = makeRuntime({ serviceName: "cocore-services" });
 
   const exchange = new Exchange({
     exchangeDid: EXCHANGE_DID,
@@ -622,7 +671,12 @@ async function main() {
         .map((s) => s.trim())
         .filter((s) => s.startsWith("did:")),
     );
+    // Only keep-alive the exchange DID when it actually has an OAuth session to
+    // warm — i.e. the console-proxy path. With an app-password session the
+    // exchange self-manages its own session, so there's nothing to keep warm
+    // (and a restore attempt would just fail + log noise).
     if (
+      !exchangeSession &&
       Option.isSome(EXCHANGE_API_KEY) &&
       EXCHANGE_DID.startsWith("did:") &&
       EXCHANGE_DID !== "did:web:exchange.local"
