@@ -37,3 +37,68 @@ const tokens = Metric.counter("cocore.tokens", {
 export function tokenThroughput(direction: "in" | "out") {
   return tokens.pipe(Metric.tagged("direction", direction));
 }
+
+/** Receipt-dependency (job / paymentAuthorization / attestation) resolutions,
+ *  tagged by where the record was found. "store" = local AppView cache hit;
+ *  "pds" = fetched from the owner's PDS source-of-truth (the durable
+ *  fallback); "miss" = not yet published anywhere; "error" = transient PDS /
+ *  network failure. A healthy system is almost all "store"/"pds"; a spike in
+ *  "miss"/"error" is the leading indicator of the 2026-06 settlement stall. */
+const depResolutions = Metric.counter("cocore.dep_resolutions", {
+  description: "receipt dependency resolutions by source",
+});
+
+/** Counter for dependency resolutions, tagged by source. */
+export function depResolution(source: "store" | "pds" | "miss" | "error") {
+  return depResolutions.pipe(Metric.tagged("source", source));
+}
+
+/** Receipts that parked in `resolve-failed`, tagged by the LOW-CARDINALITY
+ *  collection of the missing dependency (job / paymentAuthorization /
+ *  attestation / unknown) — never the URI. Lets an operator see WHICH kind of
+ *  dependency is going missing without Railway log access. */
+const resolveFailures = Metric.counter("cocore.resolve_failed", {
+  description: "receipts parked on a missing dependency, by missing collection",
+});
+
+/** Counter for resolve-failed receipts, tagged by missing-dep collection. */
+export function resolveFailed(collection: string) {
+  return resolveFailures.pipe(Metric.tagged("collection", collection));
+}
+
+/** Relay-firehose liveness: incremented once per upstream event the relay
+ *  consumes (any collection). On the full bsky.network firehose a healthy
+ *  relay ticks this constantly, so `RATE_SUM == 0` over a few minutes is an
+ *  unambiguous "indexer feed is dead" signal — the failure that silently
+ *  starved the store for days in 2026-06. Sampled (1/N) to keep volume sane;
+ *  the absolute rate doesn't matter, only that it's non-zero. */
+const relayEventsSeen = Metric.counter("cocore.relay.events", {
+  description: "upstream relay-firehose events consumed (sampled liveness tick)",
+});
+
+/** Counter for relay liveness ticks. */
+export const relayEvents = relayEventsSeen;
+
+/** OAuth session restore failures on the AppView (the sole session owner),
+ *  tagged by a coarse reason so a dead service session is VISIBLE instead of
+ *  surfacing only as a downstream 401 string. "needs_reauth" = the refresh
+ *  token is spent/revoked/expired and a human must re-authenticate;
+ *  "transient" = network/timeout (retryable); "unknown" = unclassified. */
+const oauthRestoreFailures = Metric.counter("cocore.oauth.restore_failed", {
+  description: "OAuth session restore failures by reason",
+});
+
+/** Counter for OAuth restore failures, tagged by reason. */
+export function oauthRestoreFailed(reason: "needs_reauth" | "transient" | "unknown") {
+  return oauthRestoreFailures.pipe(Metric.tagged("reason", reason));
+}
+
+/** Best-effort AppView→bridge mirror publish failures. The mirror is a cache
+ *  hint backed by the relay, but when BOTH fail a record never gets indexed;
+ *  counting the failures turns a previously-silent gap into a signal. */
+const mirrorFailures = Metric.counter("cocore.mirror.failed", {
+  description: "AppView→bridge mirror publish failures",
+});
+
+/** Counter for mirror publish failures. */
+export const mirrorFailed = mirrorFailures;

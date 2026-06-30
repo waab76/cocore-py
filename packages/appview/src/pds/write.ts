@@ -32,7 +32,8 @@
 import type { Did } from "@atcute/lexicons";
 import { timingSafeEqual } from "node:crypto";
 import { HttpRouter, HttpServerRequest, type HttpServerResponse } from "@effect/platform";
-import { Effect } from "effect";
+import { Effect, Metric } from "effect";
+import { logWarn, makeRuntime, metrics, record } from "@cocore/o11y";
 
 import type { AccountStore } from "../operational/account-store.ts";
 import {
@@ -74,6 +75,26 @@ function rkeyFromUri(uri: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
+// Module o11y runtime (no-op until OTLP is configured) so the otherwise
+// fire-and-forget mirror can emit a failure metric/log instead of vanishing.
+const mirrorRuntime = makeRuntime({ serviceName: "cocore-appview" });
+
+const MIRROR_ATTEMPTS = 3;
+const MIRROR_BACKOFF_MS = [200, 500];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => {
+    const t = setTimeout(r, ms);
+    if (typeof t.unref === "function") t.unref();
+  });
+}
+
+/** Best-effort AppView→bridge mirror. Still fire-and-forget (the relay is the
+ *  durable backstop and a write must never block on it), but now RETRIED and
+ *  OBSERVABLE: a transient bridge blip no longer silently drops the index
+ *  hint on the first try, and a sustained failure increments
+ *  `cocore.mirror.failed` + logs — turning the previously-invisible gap that
+ *  helped strand records in 2026-06 into a signal. */
 function mirrorPublish(
   bridgeUrl: string | undefined,
   args: {
@@ -85,20 +106,40 @@ function mirrorPublish(
   },
 ): void {
   if (!bridgeUrl) return;
-  void fetch(`${bridgeUrl.replace(/\/$/, "")}/xrpc/dev.cocore.bridge.publish`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      uri: args.uri,
-      cid: args.cid,
-      collection: args.collection,
-      repo: args.repo,
-      rkey: rkeyFromUri(args.uri),
-      body: args.record,
-    }),
-  }).catch(() => {
-    /* swallowed — cache hint, not a checkpoint */
+  const url = `${bridgeUrl.replace(/\/$/, "")}/xrpc/dev.cocore.bridge.publish`;
+  const body = JSON.stringify({
+    uri: args.uri,
+    cid: args.cid,
+    collection: args.collection,
+    repo: args.repo,
+    rkey: rkeyFromUri(args.uri),
+    body: args.record,
   });
+  void (async () => {
+    for (let attempt = 0; attempt < MIRROR_ATTEMPTS; attempt++) {
+      try {
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        });
+        if (r.ok) return;
+      } catch {
+        /* retry below */
+      }
+      if (attempt < MIRROR_ATTEMPTS - 1) await sleep(MIRROR_BACKOFF_MS[attempt] ?? 500);
+    }
+    // Every attempt failed. The record is on the PDS; the relay backstop is
+    // now the only path that will index it — make that fact loud.
+    record(mirrorRuntime, Metric.increment(metrics.mirrorFailed));
+    record(
+      mirrorRuntime,
+      logWarn("appview→bridge mirror publish failed; relying on relay backstop", {
+        collection: args.collection,
+        repo: args.repo,
+      }),
+    );
+  })();
 }
 
 function mirrorUnpublish(bridgeUrl: string | undefined, uri: string): void {

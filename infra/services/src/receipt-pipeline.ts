@@ -143,6 +143,13 @@ export interface ReconcileSummary {
   skippedRejected: number;
 }
 
+/** The collection segment of an at-uri (`at://<did>/<collection>/<rkey>`),
+ *  for low-cardinality metric tagging. Returns "unknown" for non-at-uris. */
+function collectionFromUri(uri: string): string {
+  const m = /^at:\/\/[^/]+\/([^/]+)\//.exec(uri);
+  return m?.[1] ?? "unknown";
+}
+
 const DEFAULT_MAX_RETRIES = 8;
 const DEFAULT_RECONCILE_BATCH_SIZE = 200;
 const SETTLEMENT_SCAN_LIMIT = 5000;
@@ -206,6 +213,14 @@ export function createReceiptPipeline(opts: ReceiptPipelineOptions): ReceiptPipe
     if (!rt) return;
     record(rt, Metric.increment(metrics.receiptsIndexed));
     record(rt, Metric.increment(metrics.settlementOutcome(outcome.kind)));
+    // Tag resolve-failed by the LOW-CARDINALITY collection of the missing dep
+    // (job / paymentAuthorization / attestation), never the URI — so an
+    // operator can see WHICH kind of dependency is going missing (and alert
+    // on it) without Railway log access. This is the signal that was
+    // completely invisible during the 2026-06 stall.
+    if (outcome.kind === "resolve-failed") {
+      record(rt, Metric.increment(metrics.resolveFailed(collectionFromUri(outcome.missing))));
+    }
     if ((outcome.kind === "settled" || outcome.kind === "duplicate") && body?.tokens) {
       const tin = body.tokens.in;
       const tout = body.tokens.out;
