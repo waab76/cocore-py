@@ -18,14 +18,14 @@ import {
   type Event as AtEvent,
 } from "@atproto/sync";
 import { IdResolver } from "@atproto/identity";
-import { logWarn, makeRuntime, type O11yRuntime } from "@cocore/o11y";
+import { logWarn, makeRuntime, metrics, record, type O11yRuntime } from "@cocore/o11y";
 import {
   COLLECTIONS,
   type CollectionId,
   type Firehose as CocoreFirehose,
   type IndexedRecord,
 } from "@cocore/sdk";
-import { Effect, Fiber, Schedule } from "effect";
+import { Effect, Fiber, Metric, Schedule } from "effect";
 
 /** All cocore collections the firehose listens for. `COLLECTIONS`
  *  itself only enumerates `dev.cocore.compute.*` (the receipt-side
@@ -59,6 +59,46 @@ const RECONNECT_SCHEDULE = Schedule.exponential("1 second").pipe(
   Schedule.either(Schedule.spaced("30 seconds")),
 );
 
+/** Signals a relay subscription that ENDED cleanly rather than errored — the
+ *  @atproto/sync stream's `start()` promise resolved (server close, idle
+ *  cutoff, graceful EOF). We convert it into a retryable failure so the
+ *  supervised backoff reconnects; see `start()`. Before this, a clean end
+ *  silently terminated the supervisor fiber and the relay never came back —
+ *  the indexer-starvation half of the 2026-06 settlement stall. */
+export class RelayStreamEnded extends Error {
+  constructor(message = "relay subscription ended; reconnecting") {
+    super(message);
+    this.name = "RelayStreamEnded";
+  }
+}
+
+/** Compose one relay connection attempt into a forever-reconnecting
+ *  supervised effect. The fix at the heart of the 2026-06 indexer stall: a
+ *  CLEAN stream end (connect resolves) is turned into a `RelayStreamEnded`
+ *  failure so `Effect.retry` reconnects it — previously only an ERROR triggered
+ *  a reconnect, so a graceful upstream close silently ended the supervisor and
+ *  the relay never came back. A drop (connect fails) retries as before.
+ *  `onAttemptEnd` fires once per terminated attempt (clean or errored) for
+ *  logging. Exported so the reconnect-on-clean-end contract is unit-testable
+ *  without a live socket. */
+export function superviseRelay<E>(
+  connect: () => Effect.Effect<void, E>,
+  schedule: Schedule.Schedule<unknown, unknown>,
+  onAttemptEnd?: (err: E | RelayStreamEnded) => void,
+): Effect.Effect<void, E | RelayStreamEnded> {
+  return connect().pipe(
+    Effect.zipRight(Effect.fail(new RelayStreamEnded())),
+    Effect.tapError((err) => (onAttemptEnd ? Effect.sync(() => onAttemptEnd(err)) : Effect.void)),
+    Effect.retry(schedule),
+  );
+}
+
+// Record one relay liveness tick every Nth upstream event. The full
+// bsky.network firehose fires constantly, so a sampled counter stays cheap
+// while still dropping to zero the instant the feed dies — exactly what a
+// "RATE_SUM == 0 over N minutes" alert needs to catch a dead indexer.
+const LIVENESS_SAMPLE_EVERY = 500;
+
 export interface RelayFirehoseOpts {
   /** WebSocket URL of the relay. e.g. `wss://bsky.network` or
    *  `ws://localhost:NNNN` for the dev PDS. */
@@ -87,6 +127,12 @@ export class RelayFirehose {
   private runner: MemoryRunner;
   /** Fiber running the supervised reconnect loop; set by `start()`. */
   private fiber?: Fiber.RuntimeFiber<void, unknown>;
+  /** Wall-clock ms of the last upstream event consumed; 0 until the first.
+   *  Drives `getLiveness()` — a large idle while the process is up means the
+   *  feed has gone silent. */
+  private lastEventAt = 0;
+  /** Rolling event counter for liveness-tick sampling. */
+  private eventCount = 0;
 
   constructor(opts: RelayFirehoseOpts) {
     this.opts = opts;
@@ -112,6 +158,13 @@ export class RelayFirehose {
         // Firehose so the AppView's store can prune.
         const seq = (evt as { seq?: number }).seq;
         if (typeof seq === "number") lastCursor = seq;
+        // Liveness: any consumed event (any collection) proves the feed is
+        // alive. Stamp the time and tick a sampled counter so a silent feed
+        // is observable (idleMs climbs; the counter's rate falls to zero).
+        this.lastEventAt = Date.now();
+        if (++this.eventCount % LIVENESS_SAMPLE_EVERY === 0) {
+          record(runtime, Metric.increment(metrics.relayEvents));
+        }
       },
       onError: (err: Error) => {
         // A subscription-level error means the upstream connection
@@ -172,7 +225,41 @@ export class RelayFirehose {
 
   start(): void {
     if (this.fiber) return;
-    this.fiber = runtime.runFork(this.connectOnce().pipe(Effect.retry(RECONNECT_SCHEDULE)));
+    // Supervise the connection so it reconnects on ANY termination — a clean
+    // stream end (connectOnce resolves) as well as a drop (connectOnce
+    // fails). See `superviseRelay`: before it, a graceful upstream close
+    // silently ended the supervisor fiber and the relay never came back. An
+    // intentional `stop()` interrupts the fiber before the fail/retry runs,
+    // so it still winds down cleanly. connectOnce already logs its own drops;
+    // we log the clean-end case here.
+    const supervised = superviseRelay(
+      () => this.connectOnce(),
+      RECONNECT_SCHEDULE,
+      (err) => {
+        if (err instanceof RelayStreamEnded) {
+          runtime.runFork(
+            logWarn("relay-firehose subscription ended; reconnecting", {
+              service: this.opts.service,
+              cursor: this.runner.getCursor(),
+            }),
+          );
+        }
+      },
+    );
+    this.fiber = runtime.runFork(supervised);
+  }
+
+  /** Relay liveness snapshot for health/admin endpoints. `lastEventAt` is
+   *  null until the first event; `idleMs` is ms since the last consumed
+   *  event. While the process is up, a large `idleMs` means the upstream
+   *  feed has gone silent — the indexer is no longer being fed, even if the
+   *  socket looks connected. */
+  getLiveness(): { lastEventAt: string | null; idleMs: number | null } {
+    if (this.lastEventAt === 0) return { lastEventAt: null, idleMs: null };
+    return {
+      lastEventAt: new Date(this.lastEventAt).toISOString(),
+      idleMs: Date.now() - this.lastEventAt,
+    };
   }
 
   async stop(): Promise<void> {

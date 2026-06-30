@@ -26,11 +26,39 @@ import {
 import { NodeDnsHandleResolver } from "@atcute/identity-resolver-node";
 import { MemoryStore, OAuthClient } from "@atcute/oauth-node-client";
 import { oauthScopes } from "@cocore/sdk/oauth-scope";
+import { logWarn, makeRuntime, metrics, record } from "@cocore/o11y";
+import { Metric } from "effect";
 
 import type { AccountStore } from "../operational/account-store.ts";
 import { AccountOauthSessionStore } from "./oauth-session-store.ts";
 
 const OAUTH_STATE_TTL_MS = 15 * 60_000;
+
+// One o11y runtime for the module (no-op until OTLP is configured). Used to
+// surface session-restore failures, which were previously swallowed silently
+// — the 2026-06 incident's dead exchange session showed up only as a
+// downstream 401 string with no cause attached.
+const runtime = makeRuntime({ serviceName: "cocore-appview" });
+
+/** Classify a `client.restore()` failure into a coarse, low-cardinality
+ *  reason so a metric/log can distinguish "a human must re-authenticate"
+ *  from "retry later". Single-use refresh tokens mean an `invalid_grant` is
+ *  terminal (the session is dead until re-auth); network/5xx errors are
+ *  transient. Errs toward "unknown" rather than mislabeling. */
+export function classifyRestoreError(e: unknown): "needs_reauth" | "transient" | "unknown" {
+  const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+  if (/invalid_grant|invalid_token|revoked|expired|unauthorized_client|no.*session/.test(msg)) {
+    return "needs_reauth";
+  }
+  if (
+    /fetch failed|network|timeout|timed out|socket|econnrefused|econnreset|enotfound|etimedout|503|502|504|429/.test(
+      msg,
+    )
+  ) {
+    return "transient";
+  }
+  return "unknown";
+}
 
 /** Base URL of the console origin that owns the OAuth client identity
  *  (serves /api/auth/atproto/metadata.json + jwks.json). Same precedence
@@ -131,7 +159,75 @@ export async function restoreSession(
 ): Promise<RestoredSession | null> {
   try {
     return await client.restore(did);
-  } catch {
+  } catch (e) {
+    // Don't swallow silently. The 2026-06 settlement stall hid here: a dead
+    // exchange session surfaced only as a downstream 401 string with no
+    // cause, so it took days to spot. Emit a classified metric + structured
+    // log so "this service DID needs re-auth" is a first-class, alertable
+    // signal. Still return null (the caller's "session gone → 401" contract
+    // is unchanged) — we only make the failure observable.
+    const reason = classifyRestoreError(e);
+    record(runtime, Metric.increment(metrics.oauthRestoreFailed(reason)));
+    record(
+      runtime,
+      logWarn("oauth session restore failed", {
+        did,
+        reason,
+        error: e instanceof Error ? e.message : String(e),
+      }),
+    );
     return null;
   }
+}
+
+/** Keep a set of long-lived SERVICE DID sessions warm so they never lapse
+ *  from disuse. The AppView is the single owner/refresher of every session
+ *  (refresh tokens are single-use — two refreshers cannibalize one token), so
+ *  this MUST run in exactly one place: here, inside the AppView. Each tick
+ *  calls `restoreSession`, which rotates + persists the refresh token, so a
+ *  session that would otherwise sit idle past its refresh-token lifetime (the
+ *  way the exchange DID died in 2026-06, blocking every settlement write)
+ *  stays alive — and any failure is surfaced by `restoreSession`'s metric/log
+ *  above. Returns a stop function. No-op for an empty DID list. */
+export function startServiceSessionKeepAlive(opts: {
+  client: AppviewOAuthClient;
+  dids: string[];
+  intervalMs: number;
+  /** Seam for tests; defaults to the real `restoreSession`. */
+  restore?: (client: AppviewOAuthClient, did: Did) => Promise<RestoredSession | null>;
+  log?: (line: string) => void;
+}): () => void {
+  const dids = opts.dids.filter((d) => typeof d === "string" && d.startsWith("did:"));
+  if (dids.length === 0 || opts.intervalMs <= 0) return () => {};
+  const restore = opts.restore ?? restoreSession;
+  const log = opts.log ?? ((l: string) => console.error(l));
+
+  const tick = async () => {
+    for (const did of dids) {
+      try {
+        const session = await restore(opts.client, did as Did);
+        if (!session) {
+          log(`oauth-keepalive: ${did} session could not be restored (needs re-auth?)`);
+        }
+      } catch (e) {
+        // restore() shouldn't throw (it catches internally), but never let a
+        // keep-alive tick crash the timer.
+        log(`oauth-keepalive: ${did} threw: ${(e as Error).message}`);
+      }
+    }
+  };
+
+  // Fire once on the next tick (not synchronously — let the caller finish
+  // wiring) and then on the interval. unref so the timer never holds the
+  // process open on its own.
+  const timer = setInterval(() => void tick(), opts.intervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+  // Eager warm-up shortly after boot.
+  const warm = setTimeout(() => void tick(), 5_000);
+  if (typeof warm.unref === "function") warm.unref();
+
+  return () => {
+    clearInterval(timer);
+    clearTimeout(warm);
+  };
 }

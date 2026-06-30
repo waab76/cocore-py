@@ -20,6 +20,7 @@ import {
   type AppviewOAuthClient,
   isOAuthConfigured,
   makeAppviewOAuth,
+  startServiceSessionKeepAlive,
 } from "../auth/oauth-client.ts";
 import { buildDevicePairRouter } from "../devicepair/routes.ts";
 import { PairStore } from "../devicepair/pair-store.ts";
@@ -52,6 +53,15 @@ export interface BuildServerOptions {
   advisorUrl?: string;
   /** Exchange DID stamped onto dispatch's paymentAuthorization + job. */
   exchangeDid?: string;
+  /** Long-lived SERVICE DIDs (e.g. the exchange DID) whose OAuth sessions
+   *  this AppView should keep warm so they never lapse from disuse and brick
+   *  every write under them — the way the exchange session died in 2026-06.
+   *  The AppView is the sole session owner, so the keep-alive runs here and
+   *  nowhere else. Empty/absent → disabled. */
+  keepAliveDids?: string[];
+  /** Interval between keep-alive refreshes. Default 6h — comfortably inside a
+   *  typical refresh-token lifetime. */
+  keepAliveIntervalMs?: number;
 }
 
 /** Constant-time string compare that tolerates length differences. */
@@ -223,6 +233,21 @@ function buildAppviewRouters(
     } catch (e) {
       console.error(`appview: OAuth client init failed: ${(e as Error).message}`);
     }
+  }
+
+  // Keep configured service-DID sessions warm. The AppView is the single
+  // session owner (single-use refresh tokens), so this is the one correct
+  // place to do it — a periodic refresh stops a long-idle service session
+  // (the exchange DID) from lapsing and 401ing every settlement write.
+  if (oauth && opts.keepAliveDids && opts.keepAliveDids.length > 0) {
+    startServiceSessionKeepAlive({
+      client: oauth,
+      dids: opts.keepAliveDids,
+      intervalMs: opts.keepAliveIntervalMs ?? 6 * 60 * 60_000,
+    });
+    console.error(
+      `appview: oauth keep-alive enabled for ${opts.keepAliveDids.length} service DID(s)`,
+    );
   }
 
   // PDS-write executor + its `/api/pds/*` alias (a paired agent's apiBase

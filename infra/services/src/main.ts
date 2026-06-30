@@ -40,6 +40,7 @@ import { parsePrivateJwk, signRecord } from "@cocore/exchange/signing";
 import { TokenLedger, type TokenLedgerPolicy } from "@cocore/exchange/token-balance";
 import { startAutoresponder } from "./autorespond.ts";
 import { createReceiptPipeline } from "./receipt-pipeline.ts";
+import { makePdsBackedResolver } from "./resolve-record.ts";
 
 // Optional secret: read as Redacted (never serializes into logs/traces)
 // and, to match the old `if (process.env[X])` truthiness, treat an empty
@@ -128,6 +129,10 @@ const CONFIG = Effect.runSync(
     advisorUrl: Config.string("COCORE_ADVISOR_URL").pipe(Config.option),
     // Operator-only wipe gate: enabled only when set to exactly "1".
     allowWipe: Config.string("COCORE_ALLOW_WIPE").pipe(Config.withDefault("0")),
+    // Comma-separated extra service DIDs whose OAuth sessions the AppView
+    // should keep warm (the exchange DID is added automatically when it's a
+    // real, API-key-backed exchange). See startServiceSessionKeepAlive.
+    oauthKeepAliveDids: Config.string("COCORE_OAUTH_KEEPALIVE_DIDS").pipe(Config.withDefault("")),
   }),
 );
 
@@ -389,6 +394,13 @@ async function main() {
     }
   }
 
+  // o11y runtime for the processing boundary. Long-lived (the scoped OTel
+  // tracer stays open for the process lifetime); a no-op until
+  // OTEL_EXPORTER_OTLP_* is configured. Shared by the receipt pipeline for
+  // its per-receipt spans + cross-cutting metrics, and by the dependency
+  // resolver for its store/pds resolution metric.
+  const runtime = makeRuntime({ serviceName: "cocore-services" });
+
   const exchange = new Exchange({
     exchangeDid: EXCHANGE_DID,
     feePolicy,
@@ -397,7 +409,12 @@ async function main() {
     ...(attestationRef ? { attestationRef } : {}),
     ...(signingKey ? { signingKey } : {}),
     publisher,
-    resolveRecord: async (uri) => store.get(uri) ?? null,
+    // Store-first, PDS-backed resolution. A local-store miss falls back to
+    // the record's PDS (the source of truth) and back-fills the cache, so a
+    // dead relay or a dropped mirror hint can no longer strand a receipt in
+    // resolve-failed forever (the 2026-06 settlement stall). See
+    // resolve-record.ts.
+    resolveRecord: makePdsBackedResolver({ store, runtime, log: (l) => console.error(l) }),
   });
   // Wrap publisher.publish so settlements re-enter the firehose for
   // any subscriber that watches it directly (tests, etc.).
@@ -434,12 +451,6 @@ async function main() {
   console.error(
     `token-ledger: db=${TOKEN_LEDGER_DB} grant=${TOKEN_GRANT} floor=${TOKEN_FLOOR} treasuryFee=${FEE_BPS}bps treasury=${TREASURY_DID}`,
   );
-
-  // o11y runtime for the processing boundary. Long-lived (the scoped
-  // OTel tracer stays open for the process lifetime); a no-op until
-  // OTEL_EXPORTER_OTLP_* is configured. Shared by the receipt pipeline
-  // for its per-receipt spans + cross-cutting metrics.
-  const runtime = makeRuntime({ serviceName: "cocore-services" });
 
   // Settlement pipeline: wires exchange.onReceipt + the pending-
   // receipt queue + token-ledger application together. See
@@ -599,6 +610,28 @@ async function main() {
   // private :8081 listener (the console reaches it over the Railway internal
   // network) and `public` on the bridge port below — keeping /internal off
   // the wire while still answering appview.* reads / account.* / /pds there.
+  // Keep the exchange DID's OAuth session warm so it can't lapse from disuse
+  // and 401 every settlement write (the 2026-06 root cause). Only for a real,
+  // API-key-backed exchange — the did:web:exchange.local default is a dev
+  // placeholder with no session. Operators can add more DIDs via
+  // COCORE_OAUTH_KEEPALIVE_DIDS.
+  const keepAliveDids = (() => {
+    const set = new Set(
+      CONFIG.oauthKeepAliveDids
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.startsWith("did:")),
+    );
+    if (
+      Option.isSome(EXCHANGE_API_KEY) &&
+      EXCHANGE_DID.startsWith("did:") &&
+      EXCHANGE_DID !== "did:web:exchange.local"
+    ) {
+      set.add(EXCHANGE_DID);
+    }
+    return [...set];
+  })();
+
   const appview = buildAppviewSplit(store, {
     accountStore,
     appviewDid: APPVIEW_DID,
@@ -611,6 +644,7 @@ async function main() {
     // under the requester's AppView-owned session; both enable the SSE route.
     advisorUrl: ADVISOR_URL,
     exchangeDid: EXCHANGE_DID,
+    keepAliveDids,
   });
 
   // Internal :8081 listener serves the FULL app (incl /internal/*). Traced
@@ -789,6 +823,11 @@ async function main() {
           pending: pipeline.pendingSnapshot(),
           recentOutcomes: recent,
           publisherSettled: publisher.alreadySettled().size,
+          // Relay/indexer liveness: a large idleMs while the process is up
+          // means the upstream feed (the store's durable backstop) has gone
+          // silent — the failure that starved resolution in 2026-06. null
+          // when the relay is disabled in this deployment.
+          relay: relay ? relay.getLiveness() : null,
           // Quick at-a-glance counters across the ring buffer: helps operators
           // see "are we mostly resolve-failing, or mostly settling, or mostly
           // rejecting?" without scrolling the per-receipt list.
