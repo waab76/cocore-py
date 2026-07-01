@@ -12,8 +12,9 @@ import * as stylex from "@stylexjs/stylex";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createLink } from "@tanstack/react-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button as AriaButton } from "react-aria-components";
-import { ImagePlus, SlidersHorizontal, Square, X } from "lucide-react";
+import { ImagePlus, Maximize2, Minimize2, SlidersHorizontal, Square, X } from "lucide-react";
 import type { ReactElement } from "react";
 
 import { getMyBalanceQueryOptions } from "@/components/account/token-balance.functions.ts";
@@ -44,6 +45,7 @@ import type { ModelDirectoryEntry } from "@/lib/model-directory.server.ts";
 import { Button } from "@/design-system/button";
 import { Drawer, DrawerBody, DrawerHeader } from "@/design-system/drawer";
 import { Flex } from "@/design-system/flex";
+import { IconButton } from "@/design-system/icon-button";
 import { Page } from "@/design-system/page";
 import { Kbd } from "@/design-system/kbd";
 import { breakpoints } from "@/design-system/theme/media-queries.stylex";
@@ -183,6 +185,30 @@ const styles = stylex.create({
     overflow: "hidden",
     width: "100%",
   },
+  // "Full screen" lifts the shell out of the page flow into a body-level
+  // fixed overlay covering the viewport (over the navbar/footer). It's a
+  // React portal to document.body, not the native Fullscreen API — so it
+  // "covers the viewport" without taking over the OS / hiding browser chrome.
+  // z-index lifts it above the sticky navbar/footer.
+  shellFullscreen: {
+    borderColor: uiColor.border1,
+    borderRadius: 0,
+    borderWidth: 0,
+    bottom: 0,
+    boxSizing: "border-box",
+    height: "100%",
+    left: 0,
+    maxHeight: "none",
+    maxWidth: "none",
+    minHeight: 0,
+    minWidth: 0,
+    overflow: "hidden",
+    position: "fixed",
+    right: 0,
+    top: 0,
+    width: "100%",
+    zIndex: 10000,
+  },
 
   /* ── sidebar ── */
   side: {
@@ -197,6 +223,28 @@ const styles = stylex.create({
     flexShrink: 0,
     minWidth: 0,
     width: "272px",
+  },
+  // In full screen on narrow screens the sessions sidebar is shown as an
+  // overlay drawer (absolute within the shell) rather than an in-flow
+  // column, so opening it doesn't reflow the chat. Driven by `sidebarOpen`.
+  sideFullscreen: {
+    bottom: 0,
+    display: "flex",
+    height: "100%",
+    left: 0,
+    position: "absolute",
+    top: 0,
+    zIndex: 10,
+  },
+  // Dimmed backdrop behind the sessions overlay drawer; click dismisses.
+  sideBackdrop: {
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    bottom: 0,
+    left: 0,
+    position: "absolute",
+    right: 0,
+    top: 0,
+    zIndex: 9,
   },
   sideHead: {
     borderBottomColor: uiColor.border1,
@@ -380,8 +428,10 @@ const styles = stylex.create({
   mobileDrawerWrap: {
     // Mobile-first: the history-drawer trigger shows on narrow screens
     // and is hidden at md, where the desktop sidebar is visible instead.
+    alignItems: "center",
     display: { default: "flex", [breakpoints.md]: "none" },
     flexShrink: 0,
+    gap: gap.sm,
     marginLeft: "auto",
   },
   mobileSessionsBtn: {
@@ -863,7 +913,7 @@ const styles = stylex.create({
   composerSend: {
     flexShrink: 0,
   },
-  advBtn: {
+  fsBtn: {
     alignItems: "center",
     appearance: "none",
     backgroundColor: { default: uiColor.bgSubtle, ":hover": uiColor.bg },
@@ -875,24 +925,16 @@ const styles = stylex.create({
     boxSizing: "border-box",
     color: uiColor.text2,
     cursor: "pointer",
-    display: "flex",
+    display: { default: "none", [breakpoints.md]: "flex" },
     flexShrink: 0,
-    fontFamily: fontFamily.mono,
-    fontSize: fontSize.xs,
-    gap: gap.sm,
-    paddingBottom: "4px",
-    paddingLeft: horizontalSpace.md,
-    paddingRight: horizontalSpace.md,
-    paddingTop: "4px",
-    whiteSpace: "nowrap",
+    height: sizeSpace["2xl"],
+    justifyContent: "center",
+    marginLeft: "auto",
+    width: sizeSpace["2xl"],
   },
   advBtnActive: {
     borderColor: uiColor.text2,
     color: uiColor.text2,
-  },
-  advCount: {
-    color: uiColor.text1,
-    fontVariantNumeric: "tabular-nums",
   },
   privacyNote: {
     color: uiColor.text1,
@@ -1306,11 +1348,14 @@ function AdvancedOptions({
       onOpenChange={setOpen}
       placement="top end"
       trigger={
-        <AriaButton {...stylex.props(styles.advBtn, activeCount > 0 && styles.advBtnActive)}>
-          <SlidersHorizontal size={12} aria-hidden />
-          advanced
-          {activeCount > 0 ? <span {...stylex.props(styles.advCount)}>· {activeCount}</span> : null}
-        </AriaButton>
+        <IconButton
+          variant="secondary"
+          size="sm"
+          label={activeCount > 0 ? `advanced · ${activeCount}` : "advanced"}
+          style={activeCount > 0 ? styles.advBtnActive : undefined}
+        >
+          <SlidersHorizontal aria-hidden size={16} />
+        </IconButton>
       }
       style={styles.advPop}
     >
@@ -1494,6 +1539,10 @@ export function ChatPage(): ReactElement {
   const [draftTargetMachineId, setDraftTargetMachineId] = useState<string | null>(null);
   const [draftMaxTokens, setDraftMaxTokens] = useState<number>(MAX_TOKENS_CHOICES[1]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // "Full screen" lifts the chat shell into a viewport-covering overlay
+  // (see `shellFullscreen`). Pure client state — only ever flipped from a
+  // button press, so SSR never sees it true.
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     if (did === "anon" || !chatStorageKey) {
@@ -1642,6 +1691,37 @@ export function ChatPage(): ReactElement {
   }, [activeId, active?.messages.length, lastMessage?.text, syncScrollSnapshot]);
 
   const taRef = useRef<HTMLTextAreaElement>(null);
+  // Portaling the shell in/out of `document.body` remounts its subtree, so
+  // the transcript's `scrollTop` resets. Capture it on toggle and restore in
+  // a layout effect so the user doesn't get yanked to the top on every
+  // enter/exit.
+  const pendingScrollRestoreRef = useRef<number | null>(null);
+  const toggleFullscreen = useCallback(() => {
+    pendingScrollRestoreRef.current = scrollRef.current?.scrollTop ?? 0;
+    setSidebarOpen(false);
+    setFullscreen((f) => !f);
+  }, []);
+  useLayoutEffect(() => {
+    if (pendingScrollRestoreRef.current == null) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = pendingScrollRestoreRef.current;
+    pendingScrollRestoreRef.current = null;
+  }, [fullscreen]);
+  // Escape exits full screen; lock body scroll while it's active so the
+  // hidden page behind the overlay doesn't scroll under it.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [fullscreen]);
   const abortRef = useRef<AbortController | null>(null);
 
   const newChat = () => {
@@ -1777,7 +1857,12 @@ export function ChatPage(): ReactElement {
     // Materialize the session on first send.
     let target = active;
     if (!target) {
-      target = { ...createSession(modelId), targetProviderDid, targetMachineId, maxTokensOut };
+      target = {
+        ...createSession(modelId),
+        targetProviderDid,
+        targetMachineId,
+        maxTokensOut,
+      };
       setSessions((prev) => [target!, ...prev]);
       setActiveId(target.id);
     }
@@ -1795,7 +1880,10 @@ export function ChatPage(): ReactElement {
     if (turnImages.length > 0) {
       // Show the just-sent thumbnails immediately (reuse the composer's data
       // URLs), and cache the bytes in IndexedDB so they survive a reload.
-      setMsgImages((prev) => ({ ...prev, [userMsg.id]: pendingImages.map((p) => p.url) }));
+      setMsgImages((prev) => ({
+        ...prev,
+        [userMsg.id]: pendingImages.map((p) => p.url),
+      }));
       if (chatStorageKey) {
         void saveChatImages(did, userMsg.id, turnImages, chatStorageKey);
       }
@@ -1848,7 +1936,10 @@ export function ChatPage(): ReactElement {
           }));
         },
         onChunk: (chunk) => {
-          patchMessage(sessionId, assistantMsg.id, (m) => ({ ...m, text: m.text + chunk }));
+          patchMessage(sessionId, assistantMsg.id, (m) => ({
+            ...m,
+            text: m.text + chunk,
+          }));
         },
         onReasoning: (chunk) => {
           patchMessage(sessionId, assistantMsg.id, (m) => ({
@@ -1871,7 +1962,9 @@ export function ChatPage(): ReactElement {
         spentTokens: s.spentTokens + result.tokensIn + result.tokensOut,
         updatedAt: new Date().toISOString(),
       }));
-      void queryClient.invalidateQueries({ queryKey: getMyBalanceQueryOptions.queryKey });
+      void queryClient.invalidateQueries({
+        queryKey: getMyBalanceQueryOptions.queryKey,
+      });
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       const isDispatch = e instanceof ChatDispatchError;
@@ -1929,7 +2022,10 @@ export function ChatPage(): ReactElement {
         setMsgImages((prev) =>
           prev[id] !== undefined
             ? prev
-            : { ...prev, [id]: imgs && imgs.length > 0 ? imgs.map(chatImageDataUrl) : "lost" },
+            : {
+                ...prev,
+                [id]: imgs && imgs.length > 0 ? imgs.map(chatImageDataUrl) : "lost",
+              },
         );
       });
     }
@@ -1967,331 +2063,389 @@ export function ChatPage(): ReactElement {
         </Flex>
       </Page.Header>
 
-      <div {...stylex.props(styles.shell)}>
-        <aside {...stylex.props(styles.side)}>
-          <ChatSessionsPanel
-            visible={visible}
-            activeId={activeId}
-            query={query}
-            hydrated={hydrated}
-            spentTotal={spentTotal}
-            balance={balance?.balance}
-            onQueryChange={setQuery}
-            onSelectSession={pickSession}
-            onNewChat={newChat}
-          />
-        </aside>
+      {(() => {
+        // Lift the shell into a `position: fixed` overlay on `document.body`
+        // when full screen. It's portaled (not just `position: fixed` in place)
+        // because the ancestor `HeaderLayout` containers use
+        // `container-type: inline-size`, whose layout containment establishes a
+        // containing block for fixed descendants — so a non-portaled fixed
+        // shell would be trapped inside `<main>` and couldn't cover the
+        // navbar/footer. Portaling to body escapes that.
+        const chatShell = (
+          <div {...stylex.props(styles.shell, fullscreen && styles.shellFullscreen)}>
+            {fullscreen && sidebarOpen ? (
+              <div {...stylex.props(styles.sideBackdrop)} onClick={() => setSidebarOpen(false)} />
+            ) : null}
+            <aside
+              {...stylex.props(styles.side, fullscreen && sidebarOpen && styles.sideFullscreen)}
+            >
+              <ChatSessionsPanel
+                visible={visible}
+                activeId={activeId}
+                query={query}
+                hydrated={hydrated}
+                spentTotal={spentTotal}
+                balance={balance?.balance}
+                onQueryChange={setQuery}
+                onSelectSession={pickSession}
+                onNewChat={newChat}
+              />
+            </aside>
 
-        <section
-          {...stylex.props(styles.main)}
-          onDragOver={onChatDragOver}
-          onDragLeave={onChatDragLeave}
-          onDrop={onChatDrop}
-        >
-          {dragActive ? (
-            <div {...stylex.props(styles.dropOverlay)}>
-              <ImagePlus size={28} aria-hidden />
-              <span>drop images to attach</span>
-            </div>
-          ) : null}
-          <div {...stylex.props(styles.chatHead)}>
-            <div {...stylex.props(styles.chatHeadTop)}>
-              <div {...stylex.props(styles.chatHeadMain)}>
-                <div {...stylex.props(styles.chatHeadTitle)}>{active?.title ?? "new session"}</div>
-                <div {...stylex.props(styles.chatHeadSub)}>
-                  {messages.length} message{messages.length === 1 ? "" : "s"}
-                  {active ? ` · started ${fmtClock(active.createdAt)}` : ""}
+            <section
+              {...stylex.props(styles.main)}
+              onDragOver={onChatDragOver}
+              onDragLeave={onChatDragLeave}
+              onDrop={onChatDrop}
+            >
+              {dragActive ? (
+                <div {...stylex.props(styles.dropOverlay)}>
+                  <ImagePlus size={28} aria-hidden />
+                  <span>drop images to attach</span>
+                </div>
+              ) : null}
+              <div {...stylex.props(styles.chatHead)}>
+                <div {...stylex.props(styles.chatHeadTop)}>
+                  <div {...stylex.props(styles.chatHeadMain)}>
+                    <div {...stylex.props(styles.chatHeadTitle)}>
+                      {active?.title ?? "new session"}
+                    </div>
+                    <div {...stylex.props(styles.chatHeadSub)}>
+                      {messages.length} message
+                      {messages.length === 1 ? "" : "s"}
+                      {active ? ` · started ${fmtClock(active.createdAt)}` : ""}
+                    </div>
+                  </div>
+                  <div {...stylex.props(styles.mobileDrawerWrap)}>
+                    {fullscreen ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        style={styles.mobileSessionsBtn}
+                        onPress={() => setSidebarOpen((o) => !o)}
+                      >
+                        sessions
+                        {visible.length > 0 ? ` · ${visible.length}` : ""}
+                      </Button>
+                    ) : (
+                      <Drawer
+                        direction="left"
+                        isOpen={sidebarOpen}
+                        onOpenChange={setSidebarOpen}
+                        size="sm"
+                        trigger={
+                          <Button variant="outline" size="sm" style={styles.mobileSessionsBtn}>
+                            sessions
+                            {visible.length > 0 ? ` · ${visible.length}` : ""}
+                          </Button>
+                        }
+                      >
+                        <DrawerHeader>sessions</DrawerHeader>
+                        <DrawerBody style={styles.drawerBody}>
+                          <div {...stylex.props(styles.sideInDrawer)}>
+                            <ChatSessionsPanel
+                              visible={visible}
+                              activeId={activeId}
+                              query={query}
+                              hydrated={hydrated}
+                              spentTotal={spentTotal}
+                              balance={balance?.balance}
+                              onQueryChange={setQuery}
+                              onSelectSession={pickSession}
+                              onNewChat={newChat}
+                            />
+                          </div>
+                        </DrawerBody>
+                      </Drawer>
+                    )}
+                    <IconButton
+                      variant="secondary"
+                      size="sm"
+                      label={fullscreen ? "Exit full screen" : "Full screen"}
+                      onPress={toggleFullscreen}
+                    >
+                      {fullscreen ? (
+                        <Minimize2 aria-hidden size={16} />
+                      ) : (
+                        <Maximize2 aria-hidden size={16} />
+                      )}
+                    </IconButton>
+                  </div>
+                </div>
+                <div {...stylex.props(styles.sessionStrip)}>
+                  <span {...stylex.props(styles.hostChip)}>
+                    <span {...stylex.props(styles.liveDot)} />
+                    {targetMachine ? machineLabel(targetMachine) : "auto"}
+                    <span {...stylex.props(styles.stripLabel)}>
+                      {targetMachine
+                        ? "pinned"
+                        : `${selectedModel?.machineCount ?? 0} machine${
+                            (selectedModel?.machineCount ?? 0) === 1 ? "" : "s"
+                          }`}
+                    </span>
+                  </span>
+                  {country ? (
+                    <span {...stylex.props(styles.hostChip)}>
+                      <span {...stylex.props(styles.stripLabel)}>region</span>
+                      {country}
+                    </span>
+                  ) : null}
+                  {proBono ? <span {...stylex.props(styles.hostChip)}>pro bono</span> : null}
+                  <span {...stylex.props(styles.stripItem)}>
+                    <span {...stylex.props(styles.stripLabel)}>ctx</span>
+                    <span {...stylex.props(styles.emphasis)}>
+                      {fmtTok(ctxUsed)} / {fmtTok(maxTokensOut)}
+                    </span>
+                  </span>
+                  <span {...stylex.props(styles.stripItem)}>
+                    <span {...stylex.props(styles.stripLabel)}>session</span>
+                    <span {...stylex.props(styles.emphasis)}>
+                      {formatTokensCompact(active?.spentTokens ?? 0)} tok
+                    </span>
+                  </span>
+                  <AriaButton
+                    aria-label={fullscreen ? "Exit full screen" : "Full screen"}
+                    onPress={toggleFullscreen}
+                    {...stylex.props(styles.fsBtn)}
+                  >
+                    {fullscreen ? (
+                      <Minimize2 size={12} aria-hidden />
+                    ) : (
+                      <Maximize2 size={12} aria-hidden />
+                    )}
+                  </AriaButton>
                 </div>
               </div>
-              <div {...stylex.props(styles.mobileDrawerWrap)}>
-                <Drawer
-                  direction="left"
-                  isOpen={sidebarOpen}
-                  onOpenChange={setSidebarOpen}
-                  size="sm"
-                  trigger={
-                    <Button variant="outline" size="sm" style={styles.mobileSessionsBtn}>
-                      sessions
-                      {visible.length > 0 ? ` · ${visible.length}` : ""}
-                    </Button>
-                  }
+
+              {messages.length === 0 ? (
+                <div {...stylex.props(styles.empty)}>
+                  <img
+                    src="/goobies/sloth.png"
+                    alt=""
+                    aria-hidden
+                    {...stylex.props(styles.emptyGoober)}
+                  />
+                  <div {...stylex.props(styles.emptyGlyph)}>▸_</div>
+                  {noModels ? (
+                    <>
+                      <h2 {...stylex.props(styles.emptyTitle)}>
+                        {directory?.appviewUnreachable
+                          ? "directory unreachable"
+                          : "no models online"}
+                      </h2>
+                      <p {...stylex.props(styles.emptyText)}>
+                        {directory?.appviewUnreachable
+                          ? "the model directory didn't answer — the network may be mid-deploy. refresh in a minute."
+                          : "no machine is serving a model right now. start one of your own machines, or browse the directory to see what usually runs here."}
+                      </p>
+                      <div {...stylex.props(styles.emptyCtas)}>
+                        <ButtonLink to="/machines" variant="primary" size="sm">
+                          start a machine
+                        </ButtonLink>
+                        <ButtonLink to="/models" variant="outline" size="sm">
+                          browse models
+                        </ButtonLink>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <h2 {...stylex.props(styles.emptyTitle)}>
+                        {targetMachine ? (
+                          machineLabel(targetMachine)
+                        ) : (
+                          <>
+                            {modelId ?? "…"}
+                            <span {...stylex.props(styles.emptyTitleFaint)}>
+                              {" "}
+                              · {selectedModel?.machineCount ?? 0} machine
+                              {(selectedModel?.machineCount ?? 0) === 1 ? "" : "s"} live
+                            </span>
+                          </>
+                        )}
+                      </h2>
+                      <p {...stylex.props(styles.emptyText)}>
+                        billed per generated token from your balance — nothing is metered while you
+                        type. your transcript stays in this browser; the network only sees sealed
+                        prompts and signed receipts.
+                      </p>
+                      <div {...stylex.props(styles.sugg)}>
+                        {CHAT_SUGGESTIONS.map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            {...stylex.props(styles.suggBtn)}
+                            onClick={() => {
+                              setDraft(s);
+                              taRef.current?.focus();
+                            }}
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div
+                  {...stylex.props(styles.scroll)}
+                  ref={scrollRef}
+                  onScroll={onTranscriptScroll}
+                  onWheel={onTranscriptWheel}
                 >
-                  <DrawerHeader>sessions</DrawerHeader>
-                  <DrawerBody style={styles.drawerBody}>
-                    <div {...stylex.props(styles.sideInDrawer)}>
-                      <ChatSessionsPanel
-                        visible={visible}
-                        activeId={activeId}
-                        query={query}
-                        hydrated={hydrated}
-                        spentTotal={spentTotal}
-                        balance={balance?.balance}
-                        onQueryChange={setQuery}
-                        onSelectSession={pickSession}
-                        onNewChat={newChat}
+                  <div {...stylex.props(styles.msgCol)}>
+                    {messages.map((m) =>
+                      m.role === "user" ? (
+                        <div key={m.id} {...stylex.props(styles.userTurn)}>
+                          {m.imageCount
+                            ? renderUserImages(m.id, m.imageCount, msgImages[m.id])
+                            : null}
+                          <div {...stylex.props(styles.msgUser)}>{m.text}</div>
+                        </div>
+                      ) : (
+                        (() => {
+                          const streaming = m.id === streamingId;
+                          // "Thinking" is active only while reasoning is arriving and
+                          // the answer hasn't started; once content begins the caret
+                          // (and the disclosure) move to the answer.
+                          const thinkingActive = streaming && !!m.reasoning && !m.text;
+                          const answerActive = streaming && !thinkingActive;
+                          return (
+                            <div key={m.id} {...stylex.props(styles.msgAssistant)}>
+                              <div {...stylex.props(styles.msgGutter)}>
+                                <span {...stylex.props(styles.msgGutterModel)}>
+                                  {m.modelId ?? modelId}
+                                </span>
+                                {m.providerLabel || m.providerDid ? (
+                                  <>
+                                    <span {...stylex.props(styles.metaSep)}>·</span>
+                                    <span>{m.providerLabel ?? shortDid(m.providerDid ?? "")}</span>
+                                  </>
+                                ) : null}
+                              </div>
+                              <div {...stylex.props(styles.msgBody)}>
+                                {m.reasoning ? (
+                                  <ThinkingDisclosure
+                                    reasoning={m.reasoning}
+                                    active={thinkingActive}
+                                  />
+                                ) : null}
+                                <ChatMarkdown streaming={answerActive} text={m.text} />
+                              </div>
+                              {m.meta ? (
+                                <div {...stylex.props(styles.msgMeta)}>
+                                  <span>
+                                    −
+                                    <span {...stylex.props(styles.emphasis)}>
+                                      {m.meta.tokensIn + m.meta.tokensOut}
+                                    </span>{" "}
+                                    tok
+                                  </span>
+                                  {m.meta.durationMs > 0 ? (
+                                    <span>
+                                      <span {...stylex.props(styles.emphasis)}>
+                                        {Math.round((m.meta.tokensOut / m.meta.durationMs) * 1000)}
+                                      </span>{" "}
+                                      tok/s
+                                    </span>
+                                  ) : null}
+                                  <span>{(m.meta.durationMs / 1000).toFixed(1)}s</span>
+                                </div>
+                              ) : null}
+                              {m.errorReason ? (
+                                <div {...stylex.props(styles.msgError)}>
+                                  failed ({m.errorCode}): {m.errorReason}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })()
+                      ),
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div {...stylex.props(styles.composer)}>
+                <div {...stylex.props(styles.composerBox)}>
+                  {pendingImages.length > 0 ? (
+                    <div {...stylex.props(styles.imageRow)}>
+                      {pendingImages.map((img) => (
+                        <div key={img.id} {...stylex.props(styles.imageThumb)}>
+                          <img src={img.url} alt="" {...stylex.props(styles.imageThumbImg)} />
+                          <AriaButton
+                            aria-label="remove image"
+                            onPress={() => removePendingImage(img.id)}
+                            {...stylex.props(styles.imageThumbRemove)}
+                          >
+                            <X size={11} aria-hidden />
+                          </AriaButton>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <textarea
+                    ref={taRef}
+                    rows={2}
+                    value={draft}
+                    placeholder={
+                      modelId
+                        ? `message ${modelId}${targetMachine ? ` on ${machineLabel(targetMachine)}` : ""}…`
+                        : "no models online — nothing to message"
+                    }
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={onComposerKeyDown}
+                    onPaste={onComposerPaste}
+                    {...stylex.props(styles.textarea)}
+                  />
+                  <div {...stylex.props(styles.composerBar)}>
+                    <div {...stylex.props(styles.modelPickerWrap)}>
+                      <ModelPicker
+                        models={models}
+                        modelId={modelId}
+                        targetProviderDid={targetProviderDid}
+                        targetMachineId={targetMachineId}
+                        maxTokensOut={maxTokensOut}
+                        onModel={setModel}
+                        onTarget={setTarget}
+                        onMaxTokens={setMaxTokens}
                       />
                     </div>
-                  </DrawerBody>
-                </Drawer>
-              </div>
-            </div>
-            <div {...stylex.props(styles.sessionStrip)}>
-              <span {...stylex.props(styles.hostChip)}>
-                <span {...stylex.props(styles.liveDot)} />
-                {targetMachine ? machineLabel(targetMachine) : "auto"}
-                <span {...stylex.props(styles.stripLabel)}>
-                  {targetMachine
-                    ? "pinned"
-                    : `${selectedModel?.machineCount ?? 0} machine${
-                        (selectedModel?.machineCount ?? 0) === 1 ? "" : "s"
-                      }`}
-                </span>
-              </span>
-              {country ? (
-                <span {...stylex.props(styles.hostChip)}>
-                  <span {...stylex.props(styles.stripLabel)}>region</span>
-                  {country}
-                </span>
-              ) : null}
-              {proBono ? <span {...stylex.props(styles.hostChip)}>pro bono</span> : null}
-              <span {...stylex.props(styles.stripItem)}>
-                <span {...stylex.props(styles.stripLabel)}>ctx</span>
-                <span {...stylex.props(styles.emphasis)}>
-                  {fmtTok(ctxUsed)} / {fmtTok(maxTokensOut)}
-                </span>
-              </span>
-              <span {...stylex.props(styles.stripItem)}>
-                <span {...stylex.props(styles.stripLabel)}>session</span>
-                <span {...stylex.props(styles.emphasis)}>
-                  {formatTokensCompact(active?.spentTokens ?? 0)} tok
-                </span>
-              </span>
-            </div>
-          </div>
-
-          {messages.length === 0 ? (
-            <div {...stylex.props(styles.empty)}>
-              <img
-                src="/goobies/sloth.png"
-                alt=""
-                aria-hidden
-                {...stylex.props(styles.emptyGoober)}
-              />
-              <div {...stylex.props(styles.emptyGlyph)}>▸_</div>
-              {noModels ? (
-                <>
-                  <h2 {...stylex.props(styles.emptyTitle)}>
-                    {directory?.appviewUnreachable ? "directory unreachable" : "no models online"}
-                  </h2>
-                  <p {...stylex.props(styles.emptyText)}>
-                    {directory?.appviewUnreachable
-                      ? "the model directory didn't answer — the network may be mid-deploy. refresh in a minute."
-                      : "no machine is serving a model right now. start one of your own machines, or browse the directory to see what usually runs here."}
-                  </p>
-                  <div {...stylex.props(styles.emptyCtas)}>
-                    <ButtonLink to="/machines" variant="primary" size="sm">
-                      start a machine
-                    </ButtonLink>
-                    <ButtonLink to="/models" variant="outline" size="sm">
-                      browse models
-                    </ButtonLink>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <h2 {...stylex.props(styles.emptyTitle)}>
-                    {targetMachine ? (
-                      machineLabel(targetMachine)
+                    <AdvancedOptions
+                      country={country}
+                      proBono={proBono}
+                      onCountry={setCountry}
+                      onProBono={setProBono}
+                    />
+                    {streamingId ? (
+                      <Button
+                        variant="critical"
+                        size="sm"
+                        style={styles.composerSend}
+                        onPress={stopStreaming}
+                      >
+                        <Square size={12} fill="currentColor" aria-hidden />
+                        stop
+                      </Button>
                     ) : (
-                      <>
-                        {modelId ?? "…"}
-                        <span {...stylex.props(styles.emptyTitleFaint)}>
-                          {" "}
-                          · {selectedModel?.machineCount ?? 0} machine
-                          {(selectedModel?.machineCount ?? 0) === 1 ? "" : "s"} live
-                        </span>
-                      </>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        style={styles.composerSend}
+                        isDisabled={(!draft.trim() && pendingImages.length === 0) || !modelId}
+                        onPress={() => void send()}
+                      >
+                        send <Kbd>⏎</Kbd>
+                      </Button>
                     )}
-                  </h2>
-                  <p {...stylex.props(styles.emptyText)}>
-                    billed per generated token from your balance — nothing is metered while you
-                    type. your transcript stays in this browser; the network only sees sealed
-                    prompts and signed receipts.
-                  </p>
-                  <div {...stylex.props(styles.sugg)}>
-                    {CHAT_SUGGESTIONS.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        {...stylex.props(styles.suggBtn)}
-                        onClick={() => {
-                          setDraft(s);
-                          taRef.current?.focus();
-                        }}
-                      >
-                        {s}
-                      </button>
-                    ))}
                   </div>
-                </>
-              )}
-            </div>
-          ) : (
-            <div
-              {...stylex.props(styles.scroll)}
-              ref={scrollRef}
-              onScroll={onTranscriptScroll}
-              onWheel={onTranscriptWheel}
-            >
-              <div {...stylex.props(styles.msgCol)}>
-                {messages.map((m) =>
-                  m.role === "user" ? (
-                    <div key={m.id} {...stylex.props(styles.userTurn)}>
-                      {m.imageCount ? renderUserImages(m.id, m.imageCount, msgImages[m.id]) : null}
-                      <div {...stylex.props(styles.msgUser)}>{m.text}</div>
-                    </div>
-                  ) : (
-                    (() => {
-                      const streaming = m.id === streamingId;
-                      // "Thinking" is active only while reasoning is arriving and
-                      // the answer hasn't started; once content begins the caret
-                      // (and the disclosure) move to the answer.
-                      const thinkingActive = streaming && !!m.reasoning && !m.text;
-                      const answerActive = streaming && !thinkingActive;
-                      return (
-                        <div key={m.id} {...stylex.props(styles.msgAssistant)}>
-                          <div {...stylex.props(styles.msgGutter)}>
-                            <span {...stylex.props(styles.msgGutterModel)}>
-                              {m.modelId ?? modelId}
-                            </span>
-                            {m.providerLabel || m.providerDid ? (
-                              <>
-                                <span {...stylex.props(styles.metaSep)}>·</span>
-                                <span>{m.providerLabel ?? shortDid(m.providerDid ?? "")}</span>
-                              </>
-                            ) : null}
-                          </div>
-                          <div {...stylex.props(styles.msgBody)}>
-                            {m.reasoning ? (
-                              <ThinkingDisclosure reasoning={m.reasoning} active={thinkingActive} />
-                            ) : null}
-                            <ChatMarkdown streaming={answerActive} text={m.text} />
-                          </div>
-                          {m.meta ? (
-                            <div {...stylex.props(styles.msgMeta)}>
-                              <span>
-                                −
-                                <span {...stylex.props(styles.emphasis)}>
-                                  {m.meta.tokensIn + m.meta.tokensOut}
-                                </span>{" "}
-                                tok
-                              </span>
-                              {m.meta.durationMs > 0 ? (
-                                <span>
-                                  <span {...stylex.props(styles.emphasis)}>
-                                    {Math.round((m.meta.tokensOut / m.meta.durationMs) * 1000)}
-                                  </span>{" "}
-                                  tok/s
-                                </span>
-                              ) : null}
-                              <span>{(m.meta.durationMs / 1000).toFixed(1)}s</span>
-                            </div>
-                          ) : null}
-                          {m.errorReason ? (
-                            <div {...stylex.props(styles.msgError)}>
-                              failed ({m.errorCode}): {m.errorReason}
-                            </div>
-                          ) : null}
-                        </div>
-                      );
-                    })()
-                  ),
-                )}
-              </div>
-            </div>
-          )}
-
-          <div {...stylex.props(styles.composer)}>
-            <div {...stylex.props(styles.composerBox)}>
-              {pendingImages.length > 0 ? (
-                <div {...stylex.props(styles.imageRow)}>
-                  {pendingImages.map((img) => (
-                    <div key={img.id} {...stylex.props(styles.imageThumb)}>
-                      <img src={img.url} alt="" {...stylex.props(styles.imageThumbImg)} />
-                      <AriaButton
-                        aria-label="remove image"
-                        onPress={() => removePendingImage(img.id)}
-                        {...stylex.props(styles.imageThumbRemove)}
-                      >
-                        <X size={11} aria-hidden />
-                      </AriaButton>
-                    </div>
-                  ))}
                 </div>
-              ) : null}
-              <textarea
-                ref={taRef}
-                rows={2}
-                value={draft}
-                placeholder={
-                  modelId
-                    ? `message ${modelId}${targetMachine ? ` on ${machineLabel(targetMachine)}` : ""}…`
-                    : "no models online — nothing to message"
-                }
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={onComposerKeyDown}
-                onPaste={onComposerPaste}
-                {...stylex.props(styles.textarea)}
-              />
-              <div {...stylex.props(styles.composerBar)}>
-                <div {...stylex.props(styles.modelPickerWrap)}>
-                  <ModelPicker
-                    models={models}
-                    modelId={modelId}
-                    targetProviderDid={targetProviderDid}
-                    targetMachineId={targetMachineId}
-                    maxTokensOut={maxTokensOut}
-                    onModel={setModel}
-                    onTarget={setTarget}
-                    onMaxTokens={setMaxTokens}
-                  />
-                </div>
-                <AdvancedOptions
-                  country={country}
-                  proBono={proBono}
-                  onCountry={setCountry}
-                  onProBono={setProBono}
-                />
-                <span {...stylex.props(styles.rateNote)}>
-                  {balance ? `${formatTokensCompact(balance.balance)} tok left · ` : ""}
-                  billed per generated token
-                </span>
-                {streamingId ? (
-                  <Button
-                    variant="critical"
-                    size="sm"
-                    style={styles.composerSend}
-                    onPress={stopStreaming}
-                  >
-                    <Square size={12} fill="currentColor" aria-hidden />
-                    stop
-                  </Button>
-                ) : (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    style={styles.composerSend}
-                    isDisabled={(!draft.trim() && pendingImages.length === 0) || !modelId}
-                    onPress={() => void send()}
-                  >
-                    send <Kbd>⏎</Kbd>
-                  </Button>
-                )}
               </div>
-            </div>
+            </section>
           </div>
-        </section>
-      </div>
+        );
+        return fullscreen ? createPortal(chatShell, document.body) : chatShell;
+      })()}
     </Page.Root>
   );
 }
