@@ -156,11 +156,27 @@ export async function verifiedTierFor(row: AdvisorRow): Promise<VerifiedTier> {
   return row.confidentialEligible === true ? "attested-confidential" : "hardware-attested";
 }
 
-/** Set of provider DIDs whose VERIFIED tier meets `floor` (optionally for a
- *  given model). This is the proof-backed allow-set the verified completions
- *  path routes against — built the same way the friends path builds its set,
- *  but from cryptographic verification instead of friend records. */
-export async function resolveVerifiedProviderDids(
+/** Set of MACHINE keys (`${did}:${machineId}`) whose VERIFIED tier meets
+ *  `floor` (optionally for a given model). This is the proof-backed allow-set
+ *  the verified completions path routes against.
+ *
+ *  MUST be keyed per machine, not per owner DID. Tier is computed per row
+ *  (each row carries its own `attestationUri` + advisor-measured
+ *  `confidentialEligible`), but a DID can hold many machines: a genuinely
+ *  attested Mac and an unattested Linux box under the SAME DID. A DID-scoped
+ *  allow-set lets {@link filterByAllowedDids} widen from the attested machine
+ *  to every sibling under that DID — so an `attested-confidential` request
+ *  routes to the unattested node, which then reads the plaintext prompt and
+ *  serves whatever model it likes. The composite `${did}:${machineId}` key is
+ *  matched by {@link filterByAllowedDids} against the advisor row's
+ *  `(did, machineId)`, exactly like the pro-bono path
+ *  ({@link resolveProBonoProviderKeys}), so standing never leaks across an
+ *  owner's machines.
+ *
+ *  Fail closed: a row that passes the tier check but carries no `machineId`
+ *  can't be bound to a specific machine, so it is dropped rather than added as
+ *  a bare DID (which would re-open the widening hole). */
+export async function resolveVerifiedProviderKeys(
   floor: TrustFloor,
   model?: string,
 ): Promise<Set<string>> {
@@ -168,7 +184,7 @@ export async function resolveVerifiedProviderDids(
   if (!r.ok) throw new Error(`advisor /providers ${r.status}`);
   const rows = (await r.json()) as AdvisorRow[];
   const online = rows.filter((p) => p.attestedAt);
-  const dids = new Set<string>();
+  const keys = new Set<string>();
   await Promise.all(
     online.map(async (row) => {
       if (
@@ -179,9 +195,13 @@ export async function resolveVerifiedProviderDids(
       ) {
         return;
       }
+      // Can't machine-bind a row with no machineId → fail closed (drop it)
+      // rather than fall back to a DID-scoped key that would re-admit the
+      // owner's unattested siblings.
+      if (!row.machineId) return;
       const tier = await verifiedTierFor(row);
-      if (meetsFloor(tier, floor)) dids.add(row.did);
+      if (meetsFloor(tier, floor)) keys.add(`${row.did}:${row.machineId}`);
     }),
   );
-  return dids;
+  return keys;
 }

@@ -106,11 +106,29 @@ describe("filterByAllowedDids", () => {
     assert.deepEqual(out, [m1]);
   });
 
-  test("a bare DID still matches every machine of that owner (friends/verified)", () => {
+  test("a bare DID still matches every machine of that owner (friends path)", () => {
+    // Friends routing is owner-granular by design: a friend vouches for the
+    // person, not a specific box. The verified/confidential path must NOT use
+    // bare DIDs (see the attestation-binding regression below).
     const m1 = { did: "did:plc:alice", machineId: "rkeyA" };
     const m2 = { did: "did:plc:alice", machineId: "rkeyB" };
     const out = filterByAllowedDids([m1, m2], new Set(["did:plc:alice"]));
     assert.deepEqual(out, [m1, m2]);
+  });
+
+  test("attestation binding: confidential standing never widens to an unattested sibling", () => {
+    // The exploit: an attested Mac and an unattested Linux box register under
+    // ONE DID. resolveVerifiedProviderKeys emits a composite key ONLY for the
+    // machine that actually passes the tier check (the Mac). Dispatch must then
+    // route confidential traffic to the Mac alone — the Linux box, which shares
+    // the DID, must be filtered out. A DID-scoped set (the old behavior) would
+    // have admitted BOTH, sending the confidential prompt to the unattested node.
+    const mac = { did: "did:plc:astra", machineId: "mac-rkey" };
+    const linux = { did: "did:plc:astra", machineId: "linux-rkey" };
+    const verifiedKeys = new Set(["did:plc:astra:mac-rkey"]);
+    assert.deepEqual(filterByAllowedDids([mac, linux], verifiedKeys), [mac]);
+    // Regression guard: the old bare-DID form would have leaked to Linux too.
+    assert.deepEqual(filterByAllowedDids([mac, linux], new Set(["did:plc:astra"])), [mac, linux]);
   });
 });
 

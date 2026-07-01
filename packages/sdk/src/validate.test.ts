@@ -4,6 +4,7 @@ import { webcrypto } from "node:crypto";
 
 import { canonicalize } from "./canonical.ts";
 import {
+  verifyForCharge,
   verifyForChargeStrict,
   verifyReceipt,
   verifyReceiptStrict,
@@ -401,6 +402,49 @@ test("verifyReceiptStrict: malformed publicKey surfaces signature-verify-error",
   // which is currently unreachable.
   assert.equal(r.ok, false);
   assert.ok(r.findings.some((f) => f.code === "signature-invalid"));
+});
+
+const chargeCtx = {
+  exchangeDid: "did:web:exchange.example",
+  settledReceipts: new Set<string>(),
+  now: () => new Date("2026-05-07T12:00:01Z"),
+};
+const chargeInputs = (receipt: ReceiptRecord, job: JobRecord) => ({
+  receipt,
+  receiptUri: "at://did:plc:p/receipt/1",
+  job,
+  jobOwnerDid: "did:plc:r",
+  authorization: fixtureAuth(),
+  authorizationUri: { uri: "at://did:plc:r/auth/1", cid: "bafycid" },
+});
+
+test("verifyForCharge: tokens.out over job.maxTokensOut is rejected (drain guard)", () => {
+  // The provider self-reports tokens and derives price from them; without this
+  // gate it could publish a receipt claiming far more output than the requester
+  // authorized (draining/crediting up to the price ceiling for near-zero work).
+  const r = verifyForCharge(
+    chargeCtx,
+    chargeInputs(
+      fixtureReceipt({ tokens: { in: 32, out: 5000 } }),
+      fixtureJob({ maxTokensOut: 256 }),
+    ),
+  );
+  assert.equal(r.ok, false);
+  assert.ok(
+    r.findings.some((f) => f.code === "tokens-over-job-ceiling"),
+    JSON.stringify(r.findings),
+  );
+});
+
+test("verifyForCharge: tokens.out within maxTokensOut passes the token gate", () => {
+  const r = verifyForCharge(
+    chargeCtx,
+    chargeInputs(
+      fixtureReceipt({ tokens: { in: 32, out: 128 } }),
+      fixtureJob({ maxTokensOut: 256 }),
+    ),
+  );
+  assert.equal(r.ok, true, JSON.stringify(r.findings));
 });
 
 test("verifyForChargeStrict: appends a sig check on top of verifyForCharge", async () => {

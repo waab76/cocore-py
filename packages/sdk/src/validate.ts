@@ -307,6 +307,22 @@ export function verifyForCharge(ctx: PreChargeContext, inputs: PreChargeInputs):
       `receipt.price.amount ${receipt.price.amount} > authorization.ceiling ${authorization.ceiling.amount}`,
     );
   }
+  // The provider self-reports `tokens` and derives `price` from them, so an
+  // unenforced token count lets a provider bill the full authorized ceiling
+  // for near-zero real work while publishing an inflated token record. The
+  // job's `maxTokensOut` is the requester-authorized output ceiling (see
+  // dev.cocore.compute.job); a receipt claiming more than that is invalid.
+  // This bounds the token record to what the requester authorized; it does
+  // NOT prove the output is genuine model work — that needs output-commitment
+  // dispute (tracked separately). Pro-bono receipts carry tokens {0,0}, so
+  // they pass trivially.
+  if (receipt.tokens.out > job.maxTokensOut) {
+    err(
+      findings,
+      "tokens-over-job-ceiling",
+      `receipt.tokens.out ${receipt.tokens.out} > job.maxTokensOut ${job.maxTokensOut}`,
+    );
+  }
   checkProBonoInvariant(receipt, findings);
   if (
     job.acceptedExchanges &&

@@ -11,7 +11,7 @@ import { Badge } from "@/design-system/badge";
 export type TrustTier = "best-effort" | "hardware-attested" | "attested-confidential";
 
 const CONFIDENTIAL_TITLE =
-  "Confidential tier — verified from this machine's signed, Apple-rooted attestation: genuine hardware bound to its signing key, a known-good measured build, hardened posture, and live code-attestation. Your prompt is sealed and served inside the measured binary, so the operator has no ordinary way to read it — a hardened-runtime posture, not a hardware enclave.";
+  "Confidential tier — verified from THIS machine's signed, Apple-rooted attestation: genuine hardware bound to its signing key, a known-good measured build, hardened posture, and live code-attestation. Your prompt is served inside the measured binary's in-process engine (no observable subprocess), so the operator has no ordinary path to the plaintext. This is a hardened-runtime posture, not a hardware enclave: the guarantee rests on macOS and the signed-binary supply chain being intact, and a compromised OS, an agent vulnerability, or a maliciously substituted signed build could still expose the prompt.";
 
 const HARDWARE_TITLE =
   "Hardware-attested — verified from this machine's signed, Apple-rooted attestation chain, bound to its signing key. Proven genuine Apple hardware (not a self-asserted claim).";

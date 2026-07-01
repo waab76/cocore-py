@@ -48,7 +48,7 @@ import { verifyServiceAuth } from "@/lib/service-auth.server.ts";
 import { buildModelDirectory } from "@/lib/model-directory.server.ts";
 import {
   parseTrustFloor,
-  resolveVerifiedProviderDids,
+  resolveVerifiedProviderKeys,
   type TrustFloor,
 } from "@/lib/verified-standing.server.ts";
 
@@ -418,7 +418,9 @@ export async function handleVerifiedChatCompletions(request: Request): Promise<R
 
   let allowedProviderDids: Set<string>;
   try {
-    allowedProviderDids = await resolveVerifiedProviderDids(floor, parsed.model);
+    // Machine-scoped `${did}:${machineId}` keys — an owner's unattested
+    // machine never inherits an attested sibling's standing.
+    allowedProviderDids = await resolveVerifiedProviderKeys(floor, parsed.model);
   } catch (e) {
     return jsonError(
       502,
