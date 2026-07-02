@@ -29,7 +29,21 @@ readonly LABEL="dev.cocore.provider"
 # pair + LaunchAgent on the SAME stack the app targets, instead of pairing a
 # PR/dev build against prod. An explicit COCORE_CONSOLE / COCORE_ADVISOR env
 # still wins.
-_baked() { /usr/libexec/PlistBuddy -c "Print :$1" "$STAGE/cocore.app/Contents/Info.plist" 2>/dev/null || true; }
+# CLI-only tarballs ship no cocore.app, and PlistBuddy reports a missing
+# *file* on stdout ("File Doesn't Exist, Will Create: …"), which a bare
+# capture would take as the baked value and sed into the LaunchAgent
+# plist (issue #157). Require the plist to exist and the value to look
+# like a URL before trusting it; otherwise emit nothing so the prod
+# defaults below win.
+_baked() {
+  local plist="$STAGE/cocore.app/Contents/Info.plist" v
+  [[ -f "$plist" ]] || return 0
+  v="$(/usr/libexec/PlistBuddy -c "Print :$1" "$plist" 2>/dev/null)" || return 0
+  case "$v" in
+    http://*|https://*|ws://*|wss://*) printf '%s\n' "$v" ;;
+  esac
+  return 0
+}
 COCORE_CONSOLE="${COCORE_CONSOLE:-$(_baked CocoreConsoleURL)}"
 COCORE_CONSOLE="${COCORE_CONSOLE:-https://console.cocore.dev}"
 COCORE_ADVISOR="${COCORE_ADVISOR:-$(_baked CocoreAdvisorURL)}"
