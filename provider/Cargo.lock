@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "cocore-provider"
-version = "0.9.37"
+version = "0.9.38"
 dependencies = [
  "anyhow",
  "asn1-rs",
