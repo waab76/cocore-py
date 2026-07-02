@@ -17,6 +17,8 @@ import { runTraced } from "@/lib/o11y.server.ts";
 import { appviewListProvidersEffect } from "@/integrations/appview/appview.server.ts";
 import { sessionNeedsReauth } from "@/integrations/auth/atproto.server.ts";
 import { resolveBearerKey } from "@/lib/api-keys.server.ts";
+import { appviewSessionInfo } from "@/lib/appview-backed-session.server.ts";
+import { isAppviewForwardConfigured } from "@/lib/appview-pds-forward.server.ts";
 import { cocoreConfig } from "@/lib/cocore-config.ts";
 import { sumReceiptInSince } from "@/lib/earnings.ts";
 import { getBalance, listEvents } from "@/lib/exchange-balance.server.ts";
@@ -125,13 +127,29 @@ export const Route = createFileRoute("/api/agent/status")({
         const since = Date.now() - 24 * 60 * 60 * 1000;
 
         // "Does the agent need a fresh sign-in?" — a NON-refreshing read of
-        // the stored OAuth session (see sessionNeedsReauth). The old probe
-        // called restore(), which refreshes/rotates the single-use refresh
-        // token on every status poll; because the AppView is the designated
-        // refresher, that parallel rotation was cannibalizing the session it
-        // was meant to monitor and causing the recurring write 401s. This
-        // read only reports re-auth when the session is genuinely gone.
-        const needsReauth = sessionNeedsReauth(did as Did);
+        // the stored OAuth session. The old probe called restore(), which
+        // refreshes/rotates the single-use refresh token on every status poll;
+        // because the AppView is the designated refresher, that parallel
+        // rotation cannibalized the session it was meant to monitor.
+        //
+        // When AppView forwarding is configured, the AUTHORITATIVE session lives
+        // in the AppView (the console hands it off at login and never refreshes
+        // locally — see appview-backed-session.server.ts). The console's LOCAL
+        // store therefore goes stale/empty after handoff, so probing it reports
+        // a FALSE "session expired" even while the agent is actively publishing
+        // (Secure Mode / confidential live prove the session works). So prefer
+        // the AppView's authoritative, non-refreshing session-info and only
+        // report re-auth when it DEFINITIVELY says the session is gone
+        // (`checked && !present`) — never on a transient unreachable-AppView
+        // blip. Fall back to the local probe only in the legacy single-store
+        // deployment where forwarding isn't configured.
+        let needsReauth: boolean;
+        if (isAppviewForwardConfigured()) {
+          const info = await appviewSessionInfo(did);
+          needsReauth = info.checked ? !info.present : false;
+        } else {
+          needsReauth = sessionNeedsReauth(did as Did);
+        }
 
         // All three degrade gracefully so a single backend hiccup yields
         // partial data the menu can still render, not a 500.

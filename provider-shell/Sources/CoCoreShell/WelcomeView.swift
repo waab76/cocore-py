@@ -83,6 +83,14 @@ struct WelcomeView: View {
     }
 
     private var signedIn: Bool { state.session != nil }
+    /// The sign-in STEP needs action when there's no session OR the publish
+    /// session is dead (`needsReauth`). Without the `needsReauth` leg, a stale
+    /// session (`state.session != nil` but its refresh token is gone) rendered
+    /// the step as "Signed in ✓" with no way to re-authenticate — so clicking
+    /// "Sign in again" from the expired-session banner just reopened a wizard
+    /// that claimed you were already signed in. Only this step keys off it; the
+    /// later steps keep using `signedIn` (their own gating is unaffected).
+    private var needsSignIn: Bool { !signedIn || state.needsReauth }
     private var hasModels: Bool { !models.models.isEmpty }
     private var runtimeReady: Bool { venvInstalled }
     private var serving: Bool { state.serving }
@@ -187,11 +195,13 @@ struct WelcomeView: View {
     // MARK: step 1 — sign in
 
     private var stepSignIn: some View {
-        step(1, done: signedIn, active: !signedIn, title: "Sign in",
-             desc: signedIn
-                ? "Signed in as \(state.session?.handle ?? "your identity")."
-                : "Connect your ATProto identity to pair this machine.") {
-            if !signedIn {
+        step(1, done: !needsSignIn, active: needsSignIn, title: "Sign in",
+             desc: needsSignIn
+                ? (signedIn
+                    ? "Your co/core session expired — sign in again to keep publishing receipts."
+                    : "Connect your ATProto identity to pair this machine.")
+                : "Signed in as \(state.session?.handle ?? "your identity").") {
+            if needsSignIn {
                 VStack(alignment: .leading, spacing: 10) {
                     // Three-state so the click registers instantly with an
                     // honest label: idle → "Sign in", then the soft
