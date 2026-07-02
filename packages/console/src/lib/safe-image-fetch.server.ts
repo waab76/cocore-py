@@ -71,8 +71,7 @@ function expandIpv6(input: string): number[] | null {
   } else if (missing < 0) {
     return null;
   }
-  const groups =
-    halves.length === 2 ? [...head, ...Array(missing).fill("0"), ...tail] : head;
+  const groups = halves.length === 2 ? [...head, ...Array(missing).fill("0"), ...tail] : head;
   const out: number[] = [];
   for (const g of groups) {
     if (!/^[0-9a-fA-F]{1,4}$/.test(g)) return null;

@@ -304,20 +304,24 @@ export function validateFrame(raw: unknown): FrameCheck {
       if (!Array.isArray(raw["supported_models"])) {
         return { ok: false, reason: "register: supported_models" };
       }
-      if (!isStr(raw["encryption_pub_key"])) return { ok: false, reason: "register: encryption_pub_key" };
-      if (!isStr(raw["attestation_pub_key"])) return { ok: false, reason: "register: attestation_pub_key" };
+      if (!isStr(raw["encryption_pub_key"]))
+        return { ok: false, reason: "register: encryption_pub_key" };
+      if (!isStr(raw["attestation_pub_key"]))
+        return { ok: false, reason: "register: attestation_pub_key" };
       break;
     }
     case "attestation_response": {
       if (!isStr(raw["nonce"])) return { ok: false, reason: "attestation_response: nonce" };
       // `signature` is fed to bytesToBase64 during verify; require it present
       // and byte-shaped so verify can't throw on undefined.
-      if (!isBytes(raw["signature"])) return { ok: false, reason: "attestation_response: signature" };
+      if (!isBytes(raw["signature"]))
+        return { ok: false, reason: "attestation_response: signature" };
       break;
     }
     case "code_attestation_response": {
       if (!isStr(raw["nonce"])) return { ok: false, reason: "code_attestation_response: nonce" };
-      if (!isBytes(raw["signature"])) return { ok: false, reason: "code_attestation_response: signature" };
+      if (!isBytes(raw["signature"]))
+        return { ok: false, reason: "code_attestation_response: signature" };
       break;
     }
     case "inference_chunk": {
@@ -326,7 +330,8 @@ export function validateFrame(raw: unknown): FrameCheck {
       break;
     }
     case "inference_keepalive": {
-      if (!isStr(raw["session_id"])) return { ok: false, reason: "inference_keepalive: session_id" };
+      if (!isStr(raw["session_id"]))
+        return { ok: false, reason: "inference_keepalive: session_id" };
       break;
     }
     case "inference_complete": {

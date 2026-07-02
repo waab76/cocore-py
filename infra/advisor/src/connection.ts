@@ -24,11 +24,7 @@ import {
   verifyAttestation,
   verifyCodeAttestation,
 } from "./attest.ts";
-import {
-  type DidDocumentResolver,
-  LXM_REGISTER,
-  verifyServiceAuthToken,
-} from "./did-auth.ts";
+import { type DidDocumentResolver, LXM_REGISTER, verifyServiceAuthToken } from "./did-auth.ts";
 import type { AdvisorMessage, AttestationChallenge } from "./protocol.ts";
 import { validateFrame } from "./protocol.ts";
 import { CRASH_LOOP_THRESHOLD, ProviderRegistry } from "./registry.ts";

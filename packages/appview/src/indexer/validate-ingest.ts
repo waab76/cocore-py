@@ -46,7 +46,7 @@ type LexRecordMain = {
  *  are small (a receipt with an inline attestation strong-ref is a few KB);
  *  1 MiB is generous headroom while bounding what a single firehose/bridge
  *  event can push into the store. */
-export const MAX_RECORD_BYTES = 1024 * 1024;
+const MAX_RECORD_BYTES = 1024 * 1024;
 
 /** Collections whose authoritative signer is the record's `provider` field, if
  *  present. For today's lexicons the provider is the repo (no body field), so

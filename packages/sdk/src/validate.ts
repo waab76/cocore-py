@@ -107,7 +107,12 @@ export function verifyReceipt(
   // 64 lowercase hex chars (SHA-256, CLAUDE.md convention). An out-of-shape
   // commitment can never be a genuine digest, so flag it even if it happens to
   // equal the job's (equally malformed) value.
-  checkCommitmentHex(receipt.inputCommitment, "receipt.inputCommitment", "input-commitment-shape", findings);
+  checkCommitmentHex(
+    receipt.inputCommitment,
+    "receipt.inputCommitment",
+    "input-commitment-shape",
+    findings,
+  );
   checkCommitmentHex(
     receipt.outputCommitment,
     "receipt.outputCommitment",
@@ -405,7 +410,12 @@ export function verifyForCharge(ctx: PreChargeContext, inputs: PreChargeInputs):
   if (Date.parse(authorization.expiresAt) <= now.getTime()) {
     err(findings, "auth-expired", `authorization expired at ${authorization.expiresAt}`);
   }
-  checkCommitmentHex(receipt.inputCommitment, "receipt.inputCommitment", "input-commitment-shape", findings);
+  checkCommitmentHex(
+    receipt.inputCommitment,
+    "receipt.inputCommitment",
+    "input-commitment-shape",
+    findings,
+  );
   checkCommitmentHex(
     receipt.outputCommitment,
     "receipt.outputCommitment",

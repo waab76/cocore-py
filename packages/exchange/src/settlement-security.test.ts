@@ -131,7 +131,9 @@ function fixtureJob(overrides: Partial<JobRecord> = {}): JobRecord {
   };
 }
 
-function fixtureAuth(overrides: Partial<PaymentAuthorizationRecord> = {}): PaymentAuthorizationRecord {
+function fixtureAuth(
+  overrides: Partial<PaymentAuthorizationRecord> = {},
+): PaymentAuthorizationRecord {
   return {
     exchange: EX_DID,
     ceiling: { amount: 100, currency: "CC" },
@@ -239,14 +241,27 @@ function baseRecords(
   authOwner: string = REQUESTER_DID,
 ): Map<string, IndexedRecord> {
   return new Map<string, IndexedRecord>([
-    [`at://${REQUESTER_DID}/job/1`, indexed(`at://${REQUESTER_DID}/job/1`, REQUESTER_DID, "dev.cocore.compute.job", job)],
+    [
+      `at://${REQUESTER_DID}/job/1`,
+      indexed(`at://${REQUESTER_DID}/job/1`, REQUESTER_DID, "dev.cocore.compute.job", job),
+    ],
     [
       job.paymentAuthorization.uri,
-      indexed(job.paymentAuthorization.uri, authOwner, "dev.cocore.compute.paymentAuthorization", auth),
+      indexed(
+        job.paymentAuthorization.uri,
+        authOwner,
+        "dev.cocore.compute.paymentAuthorization",
+        auth,
+      ),
     ],
     [
       `at://${PROVIDER_DID}/attest/1`,
-      indexed(`at://${PROVIDER_DID}/attest/1`, PROVIDER_DID, "dev.cocore.compute.attestation", attestation),
+      indexed(
+        `at://${PROVIDER_DID}/attest/1`,
+        PROVIDER_DID,
+        "dev.cocore.compute.attestation",
+        attestation,
+      ),
     ],
   ]);
 }

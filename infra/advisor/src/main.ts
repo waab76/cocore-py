@@ -542,7 +542,7 @@ async function main(): Promise<void> {
   };
 
   wss.on("connection", (socket, req) => {
-    const ip = perIpEnabled ? clientIpOf(req) : req.socket.remoteAddress ?? "?";
+    const ip = perIpEnabled ? clientIpOf(req) : (req.socket.remoteAddress ?? "?");
     const ipCount = perIp.get(ip) ?? 0;
     const overIp = perIpEnabled && ipCount >= WS_MAX_CONNECTIONS_PER_IP;
     if (openConnections >= WS_MAX_CONNECTIONS || overIp) {

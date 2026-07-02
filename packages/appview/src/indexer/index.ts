@@ -62,9 +62,7 @@ export class Indexer {
     if (!isCocoreCollection(ev.collection)) return false;
     const check = validateIngest(ev.collection, ev.repo, ev.record);
     if (!check.ok) {
-      console.error(
-        `indexer: dropped ${ev.collection} ${ev.uri} from ${ev.repo}: ${check.reason}`,
-      );
+      console.error(`indexer: dropped ${ev.collection} ${ev.uri} from ${ev.repo}: ${check.reason}`);
       return false;
     }
     this.store.upsert({

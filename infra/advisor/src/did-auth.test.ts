@@ -9,11 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { P256PrivateKeyExportable } from "@atcute/crypto";
 
-import {
-  type DidDocumentResolver,
-  LXM_REGISTER,
-  verifyServiceAuthToken,
-} from "./did-auth.ts";
+import { type DidDocumentResolver, LXM_REGISTER, verifyServiceAuthToken } from "./did-auth.ts";
 
 const AUDIENCE = "did:web:advisor.cocore.dev";
 
@@ -56,7 +52,9 @@ function stubResolver(did: string, multikey: string): DidDocumentResolver {
 }
 
 async function setup(did: string): Promise<{
-  jwt: (claims?: Partial<{ aud: string; lxm: string; exp: number; nbf: number }>) => Promise<string>;
+  jwt: (
+    claims?: Partial<{ aud: string; lxm: string; exp: number; nbf: number }>,
+  ) => Promise<string>;
   resolver: DidDocumentResolver;
 }> {
   const key = await P256PrivateKeyExportable.createKeypair();
@@ -64,8 +62,7 @@ async function setup(did: string): Promise<{
   const resolver = stubResolver(did, multikey);
   return {
     resolver,
-    jwt: (claims = {}) =>
-      mintJwt(key, { iss: did, aud: AUDIENCE, lxm: LXM_REGISTER, ...claims }),
+    jwt: (claims = {}) => mintJwt(key, { iss: did, aud: AUDIENCE, lxm: LXM_REGISTER, ...claims }),
   };
 }
 
@@ -125,11 +122,14 @@ describe("verifyServiceAuthToken", () => {
   it("rejects an expired JWT", async () => {
     const did = "did:plc:provider1";
     const { jwt, resolver } = await setup(did);
-    const res = await verifyServiceAuthToken(await jwt({ exp: Math.floor(Date.now() / 1000) - 300 }), {
-      audience: AUDIENCE,
-      lxm: LXM_REGISTER,
-      resolver,
-    });
+    const res = await verifyServiceAuthToken(
+      await jwt({ exp: Math.floor(Date.now() / 1000) - 300 }),
+      {
+        audience: AUDIENCE,
+        lxm: LXM_REGISTER,
+        resolver,
+      },
+    );
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe("JwtExpired");
   });

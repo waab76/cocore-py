@@ -173,8 +173,7 @@ function legacyAttestationBody(signed: Record<string, unknown>): Record<string, 
 
 // The order n of the P-256 (secp256r1) curve, and n/2 (the low-S ceiling).
 // A signature's s-component must satisfy s <= n/2 to be in canonical low-S form.
-const P256_N =
-  0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
+const P256_N = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
 const P256_HALF_N = P256_N >> 1n;
 
 /** True iff the 32-byte big-endian s-component is above n/2 (high-S). */

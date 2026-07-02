@@ -5,7 +5,7 @@
 //         inject chunks for it.
 
 import { createServer, type Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { P256PrivateKeyExportable } from "@atcute/crypto";

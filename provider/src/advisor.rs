@@ -202,10 +202,7 @@ impl AdvisorClient {
         // rejected, and we'd rather send an unsigned frame than crash the serve
         // loop over a transient PDS / console-proxy blip.
         let advisor_did = advisor_did();
-        match pds
-            .mint_service_auth(&advisor_did, REGISTER_LXM)
-            .await
-        {
+        match pds.mint_service_auth(&advisor_did, REGISTER_LXM).await {
             Ok(jwt) => register.auth_jwt = Some(jwt),
             Err(e) => {
                 tracing::warn!(

@@ -52,7 +52,10 @@ describe("isBlockedAddress", () => {
 
 describe("assertPublicUrl", () => {
   test("rejects non-http(s) schemes", async () => {
-    await assert.rejects(() => assertPublicUrl("file:///etc/passwd", publicDns), UnsafeImageUrlError);
+    await assert.rejects(
+      () => assertPublicUrl("file:///etc/passwd", publicDns),
+      UnsafeImageUrlError,
+    );
     await assert.rejects(() => assertPublicUrl("ftp://host/x", publicDns), UnsafeImageUrlError);
     await assert.rejects(
       () => assertPublicUrl("data:image/png;base64,AAAA", publicDns),
@@ -61,7 +64,10 @@ describe("assertPublicUrl", () => {
   });
 
   test("rejects a literal loopback IP URL", async () => {
-    await assert.rejects(() => assertPublicUrl("http://127.0.0.1/x", publicDns), UnsafeImageUrlError);
+    await assert.rejects(
+      () => assertPublicUrl("http://127.0.0.1/x", publicDns),
+      UnsafeImageUrlError,
+    );
   });
 
   test("rejects the cloud metadata IP", async () => {
@@ -72,7 +78,10 @@ describe("assertPublicUrl", () => {
   });
 
   test("rejects a literal private IP URL", async () => {
-    await assert.rejects(() => assertPublicUrl("http://10.0.0.5/x", publicDns), UnsafeImageUrlError);
+    await assert.rejects(
+      () => assertPublicUrl("http://10.0.0.5/x", publicDns),
+      UnsafeImageUrlError,
+    );
   });
 
   test("rejects an IPv6 loopback literal URL", async () => {

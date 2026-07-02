@@ -201,7 +201,10 @@ async fn fetch_expected_sha256(console: &str, tag: &str, asset: &str) -> Result<
         .await
         .with_context(|| format!("GET {url}"))?;
     if !resp.status().is_success() {
-        bail!("GET {url} returned {} (cannot verify the download)", resp.status());
+        bail!(
+            "GET {url} returned {} (cannot verify the download)",
+            resp.status()
+        );
     }
     let body = resp.text().await.context("read SHA256SUMS response")?;
     parse_sha256sums(&body, asset)
@@ -340,7 +343,8 @@ dddd333333333333333333333333333333333333333333333333333333333333  cocore.app/Con
 ";
         let got = parse_sha256sums(sums, "cocore-mac-arm64.tar.gz").unwrap();
         assert_eq!(
-            got, "bbbb111111111111111111111111111111111111111111111111111111111111"
+            got,
+            "bbbb111111111111111111111111111111111111111111111111111111111111"
         );
     }
 
@@ -353,7 +357,10 @@ dddd333333333333333333333333333333333333333333333333333333333333  cocore.app/Con
     #[test]
     fn tolerates_binary_mode_star_prefix_and_any_whitespace() {
         let sums = "  abc123\t*cocore-mac-arm64.tar.gz  \n";
-        assert_eq!(parse_sha256sums(sums, "cocore-mac-arm64.tar.gz").unwrap(), "abc123");
+        assert_eq!(
+            parse_sha256sums(sums, "cocore-mac-arm64.tar.gz").unwrap(),
+            "abc123"
+        );
     }
 
     #[test]

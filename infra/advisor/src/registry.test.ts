@@ -121,16 +121,16 @@ describe("ProviderRegistry", () => {
 
   it("refuses NEW registrations over the size cap but allows a re-register (M1)", () => {
     const r = new ProviderRegistry(new KnownGoodSet(), 2);
-    expect(r.upsert({ ...baseReg, provider_did: "did:plc:a" }, noop, noopSend, noopPing, 1000)).not.toBe(
-      false,
-    );
-    expect(r.upsert({ ...baseReg, provider_did: "did:plc:b" }, noop, noopSend, noopPing, 1000)).not.toBe(
-      false,
-    );
+    expect(
+      r.upsert({ ...baseReg, provider_did: "did:plc:a" }, noop, noopSend, noopPing, 1000),
+    ).not.toBe(false);
+    expect(
+      r.upsert({ ...baseReg, provider_did: "did:plc:b" }, noop, noopSend, noopPing, 1000),
+    ).not.toBe(false);
     // At capacity → a NEW machine is refused.
-    expect(r.upsert({ ...baseReg, provider_did: "did:plc:c" }, noop, noopSend, noopPing, 1000)).toBe(
-      false,
-    );
+    expect(
+      r.upsert({ ...baseReg, provider_did: "did:plc:c" }, noop, noopSend, noopPing, 1000),
+    ).toBe(false);
     expect(r.size()).toBe(2);
     // A re-register of an ALREADY-present machine is fine (it replaces).
     expect(
