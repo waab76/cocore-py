@@ -19,6 +19,8 @@
 //     leak; the specifics are logged server-side).
 
 import { lookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 
 /** Thrown when a URL is rejected by the SSRF guard, or the fetch fails.
@@ -43,7 +45,7 @@ function parseIpv4(host: string): [number, number, number, number] | null {
 /** True when an IPv4 address falls in a loopback / private / link-local /
  *  reserved / CGNAT range we must never let user input reach. */
 function isBlockedIpv4(octets: [number, number, number, number]): boolean {
-  const [a, b] = octets;
+  const [a, b, c] = octets;
   if (a === 0) return true; // 0.0.0.0/8 "this network"
   if (a === 127) return true; // loopback 127.0.0.0/8
   if (a === 10) return true; // private 10.0.0.0/8
@@ -51,7 +53,12 @@ function isBlockedIpv4(octets: [number, number, number, number]): boolean {
   if (a === 192 && b === 168) return true; // private 192.168.0.0/16
   if (a === 169 && b === 254) return true; // link-local 169.254.0.0/16 (incl. metadata)
   if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
-  if (a >= 224) return true; // multicast (224/4) + reserved (240/4)
+  if (a === 192 && b === 0 && c === 0) return true; // IETF protocol assignments 192.0.0.0/24
+  if (a === 192 && b === 0 && c === 2) return true; // TEST-NET-1 192.0.2.0/24
+  if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking 198.18.0.0/15
+  if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2 198.51.100.0/24
+  if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3 203.0.113.0/24
+  if (a >= 224) return true; // multicast (224/4) + reserved (240/4) + 255.255.255.255
   return false;
 }
 
@@ -84,8 +91,7 @@ function expandIpv6(input: string): number[] | null {
  *  (fe80::/10), unique-local (fc00::/7), or an IPv4-mapped/compat address
  *  whose embedded IPv4 is itself blocked. */
 function isBlockedIpv6(input: string): boolean {
-  // IPv4-mapped / -compatible: ::ffff:1.2.3.4 or ::1.2.3.4 — classify by
-  // the embedded IPv4 so an attacker can't tunnel a private v4 through v6.
+  // IPv4-mapped / -compatible in DOTTED form: ::ffff:1.2.3.4 or ::1.2.3.4.
   const mapped = /^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(input.split("%")[0]!);
   if (mapped) {
     const v4 = parseIpv4(mapped[1]!);
@@ -93,6 +99,39 @@ function isBlockedIpv6(input: string): boolean {
   }
   const groups = expandIpv6(input);
   if (!groups) return true; // unparseable → refuse
+
+  // CRITICAL: `new URL()` normalizes an IPv4-mapped literal to its HEX form
+  // (`::ffff:169.254.169.254` → `::ffff:a9fe:a9fe`), which the dotted regex
+  // above never sees. Reclassify any embedded-IPv4 form by the embedded v4 so
+  // `http://[::ffff:169.254.169.254]/` (metadata), `[::ffff:7f00:1]` (loopback),
+  // etc. are blocked. Covers: ::ffff:/96 (mapped), ::/96 (compat, incl. :: and
+  // ::1 which resolve to 0.0.0.0 / 0.0.0.1 — both already blocked), 2002::/16
+  // (6to4), and 64:ff9b::/96 (NAT64 well-known prefix).
+  const asV4 = (hi: number, lo: number): [number, number, number, number] => [
+    (hi >> 8) & 0xff,
+    hi & 0xff,
+    (lo >> 8) & 0xff,
+    lo & 0xff,
+  ];
+  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0) {
+    // ::/80 prefix — mapped (g5 === 0xffff) or IPv4-compatible (g5 === 0).
+    if (g5 === 0xffff || g5 === 0) return isBlockedIpv4(asV4(g6, g7));
+  }
+  if (g0 === 0x2002) return isBlockedIpv4(asV4(g1, g2)); // 6to4: v4 in groups 1..2
+  if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
+    return isBlockedIpv4(asV4(g6, g7)); // NAT64 64:ff9b::/96
+  }
+
   if (groups.every((g) => g === 0)) return true; // :: unspecified
   if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) return true; // ::1 loopback
   const first = groups[0]!;
@@ -186,7 +225,6 @@ export async function safeFetchImage(
   rawUrl: string,
   opts: SafeFetchOptions,
 ): Promise<SafeFetchedImage> {
-  const doFetch = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   let vetted: Awaited<ReturnType<typeof assertPublicUrl>>;
@@ -197,33 +235,101 @@ export async function safeFetchImage(
     throw new UnsafeImageUrlError();
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await doFetch(vetted.url.toString(), {
-      signal: controller.signal,
-      redirect: "error", // a redirect could bounce us to an internal host
-    });
-    if (!res.ok) {
-      console.error(`[safe-image-fetch] upstream ${res.status} for ${vetted.url.hostname}`);
-      throw new UnsafeImageUrlError();
+    // Injected fetch (tests): keep the fetch-based path. Connection pinning is
+    // a production-only concern — tests exercise the IP/DNS logic via a stub.
+    if (opts.fetchImpl) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await opts.fetchImpl(vetted.url.toString(), {
+          signal: controller.signal,
+          redirect: "error",
+        });
+        if (!res.ok) throw new UnsafeImageUrlError();
+        const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || "";
+        if (!mime.startsWith("image/")) throw new UnsafeImageUrlError();
+        const buf = new Uint8Array(await res.arrayBuffer());
+        if (buf.byteLength > opts.maxBytes) throw new UnsafeImageUrlError();
+        return { bytes: buf, mime };
+      } finally {
+        clearTimeout(timer);
+      }
     }
-    const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || "";
-    if (!mime.startsWith("image/")) {
-      console.error(`[safe-image-fetch] non-image content-type ${mime} for ${vetted.url.hostname}`);
-      throw new UnsafeImageUrlError();
-    }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.byteLength > opts.maxBytes) {
-      console.error(`[safe-image-fetch] response exceeds ${opts.maxBytes} bytes`);
-      throw new UnsafeImageUrlError();
-    }
-    return { bytes: buf, mime };
+    // Production path: PIN the socket to the vetted address so a DNS rebind
+    // between assertPublicUrl and the connect can't reach an internal host, and
+    // STREAM with a hard byte cap (no full-body buffering → no memory DoS).
+    return await pinnedImageFetch(vetted.url, vetted.pinnedAddress, opts.maxBytes, timeoutMs);
   } catch (e) {
     if (e instanceof UnsafeImageUrlError) throw e;
     console.error(`[safe-image-fetch] fetch failed: ${(e as Error).message}`);
     throw new UnsafeImageUrlError();
-  } finally {
-    clearTimeout(timer);
   }
+}
+
+/** GET an already-vetted image URL with the TCP connection pinned to
+ *  `pinnedAddress` (via the `lookup` override, so `assertPublicUrl`'s DNS
+ *  decision is the one that's honored — TLS SNI / Host / cert stay bound to the
+ *  URL's real hostname). Streams the body and aborts past `maxBytes`. Node's
+ *  `request` does NOT follow redirects, so a 3xx is rejected rather than
+ *  chased to an internal host. Rejects with `UnsafeImageUrlError` on anything. */
+function pinnedImageFetch(
+  url: URL,
+  pinnedAddress: string,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<SafeFetchedImage> {
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const family = isIP(pinnedAddress) || 4;
+  return new Promise<SafeFetchedImage>((resolve, reject) => {
+    const fail = (why: string): void => {
+      console.error(`[safe-image-fetch] ${why} for ${url.hostname}`);
+      reject(new UnsafeImageUrlError());
+    };
+    const req = request(
+      url,
+      {
+        method: "GET",
+        headers: { accept: "image/*" },
+        timeout: timeoutMs,
+        // Force the connection to the vetted IP; SNI/Host/cert remain the
+        // hostname so TLS still validates against the real host.
+        lookup: (_host, _opts, cb) =>
+          (cb as (e: Error | null, a: string, f: number) => void)(null, pinnedAddress, family),
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          res.resume();
+          return fail(`upstream ${status}`);
+        }
+        const mime = (res.headers["content-type"] ?? "").split(";")[0]!.trim();
+        if (!mime.startsWith("image/")) {
+          res.resume();
+          return fail(`non-image content-type ${mime}`);
+        }
+        const declared = Number(res.headers["content-length"]);
+        if (Number.isFinite(declared) && declared > maxBytes) {
+          res.destroy();
+          return fail(`content-length ${declared} exceeds ${maxBytes}`);
+        }
+        const chunks: Buffer[] = [];
+        let total = 0;
+        res.on("data", (chunk: Buffer) => {
+          total += chunk.length;
+          if (total > maxBytes) {
+            res.destroy();
+            fail(`response exceeds ${maxBytes} bytes`);
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () => resolve({ bytes: new Uint8Array(Buffer.concat(chunks)), mime }));
+        res.on("error", (e) => fail(`response error ${e.message}`));
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", (e) => fail(`request error ${e.message}`));
+    req.end();
+  });
 }

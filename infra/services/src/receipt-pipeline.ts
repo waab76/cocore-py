@@ -471,11 +471,24 @@ export function createReceiptPipeline(opts: ReceiptPipelineOptions): ReceiptPipe
   }
 
   function attach(): () => void {
+    // Defense-in-depth: a single malformed record must never take down the
+    // firehose subscription. `processReceipt`/`onAnyRecord` are expected to
+    // return an outcome, not throw — but an unvalidated field slipping into the
+    // settlement store (e.g. a CHECK violation) would otherwise surface as an
+    // unhandled rejection here. Log and continue.
     const unsubReceipt = opts.firehose.onReceipt(async (rec: IndexedRecord) => {
-      await processReceipt(rec, false);
+      try {
+        await processReceipt(rec, false);
+      } catch (e) {
+        console.error(`[receipt-pipeline] processReceipt threw for ${rec.uri}: ${String(e)}`);
+      }
     });
     const unsubAll = opts.firehose.on(null, async (rec: IndexedRecord) => {
-      await onAnyRecord(rec);
+      try {
+        await onAnyRecord(rec);
+      } catch (e) {
+        console.error(`[receipt-pipeline] onAnyRecord threw for ${rec.uri}: ${String(e)}`);
+      }
     });
     return () => {
       unsubReceipt();

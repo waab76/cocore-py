@@ -410,6 +410,34 @@ export function verifyForCharge(ctx: PreChargeContext, inputs: PreChargeInputs):
   if (Date.parse(authorization.expiresAt) <= now.getTime()) {
     err(findings, "auth-expired", `authorization expired at ${authorization.expiresAt}`);
   }
+  // H3: price + token counts must be non-negative integers. These flow from an
+  // untrusted, provider-published receipt into the exchange's integer ledger and
+  // the settlement store's `CHECK (total_charged >= 0)`. A negative price
+  // refunds/over-spends a session budget and can throw inside the (uncaught)
+  // firehose receipt handler (DoS); a fractional value corrupts accounting.
+  // The type says `number`, but the value is parsed JSON — validate at runtime.
+  for (const [label, v] of [
+    ["price.amount", receipt.price.amount],
+    ["tokens.in", receipt.tokens.in],
+    ["tokens.out", receipt.tokens.out],
+  ] as const) {
+    if (!Number.isInteger(v) || v < 0) {
+      err(
+        findings,
+        "non-negative-integer",
+        `receipt.${label} must be a non-negative integer (got ${String(v)})`,
+      );
+    }
+  }
+  // H4: authorization.scope must be a KNOWN value. The type is the
+  // `singleJob|session` union, but the record is untrusted JSON — an unknown
+  // scope (e.g. "unlimited") makes the exchange derive singleUse=false AND pass
+  // no sessionBudget, silently disabling both single-use consumption and the
+  // cumulative cap → an uncapped, replayable spend token. Fail closed.
+  const scope: string = authorization.scope;
+  if (scope !== "singleJob" && scope !== "session") {
+    err(findings, "unknown-scope", `authorization.scope "${scope}" is not singleJob|session`);
+  }
   checkCommitmentHex(
     receipt.inputCommitment,
     "receipt.inputCommitment",

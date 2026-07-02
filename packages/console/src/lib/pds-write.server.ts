@@ -490,6 +490,24 @@ export async function pdsGetServiceAuth(request: Request): Promise<Response> {
   const aud = raw.aud;
   const lxm = raw.lxm;
 
+  // SECURITY (H1): this endpoint mints a service-auth JWT signed by the caller's
+  // repo key. Without a scope restriction, any holder of a (namespace-scoped)
+  // cocore API key could mint a token for an ARBITRARY `aud`/`lxm` — turning the
+  // key into a general "act as this DID against any AT-Proto service" oracle
+  // (confused deputy). Restrict `lxm` to the cocore namespace: an external
+  // service won't honor a `dev.cocore.*` lxm, so a minted token is useless
+  // outside cocore, and within cocore it only asserts the caller's own DID for
+  // methods it is already entitled to use. Optionally pin `aud` to the
+  // configured advisor DID (the only `aud` the provider legitimately needs)
+  // as defense-in-depth when it is set.
+  if (!lxm.startsWith("dev.cocore.")) {
+    return jsonError(403, "lxm must be a dev.cocore.* method");
+  }
+  const advisorDid = process.env["COCORE_ADVISOR_DID"];
+  if (advisorDid && aud !== advisorDid) {
+    return jsonError(403, "aud not permitted");
+  }
+
   const session = await restoreSessionOr401(did);
   if (session instanceof Response) return session;
   const qs = new URLSearchParams({ aud, lxm }).toString();

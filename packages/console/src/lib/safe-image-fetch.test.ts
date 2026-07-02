@@ -88,6 +88,28 @@ describe("assertPublicUrl", () => {
     await assert.rejects(() => assertPublicUrl("http://[::1]/x", publicDns), UnsafeImageUrlError);
   });
 
+  test("rejects IPv4-mapped IPv6 that URL-normalizes to hex form (metadata/loopback/private)", async () => {
+    // `new URL()` rewrites ::ffff:169.254.169.254 to ::ffff:a9fe:a9fe, which the
+    // old dotted-quad-only check missed — a live bypass to cloud metadata.
+    for (const u of [
+      "http://[::ffff:169.254.169.254]/latest/meta-data/",
+      "http://[::ffff:127.0.0.1]/x",
+      "http://[::ffff:10.0.0.1]/x",
+    ]) {
+      await assert.rejects(() => assertPublicUrl(u, publicDns), UnsafeImageUrlError, u);
+    }
+  });
+
+  test("rejects newly-covered reserved IPv4 ranges", async () => {
+    for (const ip of ["198.18.0.1", "192.0.0.192", "192.0.2.5", "198.51.100.9", "203.0.113.7"]) {
+      await assert.rejects(
+        () => assertPublicUrl(`http://${ip}/x`, publicDns),
+        UnsafeImageUrlError,
+        ip,
+      );
+    }
+  });
+
   test("rejects a hostname that resolves to a private IP (DNS rebinding)", async () => {
     const rebindDns = async (_host: string) => ["10.0.0.5"];
     await assert.rejects(
