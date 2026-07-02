@@ -61,12 +61,13 @@ interface AdvisorRow {
 // fails (self-signature, the Apple MDA chain, or its binding to the signing
 // key). If NONE are present, genuine-Apple-hardware-bound-to-the-signing-key
 // holds — i.e. at least hardware-attested.
-const HARDWARE_BLOCKER_CODES = new Set([
+export const HARDWARE_BLOCKER_CODES = new Set([
   "attestation-signature-invalid",
   "mda-invalid",
   "mda-unbound",
   "mda-no-binding-material",
   "no-hardware-attestation",
+  "no-mda-chain",
 ]);
 
 // offline proof (hardware-attested?) keyed by attestation CID — immutable.
