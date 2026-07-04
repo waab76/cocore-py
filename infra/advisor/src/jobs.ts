@@ -31,6 +31,7 @@ import { err } from "@cocore/o11y/http";
 
 import { dispatchOutcome } from "./metrics.ts";
 import type { AdvisorMessage, InferenceRequest } from "./protocol.ts";
+import { supportsToolCallsFor } from "./registry.ts";
 import type { ProviderEntry, ProviderRegistry } from "./registry.ts";
 import type { SseResponse } from "./sessions.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -283,6 +284,14 @@ async function selectProvider(
 
   const preflightTimeoutMs = ctx.preflightTimeoutMs ?? 1500;
 
+  // A job carrying `tools` may only be routed to a machine with VERIFIED
+  // tool-call support for its model (the engine passed the forced-tool
+  // startup canary). Without this filter a tools request that clears the
+  // console's "some provider supports tool calling" preflight can still land
+  // on a sibling machine serving the same model WITHOUT tool calling enabled,
+  // whose vLLM then rejects the request mid-stream.
+  const wantsToolCalls = Array.isArray(job.tools) && job.tools.length > 0;
+
   // Build the candidate list. A pinned `targetProviderDid` restricts
   // dispatch to that owner's machines (optionally a single machine via
   // `targetMachineId`); otherwise we get the whole eligible list, best-first.
@@ -319,15 +328,23 @@ async function selectProvider(
       if (job.minProviderVersion && !meetsMinVersion(m.binaryVersion, job.minProviderVersion)) {
         return false;
       }
+      // Tools in the request → the machine must have passed the forced-tool
+      // canary for this model. Pinning a provider doesn't buy a pass: the
+      // engine would reject the request anyway, so fail fast with the reason.
+      if (wantsToolCalls && !supportsToolCallsFor(m, job.model || undefined)) {
+        return false;
+      }
       return true;
     });
     if (eligible.length === 0) {
       return {
         kind: "error",
         status: 503,
-        error: job.minProviderVersion
-          ? `provider ${job.targetProviderDid} has no machine at version >= ${job.minProviderVersion} available`
-          : `provider ${job.targetProviderDid} has no attested, healthy machine available`,
+        error: wantsToolCalls
+          ? `provider ${job.targetProviderDid} has no machine with verified tool-calling for this model available`
+          : job.minProviderVersion
+            ? `provider ${job.targetProviderDid} has no machine at version >= ${job.minProviderVersion} available`
+            : `provider ${job.targetProviderDid} has no attested, healthy machine available`,
       };
     }
     eligible.sort((a, b) => b.lastSeen - a.lastSeen);
@@ -339,14 +356,17 @@ async function selectProvider(
       ctx.attestationMaxAgeMs,
       Date.now(),
       job.minProviderVersion ?? null,
+      wantsToolCalls,
     );
     if (candidates.length === 0) {
       return {
         kind: "error",
         status: 503,
-        error: job.minProviderVersion
-          ? `no attested providers at version >= ${job.minProviderVersion} available`
-          : "no attested providers available",
+        error: wantsToolCalls
+          ? "no attested providers with verified tool-calling for this model available"
+          : job.minProviderVersion
+            ? `no attested providers at version >= ${job.minProviderVersion} available`
+            : "no attested providers available",
       };
     }
   }

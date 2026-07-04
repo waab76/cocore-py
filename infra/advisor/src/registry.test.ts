@@ -614,4 +614,84 @@ describe("ProviderRegistry", () => {
       expect(r.get(DID, MID)?.active).toBe(true);
     });
   });
+
+  describe("pickCandidates tool-call filter (requireToolCalls)", () => {
+    // Three machines all serving the same model: one with the model in its
+    // canary-passed set, one that opted out (empty set semantics via a set
+    // that lists a DIFFERENT model), and a legacy machine reporting only the
+    // coarse boolean.
+    const setup = () => {
+      const r = new ProviderRegistry();
+      r.upsert(
+        {
+          ...baseReg,
+          provider_did: "did:plc:verified",
+          tool_call_models: ["llama-3.2"],
+          supports_tool_calls: true,
+        },
+        noop,
+        noopSend,
+        noopPing,
+        1000,
+      );
+      r.upsert(
+        {
+          ...baseReg,
+          provider_did: "did:plc:other-model",
+          supported_models: ["llama-3.2", "qwen-x"],
+          tool_call_models: ["qwen-x"],
+          supports_tool_calls: true,
+        },
+        noop,
+        noopSend,
+        noopPing,
+        1000,
+      );
+      r.upsert(
+        { ...baseReg, provider_did: "did:plc:legacy-bool", supports_tool_calls: true },
+        noop,
+        noopSend,
+        noopPing,
+        1000,
+      );
+      r.upsert({ ...baseReg, provider_did: "did:plc:no-tools" }, noop, noopSend, noopPing, 1000);
+      for (const did of [
+        "did:plc:verified",
+        "did:plc:other-model",
+        "did:plc:legacy-bool",
+        "did:plc:no-tools",
+      ]) {
+        r.markAttested(did, MID, 1100);
+      }
+      return r;
+    };
+
+    it("without the flag, tool capability is ignored (back-compat)", () => {
+      const r = setup();
+      expect(r.pickCandidates("llama-3.2").length).toBe(4);
+    });
+
+    it("with the flag, only machines canary-verified FOR THIS MODEL survive (plus legacy boolean)", () => {
+      const r = setup();
+      const picked = r
+        .pickCandidates("llama-3.2", true, Number.POSITIVE_INFINITY, 2000, null, true)
+        .map((e) => e.did)
+        .sort();
+      // `verified` lists the model; `legacy-bool` predates per-model
+      // reporting so its coarse boolean is honored; `other-model` verified a
+      // different model and `no-tools` never opted in — both excluded.
+      expect(picked).toEqual(["did:plc:legacy-bool", "did:plc:verified"]);
+    });
+
+    it("returns empty when no connected machine can serve tools for the model", () => {
+      const r = setup();
+      // qwen-x is served tool-capably only by `other-model`… but ask for a
+      // model nobody verified.
+      r.setActive("did:plc:legacy-bool", MID, false);
+      r.setActive("did:plc:verified", MID, false);
+      expect(
+        r.pickCandidates("llama-3.2", true, Number.POSITIVE_INFINITY, 2000, null, true),
+      ).toEqual([]);
+    });
+  });
 });
