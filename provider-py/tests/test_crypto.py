@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import base64
 
+from cocore.seal import open_from_provider, seal_to_provider
 from nacl.public import PrivateKey
 
-from cocore.seal import open_from_provider, seal_to_provider
 from cocore_provider.crypto import open_from_requester, seal_to_requester
 
 
