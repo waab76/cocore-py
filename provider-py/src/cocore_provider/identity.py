@@ -10,12 +10,19 @@ import base64
 import json
 import os
 import stat
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from nacl.public import PrivateKey
+
+
+class IdentityError(RuntimeError):
+    """Raised when identity file is corrupted or cannot be loaded."""
+
+    pass
 
 
 @dataclass
@@ -36,13 +43,18 @@ class Identity:
 
 def load_or_create(path: Path) -> Identity:
     if path.exists():
-        data = json.loads(path.read_text())
-        signing_key = serialization.load_pem_private_key(
-            data["signing_priv_pem"].encode("ascii"), password=None
-        )
-        assert isinstance(signing_key, ec.EllipticCurvePrivateKey)
-        encryption_key = PrivateKey(base64.b64decode(data["encryption_priv_b64"]))
-        return Identity(signing_key=signing_key, encryption_key=encryption_key)
+        try:
+            data = json.loads(path.read_text())
+            signing_key = serialization.load_pem_private_key(
+                data["signing_priv_pem"].encode("ascii"), password=None
+            )
+            assert isinstance(signing_key, ec.EllipticCurvePrivateKey)
+            encryption_key = PrivateKey(base64.b64decode(data["encryption_priv_b64"]))
+            return Identity(signing_key=signing_key, encryption_key=encryption_key)
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
+            raise IdentityError(
+                f"Identity file corrupted at {path}: {type(e).__name__}: {e}"
+            ) from e
 
     signing_key = ec.generate_private_key(ec.SECP256R1())
     encryption_key = PrivateKey.generate()
@@ -58,6 +70,19 @@ def load_or_create(path: Path) -> Identity:
         "signing_priv_pem": priv_pem,
         "encryption_priv_b64": base64.b64encode(bytes(encryption_key)).decode("ascii"),
     }
-    path.write_text(json.dumps(payload))
+
+    # Write atomically to avoid corruption if process is killed mid-write
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=path.parent, delete=False, suffix=".tmp"
+    ) as tmp_file:
+        tmp_path = Path(tmp_file.name)
+        json.dump(payload, tmp_file)
+
+    try:
+        os.replace(tmp_path, path)
+    except Exception as e:
+        tmp_path.unlink(missing_ok=True)
+        raise IdentityError(f"Failed to write identity file to {path}: {e}") from e
+
     os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
     return identity
