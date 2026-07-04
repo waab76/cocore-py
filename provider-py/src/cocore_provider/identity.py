@@ -48,7 +48,8 @@ def load_or_create(path: Path) -> Identity:
             signing_key = serialization.load_pem_private_key(
                 data["signing_priv_pem"].encode("ascii"), password=None
             )
-            assert isinstance(signing_key, ec.EllipticCurvePrivateKey)
+            if not isinstance(signing_key, ec.EllipticCurvePrivateKey):
+                raise IdentityError(f"identity file {path} contains a non-EC signing key")
             encryption_key = PrivateKey(base64.b64decode(data["encryption_priv_b64"]))
             return Identity(signing_key=signing_key, encryption_key=encryption_key)
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:

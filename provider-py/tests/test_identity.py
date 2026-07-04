@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
-import pytest
 from pathlib import Path
+
+import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 
 from cocore_provider.identity import IdentityError, load_or_create
 
@@ -80,9 +83,6 @@ def test_malformed_encryption_key_raises_identity_error(tmp_path: Path) -> None:
     """JSON file with malformed encryption key should raise IdentityError."""
     path = tmp_path / "identity.json"
     # Create a valid PEM key first, then modify the encryption key to be invalid
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.hazmat.primitives import serialization
-
     test_key = ec.generate_private_key(ec.SECP256R1())
     priv_pem = test_key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -104,6 +104,34 @@ def test_malformed_encryption_key_raises_identity_error(tmp_path: Path) -> None:
 
     error_msg = str(exc_info.value)
     assert str(path) in error_msg
+
+
+def test_non_ec_signing_key_raises_identity_error(tmp_path: Path) -> None:
+    """JSON file with a non-EC signing key (e.g. Ed25519) should raise IdentityError."""
+    path = tmp_path / "identity.json"
+    # Create a valid Ed25519 key (non-EC)
+    ed_key = ed25519.Ed25519PrivateKey.generate()
+    ed_pem = ed_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+
+    path.write_text(
+        json.dumps(
+            {
+                "signing_priv_pem": ed_pem,
+                "encryption_priv_b64": base64.b64encode(b"\x00" * 32).decode("ascii"),
+            }
+        )
+    )
+
+    with pytest.raises(IdentityError) as exc_info:
+        load_or_create(path)
+
+    error_msg = str(exc_info.value)
+    assert str(path) in error_msg
+    assert "non-EC" in error_msg or "non-EC signing key" in error_msg
 
 
 def test_no_temp_file_left_after_successful_create(tmp_path: Path) -> None:
