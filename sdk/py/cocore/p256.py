@@ -65,6 +65,17 @@ def verify_p256(
         return False
 
 
+def sign_p256(private_key: ec.EllipticCurvePrivateKey, message: bytes) -> str:
+    """Sign ``message`` (SHA-256 prehash) with a P-256 private key.
+
+    Returns the DER-encoded signature, base64. Counterpart to ``verify_p256``
+    — producers (the Python provider agent) use this; verifiers use
+    ``verify_p256``.
+    """
+    signature = private_key.sign(message, ec.ECDSA(hashes.SHA256()))
+    return base64.b64encode(signature).decode("ascii")
+
+
 def verify_attestation_signature(attestation: Mapping[str, Any], public_key_b64: str) -> bool:
     """Verify an attestation's ``selfSignature`` against its own ``publicKey``.
 
