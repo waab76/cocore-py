@@ -166,14 +166,25 @@ impl AdvisorClient {
         require_secure_advisor_url(&self.url)?;
 
         tracing::info!(url = %self.url, "connecting to advisor");
+        // Connect failures return the classified `AdvisorConnect` variant —
+        // the Register frame never reached the advisor, so the serve loop can
+        // count consecutive occurrences and publish an `advisorFault` on the
+        // provider record (the only remotely-visible trace of a machine that
+        // serves locally but never joins the network).
         let (ws, _resp) =
             match tokio::time::timeout(CONNECT_TIMEOUT, connect_async(&self.url)).await {
-                Ok(r) => r.map_err(|e| ProviderError::Advisor(e.to_string()))?,
+                Ok(r) => r.map_err(|e| ProviderError::AdvisorConnect {
+                    code: classify_ws_connect_error(&e),
+                    detail: e.to_string(),
+                })?,
                 Err(_) => {
-                    return Err(ProviderError::Advisor(format!(
-                        "advisor connect timed out after {}s",
-                        CONNECT_TIMEOUT.as_secs()
-                    )));
+                    return Err(ProviderError::AdvisorConnect {
+                        code: "connect-timeout".to_string(),
+                        detail: format!(
+                            "advisor connect timed out after {}s",
+                            CONNECT_TIMEOUT.as_secs()
+                        ),
+                    });
                 }
             };
         let (mut write, mut read) = ws.split();
@@ -232,6 +243,33 @@ impl AdvisorClient {
         // marked after engines loaded (see main's provision-status marker).
         // Only now does the tray flip from "connecting…" to "Serving".
         clear_starting_provision_marker();
+        // It also proves the advisor path works end-to-end — remove any
+        // `advisorFault` published on the provider record (by this process
+        // after repeated connect failures, or left behind by a previous one)
+        // so the console stops showing "can't reach the network". Runs
+        // off-loop: a PDS round-trip must never stall ping handling. The
+        // maybe-published marker makes this a no-op — not even a read — on
+        // the common reconnect (the advisor's edge recycles the socket every
+        // ~14 minutes), and a failed clear leaves the marker set so the next
+        // registration retries.
+        if crate::pds::advisor_fault_maybe_published() {
+            if let Some(rk) = provider_rkey {
+                let pds_clear = pds.clone();
+                let rk = rk.to_string();
+                tokio::spawn(async move {
+                    match pds_clear.patch_provider_advisor_fault(&rk, None).await {
+                        Ok(true) => tracing::info!(
+                            "cleared advisorFault on provider record after successful registration"
+                        ),
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            "could not clear advisorFault after registration; will retry on the next one"
+                        ),
+                    }
+                });
+            }
+        }
 
         let ctx = ServeContext {
             signer,
@@ -806,6 +844,219 @@ fn require_secure_advisor_url(url: &str) -> Result<()> {
         "refusing to connect to advisor over insecure transport: {url:?} (scheme {scheme:?}). \
          Use a wss:// URL, or set {ALLOW_INSECURE_ADVISOR_ENV}=1 to allow ws:// for local dev."
     )))
+}
+
+/// Classify a WebSocket connect failure into the machine-readable class the
+/// `advisorFault` lexicon field carries. Only ever called for CONNECT-phase
+/// errors (the handshake never completed), so every class here means "the
+/// Register frame never reached the advisor". Deliberately coarse: the class
+/// is published on a world-readable record, so it names the error KIND and
+/// nothing else (no addresses, no raw error text).
+fn classify_ws_connect_error(e: &tokio_tungstenite::tungstenite::Error) -> String {
+    use tokio_tungstenite::tungstenite::Error as WsError;
+    match e {
+        // The upgrade got a plain HTTP answer instead of 101 — the advisor
+        // host (or something in front of it) answered HTTP but refused the
+        // WebSocket handshake.
+        WsError::Http(resp) => format!("http-{}", resp.status().as_u16()),
+        WsError::Io(io) => classify_connect_io_error(io),
+        WsError::Url(_) => "bad-url".to_string(),
+        // Everything else (TLS, protocol violations, …) — tungstenite's TLS
+        // variant is feature-gated, so sniff the rendered error rather than
+        // matching it structurally.
+        other => {
+            let s = other.to_string().to_ascii_lowercase();
+            if s.contains("tls") || s.contains("certificate") || s.contains("ssl") {
+                "tls-failure".to_string()
+            } else {
+                "ws-handshake-failed".to_string()
+            }
+        }
+    }
+}
+
+/// Classify the io::Error under a failed WebSocket connect. DNS failures have
+/// no dedicated `ErrorKind` on the platforms we ship (they surface as an
+/// uncategorized getaddrinfo error), so those fall back to message sniffing.
+fn classify_connect_io_error(io: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    match io.kind() {
+        ErrorKind::TimedOut => "connect-timeout".to_string(),
+        ErrorKind::ConnectionRefused => "connect-refused".to_string(),
+        ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted | ErrorKind::BrokenPipe => {
+            "connection-reset".to_string()
+        }
+        _ => {
+            let s = io.to_string().to_ascii_lowercase();
+            if s.contains("lookup")
+                || s.contains("resolve")
+                || s.contains("nodename")
+                || s.contains("name or service")
+                || s.contains("dns")
+            {
+                "dns-failure".to_string()
+            } else if s.contains("network is unreachable")
+                || s.contains("no route to host")
+                || s.contains("host is down")
+            {
+                "network-unreachable".to_string()
+            } else if s.contains("tls") || s.contains("certificate") || s.contains("ssl") {
+                "tls-failure".to_string()
+            } else {
+                "io-error".to_string()
+            }
+        }
+    }
+}
+
+/// Best-effort probe of the advisor's plain-HTTPS surface (`GET /ttft`, its
+/// cheap public endpoint), used when the WebSocket connect keeps failing.
+/// ANY HTTP response counts as reachable — it proves DNS + TCP + TLS + HTTP
+/// to the advisor host all work, which is exactly the signal that separates
+/// "this network filters WebSocket upgrades" (a middlebox) from "this
+/// machine can't reach the advisor at all".
+pub async fn probe_advisor_https(advisor_url: &str) -> bool {
+    let Some(url) = advisor_https_probe_url(advisor_url) else {
+        return false;
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(15))
+        .build()
+    else {
+        return false;
+    };
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            tracing::debug!(status = %resp.status(), "advisor HTTPS probe answered");
+            true
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "advisor HTTPS probe failed");
+            false
+        }
+    }
+}
+
+/// `wss://host[:port]/…` → `https://host[:port]/ttft` (and `ws://` →
+/// `http://` for local dev). `None` when the advisor URL has no
+/// recognizable scheme/authority.
+fn advisor_https_probe_url(advisor_url: &str) -> Option<String> {
+    let (scheme, rest) = advisor_url.split_once("://")?;
+    let authority = rest.split('/').next()?;
+    if authority.is_empty() {
+        return None;
+    }
+    let http_scheme = match scheme.to_ascii_lowercase().as_str() {
+        "wss" | "https" => "https",
+        "ws" | "http" => "http",
+        _ => return None,
+    };
+    Some(format!("{http_scheme}://{authority}/ttft"))
+}
+
+/// Build the `advisorFault` body from a classified connect-failure code and
+/// the outcome of the plain-HTTPS probe. The probe result FOLDS INTO the
+/// classification: ambiguous network-ish failures with working HTTPS become
+/// `upgrade-blocked` (a middlebox is filtering WebSockets specifically),
+/// while a failed probe keeps the base code and says the advisor is
+/// unreachable outright. Every message is a fixed, content-safe template —
+/// remediation guidance only, never raw error text, URLs, or credentials.
+pub fn build_advisor_fault(base_code: &str, https_reachable: bool) -> crate::pds::AdvisorFault {
+    const RETRYING: &str = "The machine keeps serving locally and retries automatically; \
+        it will rejoin the network on its own the moment a connection succeeds.";
+    let (code, message): (String, String) = if https_reachable {
+        match base_code {
+            // A real HTTP answer to the upgrade: the advisor host is
+            // reachable; the WebSocket endpoint itself said no.
+            c if c.starts_with("http-") => (
+                c.to_string(),
+                format!(
+                    "The co/core network service is reachable, but it answered this machine's \
+                     WebSocket handshake with a plain HTTP error instead of accepting it. This \
+                     is usually transient (a deploy or an edge hiccup). {RETRYING} If it \
+                     persists for hours, check status with the co/core team."
+                ),
+            ),
+            "tls-failure" => (
+                "tls-failure".to_string(),
+                format!(
+                    "Secure-connection (TLS) setup for this machine's WebSocket to the co/core \
+                     network failed even though plain HTTPS works — a TLS-intercepting proxy or \
+                     security appliance on this network is the usual cause. {RETRYING} Try a \
+                     network without TLS inspection, or exempt WebSocket traffic from it."
+                ),
+            ),
+            // Timeouts, resets, refusals, protocol failures with HTTPS fine:
+            // something on the path accepts HTTPS but kills WebSockets.
+            _ => (
+                "upgrade-blocked".to_string(),
+                format!(
+                    "This machine reaches the co/core network service over plain HTTPS, but its \
+                     WebSocket connection — the channel jobs are dispatched over — cannot be \
+                     established. A firewall, VPN, or proxy on this network is likely filtering \
+                     WebSocket connections. {RETRYING} Try a different network, disable the \
+                     VPN/proxy, or allow outbound secure WebSocket (wss) traffic."
+                ),
+            ),
+        }
+    } else {
+        match base_code {
+            "dns-failure" => (
+                "dns-failure".to_string(),
+                format!(
+                    "This machine could not look up the co/core network service's address (DNS \
+                     resolution failed). {RETRYING} Check this machine's internet connection, \
+                     DNS settings, or any VPN/firewall software."
+                ),
+            ),
+            "connect-timeout" => (
+                "connect-timeout".to_string(),
+                format!(
+                    "Connection attempts to the co/core network service time out — neither its \
+                     WebSocket nor plain HTTPS answered. {RETRYING} Check this machine's \
+                     internet connection and any VPN/firewall software."
+                ),
+            ),
+            "connect-refused" => (
+                "connect-refused".to_string(),
+                format!(
+                    "The co/core network service actively refused this machine's connection, \
+                     and plain HTTPS did not answer either — a local proxy or firewall is \
+                     likely intercepting outbound traffic. {RETRYING} Check any VPN/proxy/\
+                     firewall software on this machine or network."
+                ),
+            ),
+            "tls-failure" => (
+                "tls-failure".to_string(),
+                format!(
+                    "Secure-connection (TLS) setup to the co/core network service failed. \
+                     {RETRYING} Check this machine's date & time, and any VPN or security \
+                     software that inspects network traffic."
+                ),
+            ),
+            "network-unreachable" => (
+                "network-unreachable".to_string(),
+                format!(
+                    "This machine has no network route to the co/core network service. \
+                     {RETRYING} Check this machine's internet connection."
+                ),
+            ),
+            other => (
+                other.to_string(),
+                format!(
+                    "This machine cannot establish its connection to the co/core network \
+                     service (checked both WebSocket and plain HTTPS). {RETRYING} Check this \
+                     machine's internet connection and any VPN/firewall software."
+                ),
+            ),
+        }
+    };
+    crate::pds::AdvisorFault {
+        code,
+        message,
+        observedAt: Utc::now(),
+    }
 }
 
 /// How often the serve loop checks that every previously-ready engine's
@@ -1846,6 +2097,95 @@ mod tests {
         // Even with the opt-in, a non-ws/wss scheme is still refused.
         assert!(require_secure_advisor_url("http://localhost:8080").is_err());
         std::env::remove_var(ALLOW_INSECURE_ADVISOR_ENV);
+    }
+
+    #[test]
+    fn advisor_https_probe_url_maps_ws_scheme_and_path() {
+        assert_eq!(
+            advisor_https_probe_url("wss://advisor.cocore.dev/v1/agent").as_deref(),
+            Some("https://advisor.cocore.dev/ttft")
+        );
+        assert_eq!(
+            advisor_https_probe_url("ws://localhost:8080/v1/agent").as_deref(),
+            Some("http://localhost:8080/ttft")
+        );
+        // Port is carried through; a bare authority (no path) works too.
+        assert_eq!(
+            advisor_https_probe_url("wss://advisor.cocore.dev:8443").as_deref(),
+            Some("https://advisor.cocore.dev:8443/ttft")
+        );
+        // Unrecognizable inputs probe nothing rather than a fabricated URL.
+        assert_eq!(advisor_https_probe_url("advisor.cocore.dev"), None);
+        assert_eq!(advisor_https_probe_url("ftp://x"), None);
+        assert_eq!(advisor_https_probe_url("wss:///path-only"), None);
+    }
+
+    #[test]
+    fn classify_connect_io_error_covers_the_field_failures() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            classify_connect_io_error(&Error::new(ErrorKind::TimedOut, "t")),
+            "connect-timeout"
+        );
+        assert_eq!(
+            classify_connect_io_error(&Error::new(ErrorKind::ConnectionRefused, "r")),
+            "connect-refused"
+        );
+        // macOS getaddrinfo failure has no dedicated kind — sniffed from the
+        // message ("nodename nor servname provided, or not known").
+        assert_eq!(
+            classify_connect_io_error(&Error::other(
+                "failed to lookup address information: nodename nor servname provided"
+            )),
+            "dns-failure"
+        );
+        assert_eq!(
+            classify_connect_io_error(&Error::other("Network is unreachable (os error 51)")),
+            "network-unreachable"
+        );
+        assert_eq!(
+            classify_connect_io_error(&Error::other("something else entirely")),
+            "io-error"
+        );
+    }
+
+    #[test]
+    fn build_advisor_fault_folds_the_https_probe_into_the_code() {
+        // HTTPS works but the WS connect keeps timing out / being reset →
+        // a middlebox is filtering WebSockets specifically.
+        for base in ["connect-timeout", "connection-reset", "ws-handshake-failed"] {
+            let f = build_advisor_fault(base, true);
+            assert_eq!(f.code, "upgrade-blocked", "base {base}");
+            assert!(f.message.contains("WebSocket"));
+        }
+        // A real HTTP answer to the upgrade keeps its status-carrying code.
+        assert_eq!(build_advisor_fault("http-503", true).code, "http-503");
+        // TLS failure stays TLS regardless of the probe (interception vs. broken).
+        assert_eq!(build_advisor_fault("tls-failure", true).code, "tls-failure");
+        assert_eq!(
+            build_advisor_fault("tls-failure", false).code,
+            "tls-failure"
+        );
+        // Probe also failing keeps the network-level base classification.
+        assert_eq!(
+            build_advisor_fault("dns-failure", false).code,
+            "dns-failure"
+        );
+        assert_eq!(
+            build_advisor_fault("connect-timeout", false).code,
+            "connect-timeout"
+        );
+        // Unknown base codes pass through (fail open to a generic message).
+        assert_eq!(build_advisor_fault("io-error", false).code, "io-error");
+        // Content safety: no message ever carries a URL or raw error text.
+        for (base, probe) in [("connect-timeout", true), ("dns-failure", false)] {
+            let f = build_advisor_fault(base, probe);
+            assert!(
+                !f.message.contains("://"),
+                "message leaks a URL: {}",
+                f.message
+            );
+        }
     }
 
     #[test]

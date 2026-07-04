@@ -17,8 +17,12 @@ export function machineStatusText(m: {
   faultReason?: string;
   pausedReason?: string;
   offlineReason?: string;
+  advisorFaultReason?: string;
+  standingKnown?: boolean;
+  advisorConnected?: boolean;
 }): string {
   if (m.faultReason) return "Engine not loaded — only serving stub";
+  if (advisorUnreachable(m)) return "Serving locally — can't reach the co/core network";
   switch (m.state) {
     case "provisioning":
       return "Preparing — downloading models before it can serve…";
@@ -59,6 +63,19 @@ export interface Machine {
   /** The configured model ids that failed to load, if the agent
    *  reported them. */
   faultModels?: string[];
+  /** Machine-readable advisor-connectivity fault class published by the
+   *  agent when its WebSocket to the advisor keeps failing to connect
+   *  (e.g. "upgrade-blocked", "dns-failure", "connect-timeout"). The
+   *  machine is healthy and serving LOCALLY but invisible to the network —
+   *  no jobs will reach it. Cleared by the agent on its next successful
+   *  registration. See the provider record's `advisorFault` field. */
+  advisorFaultCode?: string;
+  /** Human-readable, content-safe summary of {@link advisorFaultCode} with
+   *  remediation guidance (VPN / firewall / WebSocket filtering). Present
+   *  iff the fault is. */
+  advisorFaultReason?: string;
+  /** RFC3339 timestamp of when the agent recorded the advisor fault. */
+  advisorFaultAt?: string;
   /** How the machine's environment is attested (from the provider record):
    *  `self-attested` (software) or `hardware-attested` (genuine Apple hardware +
    *  SIP, via a bound MDA chain). Evidence-derived; the UI humanizes it. */
@@ -138,4 +155,32 @@ export interface Machine {
    *  pairing for and verifies each with a startup canary before advertising it.
    *  Drives the "Tool calling" toggle in per-machine settings. Absent ≡ off. */
   toolCalls?: boolean;
+}
+
+/** Whether this machine looks cut off from the co/core network while
+ *  serving locally: its agent published an `advisorFault` (repeated
+ *  WebSocket connect failures), and/or its record says it's serving yet
+ *  the advisor holds no live connection to it. Only meaningful for a
+ *  machine that SHOULD be connected — a paused / offline / provisioning
+ *  box is expected to be absent from the advisor's registry. */
+export function advisorUnreachable(
+  m: Pick<Machine, "state" | "advisorFaultReason" | "standingKnown" | "advisorConnected">,
+): boolean {
+  if (m.state !== "idle" && m.state !== "running") return false;
+  // A live advisor connection outranks a fault the agent published earlier
+  // and hasn't gotten around to clearing yet (it clears on registration).
+  if (m.standingKnown === true && m.advisorConnected === true) return false;
+  if (m.advisorFaultReason) return true;
+  return m.standingKnown === true && m.advisorConnected === false;
+}
+
+/** The machine's live network standing for the "on network / not
+ *  reachable" badge. `null` when a badge would be noise: the machine
+ *  isn't expected on the network (paused/offline/provisioning) or the
+ *  advisor overlay was unavailable and the agent reports no fault. */
+export function machineNetworkStanding(m: Machine): "on-network" | "not-reachable" | null {
+  if (m.state !== "idle" && m.state !== "running") return null;
+  if (m.standingKnown === true && m.advisorConnected === true) return "on-network";
+  if (advisorUnreachable(m)) return "not-reachable";
+  return null;
 }

@@ -374,6 +374,46 @@ pub struct AttestationFault {
     pub at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A content-safe description of why the advisor WebSocket cannot be
+/// established. Published on the provider record (mirroring [`EngineFault`] /
+/// [`AttestationFault`]) so the console can show "serving locally but can't
+/// reach the network" instead of a healthy-looking machine that silently
+/// never receives jobs. Written through the console's HTTPS proxy — exactly
+/// the transport that still works in the failure this diagnoses — and
+/// cleared on the next successful advisor registration.
+///
+/// Deliberately NOT a field on [`ProviderRecord`]: it changes mid-serve (set
+/// after repeated connect failures, cleared on registration), so it is
+/// written with the field-scoped [`PdsClient::patch_provider_advisor_fault`]
+/// rather than the whole-record merge — a full re-publish (offline marker,
+/// attestation refresh) carries it through untouched as an unknown key.
+#[allow(non_snake_case)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct AdvisorFault {
+    /// Machine-readable fault class: `dns-failure`, `tls-failure`,
+    /// `connect-timeout`, `connect-refused`, `upgrade-blocked`,
+    /// `http-<status>`, `network-unreachable`, … (see the lexicon).
+    pub code: String,
+    /// Human-readable summary with remediation guidance. Carries only the
+    /// classified error kind — never raw error text, URLs, or credentials.
+    pub message: String,
+    /// When the agent recorded the fault.
+    pub observedAt: chrono::DateTime<chrono::Utc>,
+}
+
+/// Whether this process may have an `advisorFault` published on its provider
+/// record (or one left over from a previous process). Starts true so the
+/// first successful registration after boot checks the record once and
+/// removes any stale fault; [`PdsClient::patch_provider_advisor_fault`]
+/// keeps it in sync afterwards, so subsequent reconnects skip the read
+/// entirely instead of hitting the PDS every ~14-minute edge recycle.
+static ADVISOR_FAULT_MAYBE_PUBLISHED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
+pub fn advisor_fault_maybe_published() -> bool {
+    ADVISOR_FAULT_MAYBE_PUBLISHED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Clone)]
 pub struct ModelPrice {
@@ -701,6 +741,89 @@ impl PdsClient {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         Some((active, desired, desired_tier, tool_calls))
+    }
+
+    /// Field-scoped patch of this machine's provider record: set (or, with
+    /// `None`, remove) ONLY the `advisorFault` key, leaving every other field
+    /// exactly as read. The record-transactor rule in miniature — read the
+    /// LATEST record, patch one field, put under a compare-and-swap guard,
+    /// re-read and replay on a swap conflict — so a concurrent owner edit or
+    /// agent re-publish is never clobbered. Skips the write entirely (and
+    /// returns `Ok(false)`) when the record already carries the desired
+    /// state, so the serve loop's retries don't spam the PDS with no-op
+    /// commits. Fails closed: an unreadable record aborts rather than
+    /// fabricating a body.
+    ///
+    /// Returns whether a write actually happened. Keeps the process-wide
+    /// [`advisor_fault_maybe_published`] marker in sync on success.
+    pub async fn patch_provider_advisor_fault(
+        &self,
+        rkey: &str,
+        fault: Option<&AdvisorFault>,
+    ) -> Result<bool> {
+        const MAX_ATTEMPTS: u32 = 4;
+        let collection = "dev.cocore.compute.provider";
+        for attempt in 1..=MAX_ATTEMPTS {
+            let listed = self.list_my_records(collection).await?;
+            let Some(rec) = listed
+                .iter()
+                .find(|r| r.uri.rsplit('/').next() == Some(rkey))
+            else {
+                return Err(ProviderError::Pds(format!(
+                    "provider record {rkey} not found; cannot patch advisorFault"
+                )));
+            };
+            let existing = rec.value.get("advisorFault");
+            // Compare by code only: the message is deterministic per code and
+            // observedAt changes every classification, so keying on it would
+            // defeat the dedup and rewrite the record on every retry.
+            let existing_code = existing
+                .and_then(|f| f.get("code"))
+                .and_then(|c| c.as_str());
+            let unchanged = match fault {
+                Some(f) => existing_code == Some(f.code.as_str()),
+                None => existing.is_none(),
+            };
+            if unchanged {
+                ADVISOR_FAULT_MAYBE_PUBLISHED
+                    .store(fault.is_some(), std::sync::atomic::Ordering::Relaxed);
+                return Ok(false);
+            }
+            let mut body = rec.value.as_object().cloned().unwrap_or_default();
+            match fault {
+                Some(f) => {
+                    let v = serde_json::to_value(f)
+                        .map_err(|e| ProviderError::Pds(format!("encode advisorFault: {e}")))?;
+                    body.insert("advisorFault".to_string(), v);
+                }
+                None => {
+                    body.remove("advisorFault");
+                }
+            }
+            let patched = serde_json::Value::Object(body);
+            match self
+                .put_record(collection, rkey, &patched, Some(&rec.cid))
+                .await
+            {
+                Ok(_) => {
+                    ADVISOR_FAULT_MAYBE_PUBLISHED
+                        .store(fault.is_some(), std::sync::atomic::Ordering::Relaxed);
+                    return Ok(true);
+                }
+                Err(ProviderError::Pds(msg))
+                    if msg.contains("InvalidSwap") && attempt < MAX_ATTEMPTS =>
+                {
+                    // Someone committed between our read and put — re-read the
+                    // now-current record and replay the patch on top of it.
+                    tracing::debug!(attempt, "advisorFault patch swap conflict; retrying");
+                    tokio::time::sleep(std::time::Duration::from_millis(50 * attempt as u64)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(ProviderError::Pds(
+            "advisorFault patch exhausted swap retries".to_string(),
+        ))
     }
 
     /// Walk the DID PLC directory to find this DID's PDS host. The

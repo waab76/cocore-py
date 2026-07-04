@@ -850,6 +850,114 @@ async fn dedup_and_publish_provider(
         .unwrap_or_else(|| anyhow::anyhow!("provider record publish exhausted retries")))
 }
 
+/// Consecutive advisor CONNECT failures before the agent publishes an
+/// `advisorFault` on its provider record. One or two failed attempts are
+/// routine (a sleeping laptop, a deploy); three in a row with no successful
+/// registration in between means the machine is durably cut off from the
+/// network while looking healthy everywhere else.
+const ADVISOR_FAULT_THRESHOLD: u32 = 3;
+
+/// Once past the threshold with a publish still outstanding (the patch
+/// itself failed — e.g. the console proxy blipped), retry it every this
+/// many further failures rather than on each ~5–30s reconnect attempt.
+const ADVISOR_FAULT_PUBLISH_RETRY_EVERY: u32 = 10;
+
+/// Tracks consecutive advisor CONNECT failures — the WebSocket never came
+/// up, so the Register frame never reached the advisor — and reflects them
+/// onto the provider record's `advisorFault` field. This is the remote
+/// diagnosability for the "serving locally, invisible on the network"
+/// failure: the WS is blocked but the record write path (console proxy over
+/// plain HTTPS) still works, so the fault is the one trace an operator can
+/// see. The fault is cleared by `AdvisorClient::run` on the next successful
+/// registration; this tracker only ever sets it.
+struct AdvisorFaultTracker {
+    consecutive: u32,
+    /// Fault code currently on the PDS record as far as this process knows,
+    /// so an unchanged classification isn't re-published every retry.
+    published_code: Option<String>,
+    /// Base classification of the previous failure, to detect a changed
+    /// cause (e.g. dns-failure → connect-timeout) past the threshold.
+    last_base_code: Option<String>,
+}
+
+impl AdvisorFaultTracker {
+    fn new() -> Self {
+        Self {
+            consecutive: 0,
+            published_code: None,
+            last_base_code: None,
+        }
+    }
+
+    /// The connection came up (or the failure wasn't a connect failure —
+    /// registration succeeded, so `run` already cleared any fault).
+    fn reset(&mut self) {
+        self.consecutive = 0;
+        self.published_code = None;
+        self.last_base_code = None;
+    }
+
+    /// Feed one serve-loop error. Counts only classified CONNECT failures;
+    /// past the threshold it probes the advisor's plain-HTTPS surface to
+    /// separate "WebSockets are filtered on this network" from "the advisor
+    /// is unreachable outright", folds that into the classification, and
+    /// CAS-patches the fault onto the provider record.
+    async fn on_serve_error(
+        &mut self,
+        e: &cocore_provider::error::ProviderError,
+        pds: &PdsClient,
+        provider_rkey: Option<&str>,
+        advisor_url: &str,
+    ) {
+        let cocore_provider::error::ProviderError::AdvisorConnect { code, .. } = e else {
+            // The socket connected (a post-register drop, a policy error, …)
+            // — the advisor path works, so this is not an advisor fault.
+            self.reset();
+            return;
+        };
+        self.consecutive += 1;
+        let crossed = self.consecutive == ADVISOR_FAULT_THRESHOLD;
+        let cause_changed = self.consecutive > ADVISOR_FAULT_THRESHOLD
+            && self.last_base_code.as_deref() != Some(code);
+        let publish_retry = self.consecutive > ADVISOR_FAULT_THRESHOLD
+            && self.published_code.is_none()
+            && self
+                .consecutive
+                .is_multiple_of(ADVISOR_FAULT_PUBLISH_RETRY_EVERY);
+        self.last_base_code = Some(code.clone());
+        if !(crossed || cause_changed || publish_retry) {
+            return;
+        }
+        let Some(rkey) = provider_rkey else {
+            tracing::warn!(
+                consecutive = self.consecutive,
+                code = %code,
+                "advisor unreachable but no provider rkey; cannot publish advisorFault"
+            );
+            return;
+        };
+        let https_ok = cocore_provider::advisor::probe_advisor_https(advisor_url).await;
+        let fault = cocore_provider::advisor::build_advisor_fault(code, https_ok);
+        if self.published_code.as_deref() == Some(fault.code.as_str()) {
+            return;
+        }
+        tracing::warn!(
+            consecutive = self.consecutive,
+            code = %fault.code,
+            https_reachable = https_ok,
+            "advisor unreachable; publishing advisorFault on provider record"
+        );
+        let publish = pds.patch_provider_advisor_fault(rkey, Some(&fault));
+        match tokio::time::timeout(std::time::Duration::from_secs(15), publish).await {
+            Ok(Ok(_)) => self.published_code = Some(fault.code),
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "failed to publish advisorFault; will retry")
+            }
+            Err(_) => tracing::warn!("advisorFault publish timed out; will retry"),
+        }
+    }
+}
+
 /// `~/.cocore/serving-paused` — present while the owner has this machine
 /// stopped from the console. The menu-bar app polls for it to show the
 /// machine as paused (vs. the local "serving" state, which only tracks
@@ -1894,6 +2002,10 @@ async fn cmd_serve(
                 // machines available"). Only a connection that fails QUICKLY,
                 // repeatedly, still earns the growing backoff.
                 const HEALTHY_UPTIME: std::time::Duration = std::time::Duration::from_secs(30);
+                // Publishes `advisorFault` after repeated connect failures so
+                // a machine the network never hears from is still diagnosable
+                // from the console; `run` clears it on the next registration.
+                let mut advisor_fault = AdvisorFaultTracker::new();
                 loop {
                     // Honour a remote stop: if the owner stopped this machine
                     // from the console, don't (re)connect — poll until they
@@ -1922,6 +2034,7 @@ async fn cmd_serve(
                     match result {
                         Ok(()) => {
                             // Advisor closed cleanly (e.g. deploy); rejoin shortly.
+                            advisor_fault.reset();
                             backoff = std::time::Duration::from_secs(1);
                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         }
@@ -1929,12 +2042,16 @@ async fn cmd_serve(
                             // Dropped after a healthy run — reconnect promptly
                             // and reset the backoff rather than penalising a
                             // connection that was working.
+                            advisor_fault.reset();
                             tracing::warn!(lived_s = lived.as_secs(), "advisor connection dropped after healthy uptime; reconnecting promptly");
                             backoff = std::time::Duration::from_secs(1);
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, lived_s = lived.as_secs(), backoff_s = backoff.as_secs(), "advisor connection dropped; reconnecting");
+                            advisor_fault
+                                .on_serve_error(&e, &pds, provider_rkey.as_deref(), advisor_url)
+                                .await;
                             tokio::time::sleep(backoff).await;
                             backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
                         }
@@ -1953,6 +2070,10 @@ async fn cmd_serve(
                 // on the first in-window run; free them while idle and
                 // rebuild on the next open. `None` == freed/idle.
                 let mut current = Some(engines);
+                // Same advisor-unreachable diagnosability as the continuous
+                // branch: repeated in-window connect failures publish an
+                // `advisorFault`; registration clears it.
+                let mut advisor_fault = AdvisorFaultTracker::new();
                 loop {
                     if window.contains_now() {
                         // Remote stop overrides the schedule window too.
@@ -1977,8 +2098,14 @@ async fn cmd_serve(
                         let client = AdvisorClient::new(advisor_url);
                         tokio::select! {
                             res = client.run(register.clone(), &*signer, &enc, &pds, attestation.clone(), &eng, provider_rkey.as_deref(), &desired_at_start, desired_tier_at_start.as_deref(), &model_schedules, &configured_models, push_rx.as_mut(), &pro_bono_at_start, tool_calls_at_start) => {
-                                if let Err(e) = res {
-                                    tracing::warn!(error = %e, "advisor run ended; reconnecting within window in 5s");
+                                match &res {
+                                    Ok(()) => advisor_fault.reset(),
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "advisor run ended; reconnecting within window in 5s");
+                                        advisor_fault
+                                            .on_serve_error(e, &pds, provider_rkey.as_deref(), advisor_url)
+                                            .await;
+                                    }
                                 }
                                 // Connection ended on its own but the window
                                 // is still open — keep engines, reconnect soon.
@@ -3668,6 +3795,32 @@ mod offline_marker_tests {
             merged.get("someFutureOwnerToggle"),
             Some(&serde_json::json!({ "nested": [1, 2, 3] })),
             "an unknown field must survive an agent re-publish"
+        );
+    }
+
+    /// `advisorFault` is deliberately NOT a `ProviderRecord` field (it is
+    /// written with the field-scoped `patch_provider_advisor_fault`), so a
+    /// full agent re-publish — the offline marker, the attestation-refresh
+    /// republish — must carry a live fault through untouched rather than
+    /// wiping the one trace of an advisor-unreachable machine.
+    #[test]
+    fn merge_preserves_a_published_advisor_fault() {
+        let republished = agent_built_record();
+        let live = serde_json::json!({
+            "active": true,
+            "advisorFault": {
+                "code": "upgrade-blocked",
+                "message": "WebSocket connections are being filtered on this network.",
+                "observedAt": "2026-07-04T01:52:00Z"
+            }
+        });
+
+        let merged = merge_agent_provider_fields(&live, &republished);
+
+        assert_eq!(
+            merged.get("advisorFault"),
+            live.get("advisorFault"),
+            "a full agent re-publish must not clobber the advisorFault"
         );
     }
 

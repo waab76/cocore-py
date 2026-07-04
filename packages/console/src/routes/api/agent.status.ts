@@ -170,6 +170,7 @@ export const Route = createFileRoute("/api/agent/status")({
           binaryVersion?: string;
           desiredTier?: string;
           attestationFault?: { code?: string; message?: string; at?: string };
+          advisorFault?: { code?: string; message?: string; observedAt?: string };
         };
 
         // Surface an attestation build/publish failure: a machine in this
@@ -180,6 +181,18 @@ export const Route = createFileRoute("/api/agent/status")({
               code: body.attestationFault.code ?? null,
               message: body.attestationFault.message ?? null,
               at: body.attestationFault.at ?? null,
+            }
+          : null;
+
+        // Surface an advisor-connectivity failure: a machine in this state is
+        // serving locally but invisible to the network (its WebSocket to the
+        // advisor never connects), so without this it just looks idle. Same
+        // shape and posture as attestationFault above.
+        const advisorFault = body.advisorFault
+          ? {
+              code: body.advisorFault.code ?? null,
+              message: body.advisorFault.message ?? null,
+              observedAt: body.advisorFault.observedAt ?? null,
             }
           : null;
 
@@ -209,6 +222,7 @@ export const Route = createFileRoute("/api/agent/status")({
             confidentialBlockedReason,
             agentVersion: body.binaryVersion ?? null,
             attestationFault,
+            advisorFault,
             needsReauth,
           }),
           { status: 200, headers: { "content-type": "application/json" } },

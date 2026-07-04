@@ -33,6 +33,12 @@ type EngineFaultBody = {
   models?: string[];
 };
 
+type AdvisorFaultBody = {
+  code?: string;
+  message?: string;
+  observedAt?: string;
+};
+
 type ProviderRecordBody = {
   machineLabel?: string;
   chip?: string;
@@ -49,6 +55,7 @@ type ProviderRecordBody = {
   supportedModels?: string[];
   desiredModels?: string[];
   engineFault?: EngineFaultBody;
+  advisorFault?: AdvisorFaultBody;
   shareLocation?: boolean;
   region?: string;
   proBono?: { mode?: string; dids?: string[] };
@@ -102,6 +109,7 @@ function parseProviderBody(body: unknown): ProviderRecordBody {
       ? o.desiredModels.filter((m): m is string => typeof m === "string")
       : undefined,
     engineFault: parseEngineFault(o.engineFault),
+    advisorFault: parseAdvisorFault(o.advisorFault),
     shareLocation: typeof o.shareLocation === "boolean" ? o.shareLocation : undefined,
     region: typeof o.region === "string" ? o.region : undefined,
     proBono: parseProBono(o.proBono),
@@ -136,6 +144,23 @@ function parseEngineFault(raw: unknown): EngineFaultBody | undefined {
     models: Array.isArray(o.models)
       ? o.models.filter((m): m is string => typeof m === "string")
       : undefined,
+  };
+}
+
+/** Parse the provider record's `advisorFault` — published by the agent when
+ *  its WebSocket to the advisor keeps failing to connect, i.e. the machine
+ *  serves locally but is invisible to the network. Same tolerance posture as
+ *  {@link parseEngineFault}: a fault is only meaningful with a message. */
+function parseAdvisorFault(raw: unknown): AdvisorFaultBody | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const code = typeof o.code === "string" ? o.code : undefined;
+  const message = typeof o.message === "string" ? o.message : undefined;
+  if (!message) return undefined;
+  return {
+    code,
+    message,
+    observedAt: typeof o.observedAt === "string" ? o.observedAt : undefined,
   };
 }
 
@@ -699,6 +724,9 @@ export function providerRowsToMachines(
       faultCode: body.engineFault?.code,
       faultReason: body.engineFault?.message,
       faultModels: body.engineFault?.models,
+      advisorFaultCode: body.advisorFault?.code,
+      advisorFaultReason: body.advisorFault?.message,
+      advisorFaultAt: body.advisorFault?.observedAt,
       shareLocation: body.shareLocation,
       region: body.region,
       proBonoMode:

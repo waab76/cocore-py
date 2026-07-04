@@ -50,10 +50,14 @@ import {
   setMyProviderToolCallsMutationOptions,
 } from "@/components/machines/machines.functions.ts";
 import type { MachineWorkItem } from "@/components/machines/machines.server.ts";
-import { ProBonoBadge, RegionFlag } from "@/components/machines/MachineBadges.tsx";
+import {
+  NetworkStandingBadge,
+  ProBonoBadge,
+  RegionFlag,
+} from "@/components/machines/MachineBadges.tsx";
 import { formatTokens } from "@/lib/token-display.ts";
 
-import { type Machine, machineStateLabel } from "./machines-data.ts";
+import { advisorUnreachable, type Machine, machineStateLabel } from "./machines-data.ts";
 
 const styles = stylex.create({
   root: {
@@ -435,6 +439,7 @@ export function MachineDetail({ rkey }: { rkey: string }) {
           </span>
           <RegionFlag region={m.region} />
           <ProBonoBadge mode={m.proBonoMode} />
+          <NetworkStandingBadge m={m} />
         </div>
         <div {...stylex.props(styles.metaRow)}>
           <span>{m.gpu}</span>
@@ -481,6 +486,29 @@ export function MachineDetail({ rkey }: { rkey: string }) {
             automatically when the download finishes. It appears under its models on the models page
             only once it's serving — typically a few minutes on a fast connection.
           </SmallBody>
+        </Alert>
+      ) : null}
+
+      {advisorUnreachable(m) ? (
+        <Alert variant="warning" title="Serving locally — can't reach the co/core network">
+          <Flex direction="column" gap="md">
+            <SmallBody>
+              {m.advisorFaultReason ??
+                "This machine's record says it's serving, but the network currently holds no live connection to it — no jobs will reach it until it reconnects. It usually rejoins on its own within a minute; if this persists, the connection is likely being blocked."}
+            </SmallBody>
+            <SmallBody variant="secondary">
+              Common causes: a VPN or proxy on the machine's network, a firewall that blocks
+              outbound WebSocket (wss) connections, or captive/guest Wi-Fi that filters them. Try a
+              different network or allow secure WebSocket traffic, then the machine rejoins
+              automatically — no restart needed.
+            </SmallBody>
+            {m.advisorFaultCode ? (
+              <SmallBody variant="secondary">
+                Fault code: <InlineCode>{m.advisorFaultCode}</InlineCode>
+                {m.advisorFaultAt ? <> · observed {formatWhen(m.advisorFaultAt)}</> : null}
+              </SmallBody>
+            ) : null}
+          </Flex>
         </Alert>
       ) : null}
 

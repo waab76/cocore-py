@@ -207,6 +207,7 @@ export interface ProviderRecord {
   binaryVersion?: string;
   engineFault?: { code: string; message: string; models?: string[]; at: string };
   attestationFault?: { code: string; message: string; at: string };
+  advisorFault?: { code: string; message: string; observedAt: string };
   toolCalls?: boolean;
   shareLocation?: boolean;
   region?: string;

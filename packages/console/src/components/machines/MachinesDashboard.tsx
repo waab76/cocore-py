@@ -81,7 +81,11 @@ import {
   listMyFriendsQueryOptions,
   type ListedFriend,
 } from "@/components/friends/friends.functions.ts";
-import { ProBonoBadge, RegionFlag } from "@/components/machines/MachineBadges.tsx";
+import {
+  NetworkStandingBadge,
+  ProBonoBadge,
+  RegionFlag,
+} from "@/components/machines/MachineBadges.tsx";
 import {
   dedupMyProviderRecordsMutationOptions,
   deleteMyProviderRecordMutationOptions,
@@ -95,6 +99,7 @@ import {
 import { formatTokens, formatTokensCompact } from "@/lib/token-display.ts";
 
 import {
+  advisorUnreachable,
   type Machine,
   type MachineState,
   machineStateLabel,
@@ -2391,6 +2396,7 @@ export function MachinesDashboard() {
                                 {m.verifiedTier ? <TrustTierBadge tier={m.verifiedTier} /> : null}
                                 <RegionFlag region={m.region} />
                                 <ProBonoBadge mode={m.proBonoMode} />
+                                <NetworkStandingBadge m={m} />
                               </Flex>
                             </TableCell>
                           );
@@ -2432,7 +2438,11 @@ export function MachinesDashboard() {
                             <TableCell>
                               <LabelText
                                 variant="secondary"
-                                style={m.faultReason ? styles.faultText : undefined}
+                                style={
+                                  m.faultReason || advisorUnreachable(m)
+                                    ? styles.faultText
+                                    : undefined
+                                }
                               >
                                 {machineStatusText(m)}
                               </LabelText>
@@ -2579,6 +2589,7 @@ function FleetMachineCard({
           <span {...stylex.props(styles.fleetCardRkey)}>{m.id}</span>
         </div>
         <span {...stylex.props(styles.fleetCardState)}>
+          <NetworkStandingBadge m={m} />
           <span
             {...stylex.props(
               styles.statusDot,
@@ -2609,7 +2620,10 @@ function FleetMachineCard({
 
       <LabelText
         variant="secondary"
-        style={[styles.fleetCardStatus, m.faultReason ? styles.faultText : undefined]}
+        style={[
+          styles.fleetCardStatus,
+          m.faultReason || advisorUnreachable(m) ? styles.faultText : undefined,
+        ]}
       >
         {statusText}
       </LabelText>
@@ -2672,6 +2686,19 @@ function FleetMachineCard({
   );
 }
 
+/** "Jul 4, 01:52" for a fault's RFC3339 timestamp; the raw string when it
+ *  doesn't parse (the field is agent-published and advisory). */
+function formatMachineFaultAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function MachineDrawer({
   m,
   onAction,
@@ -2707,6 +2734,30 @@ function MachineDrawer({
                 <InlineCode>{m.faultCode ?? "unknown"}</InlineCode>, and we'll help you get it
                 online.
               </SmallBody>
+            </Flex>
+          </Alert>
+        ) : null}
+        {advisorUnreachable(m) ? (
+          <Alert variant="warning" title="Serving locally — can't reach the co/core network">
+            <Flex gap="md" direction="column">
+              <SmallBody>
+                {m.advisorFaultReason ??
+                  "This machine's record says it's serving, but the network currently holds no live connection to it — no jobs will reach it until it reconnects. It usually rejoins on its own within a minute; if this persists, the connection is likely being blocked."}
+              </SmallBody>
+              <SmallBody variant="secondary">
+                Common causes: a VPN or proxy on the machine's network, a firewall that blocks
+                outbound WebSocket (wss) connections, or captive/guest Wi-Fi that filters them. Try
+                a different network or allow secure WebSocket traffic, then the machine rejoins
+                automatically — no restart needed.
+              </SmallBody>
+              {m.advisorFaultCode ? (
+                <SmallBody variant="secondary">
+                  Fault code: <InlineCode>{m.advisorFaultCode}</InlineCode>
+                  {m.advisorFaultAt ? (
+                    <> · observed {formatMachineFaultAt(m.advisorFaultAt)}</>
+                  ) : null}
+                </SmallBody>
+              ) : null}
             </Flex>
           </Alert>
         ) : null}
