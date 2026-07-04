@@ -66,6 +66,9 @@ function fakeProvider(
   /** Per-machine id. Defaults to one derived from the DID; pass an
    *  explicit value to stand up two machines under the SAME did. */
   machineId = `${did}#m`,
+  /** Extra Register-frame fields (e.g. `tool_call_models`) merged over the
+   *  defaults. */
+  regExtra: Record<string, unknown> = {},
 ): { sent: AdvisorMessage[]; machineId: string; close: () => void } {
   const sent: AdvisorMessage[] = [];
   registry.upsert(
@@ -83,6 +86,7 @@ function fakeProvider(
       encryption_pub_key: encryptionPubKey,
       attestation_pub_key: "fake-attest",
       attestation_uri: "",
+      ...regExtra,
     },
     () => {},
     (msg) => {
@@ -493,6 +497,106 @@ describe("POST /jobs", () => {
     const j = (await resp.json()) as { error: string };
     expect(j.error).toMatch(/no responsive providers/);
     expect(dead.sent.some((m) => m.type === "health_notice" && m.standing === "bad")).toBe(true);
+  });
+
+  const TOOLS = [{ type: "function", function: { name: "get_weather" } }];
+
+  it("routes a tools job only to a machine canary-verified for the model", async () => {
+    // Two machines serve "stub"; only one passed the forced-tool canary for
+    // it. Make the NON-capable one the freshest so tool-blind routing would
+    // pick it — the filter must steer to the verified machine instead.
+    const blind = fakeProvider(h.registry, "did:plc:tool-blind", "pub-blind");
+    const capable = fakeProvider(
+      h.registry,
+      "did:plc:tool-capable",
+      "pub-capable",
+      true,
+      undefined,
+      {
+        supports_tool_calls: true,
+        tool_call_models: ["stub"],
+      },
+    );
+    h.registry.get("did:plc:tool-blind", blind.machineId)!.lastSeen = Date.now() + 10_000;
+
+    const linesP = readSseLines(`${h.url}/jobs`, {
+      jobUri: "at://job",
+      requesterDid: "did:plc:requester",
+      requesterPubKey: "req-pub",
+      model: "stub",
+      maxTokensOut: 32,
+      ciphertext: [1, 2, 3],
+      tools: TOOLS,
+    });
+
+    await vi.waitFor(
+      () => expect(capable.sent.some((m) => m.type === "inference_request")).toBe(true),
+      { timeout: 2_000 },
+    );
+    expect(blind.sent.some((m) => m.type === "inference_request")).toBe(false);
+
+    h.sessions.complete("test-session", { tokensIn: 1, tokensOut: 1, receiptUri: "at://receipt" });
+    await linesP;
+  });
+
+  it("503s a tools job with a tool-specific error when no verified machine serves the model", async () => {
+    fakeProvider(h.registry, "did:plc:tool-blind2", "pub-blind2");
+    const resp = await fetch(`${h.url}/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jobUri: "at://x",
+        requesterDid: "did:plc:requester",
+        requesterPubKey: "abcd",
+        model: "stub",
+        maxTokensOut: 10,
+        ciphertext: "QQ==",
+        tools: TOOLS,
+      }),
+    });
+    expect(resp.status).toBe(503);
+    const j = (await resp.json()) as { error: string };
+    expect(j.error).toMatch(/verified tool-calling/);
+  });
+
+  it("503s a PINNED tools job when the named provider has no tool-capable machine", async () => {
+    fakeProvider(h.registry, "did:plc:pinned-blind", "pub-pblind");
+    const resp = await fetch(`${h.url}/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jobUri: "at://x",
+        requesterDid: "did:plc:requester",
+        requesterPubKey: "abcd",
+        model: "stub",
+        maxTokensOut: 10,
+        ciphertext: "QQ==",
+        tools: TOOLS,
+        targetProviderDid: "did:plc:pinned-blind",
+      }),
+    });
+    expect(resp.status).toBe(503);
+    const j = (await resp.json()) as { error: string };
+    expect(j.error).toMatch(/verified tool-calling/);
+  });
+
+  it("an empty tools array does NOT restrict routing (nothing to call)", async () => {
+    const blind = fakeProvider(h.registry, "did:plc:no-tools-needed", "pub-ntn");
+    const linesP = readSseLines(`${h.url}/jobs`, {
+      jobUri: "at://job",
+      requesterDid: "did:plc:requester",
+      requesterPubKey: "req-pub",
+      model: "stub",
+      maxTokensOut: 32,
+      ciphertext: [1, 2, 3],
+      tools: [],
+    });
+    await vi.waitFor(
+      () => expect(blind.sent.some((m) => m.type === "inference_request")).toBe(true),
+      { timeout: 2_000 },
+    );
+    h.sessions.complete("test-session", { tokensIn: 1, tokensOut: 1, receiptUri: "at://receipt" });
+    await linesP;
   });
 });
 
