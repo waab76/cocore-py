@@ -47,7 +47,7 @@ def load_config(env: Mapping[str, str]) -> AgentConfig:
     if not api_base:
         raise ConfigError("COCORE_API_BASE is required (console URL)")
 
-    advisor_url = env.get("COCORE_ADVISOR", DEFAULT_ADVISOR_URL)
+    advisor_url = env.get("COCORE_ADVISOR") or DEFAULT_ADVISOR_URL
     scheme = advisor_url.split("://", 1)[0].lower()
     if scheme != "wss" and not _truthy(env.get("COCORE_ALLOW_INSECURE_ADVISOR")):
         raise ConfigError(
@@ -56,7 +56,7 @@ def load_config(env: Mapping[str, str]) -> AgentConfig:
         )
 
     advisor_did = env.get("COCORE_ADVISOR_DID") or DEFAULT_ADVISOR_DID
-    lmstudio_url = env.get("COCORE_LMSTUDIO_URL", DEFAULT_LMSTUDIO_URL)
+    lmstudio_url = env.get("COCORE_LMSTUDIO_URL") or DEFAULT_LMSTUDIO_URL
     identity_path_raw = env.get("COCORE_IDENTITY_PATH")
     identity_path = (
         Path(identity_path_raw)

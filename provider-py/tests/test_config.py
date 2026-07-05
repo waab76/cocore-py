@@ -58,3 +58,44 @@ def test_insecure_advisor_url_allowed_with_escape_hatch() -> None:
     }
     config = load_config(env)
     assert config.advisor_url == "ws://localhost:8080/v1/agent"
+
+
+def test_empty_string_advisor_url_falls_back_to_default() -> None:
+    env = {
+        "COCORE_API_KEY": "key123",
+        "COCORE_API_BASE": "https://console.example",
+        "COCORE_ADVISOR": "",
+    }
+    config = load_config(env)
+    assert config.advisor_url == "wss://advisor.cocore.dev/v1/agent"
+
+
+def test_empty_string_lmstudio_url_falls_back_to_default() -> None:
+    env = {
+        "COCORE_API_KEY": "key123",
+        "COCORE_API_BASE": "https://console.example",
+        "COCORE_LMSTUDIO_URL": "",
+    }
+    config = load_config(env)
+    assert config.lmstudio_url == "http://localhost:1234"
+
+
+def test_empty_string_advisor_did_falls_back_to_default() -> None:
+    env = {
+        "COCORE_API_KEY": "key123",
+        "COCORE_API_BASE": "https://console.example",
+        "COCORE_ADVISOR_DID": "",
+    }
+    config = load_config(env)
+    assert config.advisor_did == "did:web:advisor.cocore.dev"
+
+
+def test_empty_string_machine_label_falls_back_to_default() -> None:
+    env = {
+        "COCORE_API_KEY": "key123",
+        "COCORE_API_BASE": "https://console.example",
+        "COCORE_MACHINE_LABEL": "",
+    }
+    config = load_config(env)
+    # Should fall back to socket.gethostname() or platform.node()
+    assert config.machine_label != ""
