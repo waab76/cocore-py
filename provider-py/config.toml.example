@@ -1,0 +1,35 @@
+# Copy this file to config.toml (same directory, or wherever --config /
+# COCORE_CONFIG_PATH points) to keep your provider's settings in one
+# place instead of environment variables. Every key here is optional:
+# if a key is missing or commented out, provider-py falls back to the
+# matching COCORE_* environment variable, then to its built-in default.
+# config.toml itself is optional too -- delete it and provider-py behaves
+# exactly as it does with environment variables alone.
+#
+# NOTE: this file may contain your console API key in plaintext. Never
+# commit config.toml (it's gitignored) -- only config.toml.example.
+
+# Console API key (required -- via this file or COCORE_API_KEY).
+# api_key = "your-console-api-key"
+
+# Console base URL (required -- via this file or COCORE_API_BASE).
+# api_base = "https://console.cocore.dev"
+
+# Advisor WebSocket URL. Default: wss://advisor.cocore.dev/v1/agent
+# advisor_url = "wss://advisor.cocore.dev/v1/agent"
+
+# DID the advisor authenticates as. Default: did:web:advisor.cocore.dev
+# advisor_did = "did:web:advisor.cocore.dev"
+
+# Base URL of your local LMStudio server. Default: http://localhost:1234
+# lmstudio_url = "http://localhost:1234"
+
+# Where the provider's signing/encryption keypair is persisted.
+# Default: ~/.cocore/provider-py/identity.json
+# identity_path = "/home/you/.cocore/provider-py/identity.json"
+
+# Human-readable label sent at registration. Default: this machine's hostname.
+# machine_label = "my-gaming-pc"
+
+# Allow a non-wss:// advisor_url (local dev only). Default: false
+# allow_insecure_advisor = false
