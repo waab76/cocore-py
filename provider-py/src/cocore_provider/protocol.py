@@ -8,6 +8,7 @@ full schema library."""
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,6 +35,28 @@ def _require_int(raw: Mapping[str, Any], key: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ProtocolError(f"missing or non-integer field {key!r}")
     return value
+
+
+def _require_ciphertext_b64(raw: Mapping[str, Any], key: str) -> str:
+    """Normalize the wire `ciphertext` field to a base64 string.
+
+    The real wire protocol (`infra/advisor/src/protocol.ts` `isBytes()` /
+    `bytesToBase64`) allows `ciphertext: number[] | string`. The production
+    requester (`packages/console/src/lib/inference-dispatch.server.ts`) sends
+    a plain JSON array of byte values, not base64 — the advisor forwards it
+    unchanged. Accept either shape here and normalize to base64.
+    """
+    value = raw.get(key)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        byte_values: list[int] = []
+        for item in value:
+            if not isinstance(item, int) or isinstance(item, bool) or not (0 <= item <= 255):
+                raise ProtocolError(f"field {key!r} array must contain only ints in 0-255")
+            byte_values.append(item)
+        return base64.b64encode(bytes(byte_values)).decode("ascii")
+    raise ProtocolError(f"missing or invalid field {key!r}: expected string or byte array")
 
 
 def frame_type(raw: Mapping[str, Any]) -> str:
@@ -164,7 +187,7 @@ def parse_inference_request(raw: Mapping[str, Any]) -> InferenceRequestFrame:
         requester_pub_key=_require_str(raw, "requester_pub_key"),
         model=_require_str(raw, "model"),
         max_tokens_out=_require_int(raw, "max_tokens_out"),
-        ciphertext_b64=_require_str(raw, "ciphertext"),
+        ciphertext_b64=_require_ciphertext_b64(raw, "ciphertext"),
         session_id=_require_str(raw, "session_id"),
     )
 

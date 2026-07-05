@@ -151,5 +151,51 @@ def test_parse_inference_request_missing_field_raises() -> None:
         )
 
 
+def test_parse_inference_request_ciphertext_byte_array_matches_base64() -> None:
+    base = {
+        "type": "inference_request",
+        "job_uri": "at://did:plc:r/dev.cocore.compute.job/1",
+        "job_cid": "bafyjob",
+        "requester_did": "did:plc:r",
+        "requester_pub_key": "rpk==",
+        "model": "llama-3.1-8b",
+        "max_tokens_out": 512,
+        "session_id": "s1",
+    }
+    req_str = parse_inference_request({**base, "ciphertext": "Y2lwaGVy"})
+    req_arr = parse_inference_request({**base, "ciphertext": list(b"cipher")})
+    assert req_arr.ciphertext_b64 == req_str.ciphertext_b64 == "Y2lwaGVy"
+
+
+def test_parse_inference_request_ciphertext_invalid_type_raises() -> None:
+    base = {
+        "type": "inference_request",
+        "job_uri": "at://x",
+        "requester_did": "did:plc:r",
+        "requester_pub_key": "rpk==",
+        "model": "m",
+        "max_tokens_out": 1,
+        "session_id": "s1",
+    }
+    with pytest.raises(ProtocolError, match="ciphertext"):
+        parse_inference_request({**base, "ciphertext": {"not": "valid"}})
+
+
+def test_parse_inference_request_ciphertext_out_of_range_int_raises() -> None:
+    base = {
+        "type": "inference_request",
+        "job_uri": "at://x",
+        "requester_did": "did:plc:r",
+        "requester_pub_key": "rpk==",
+        "model": "m",
+        "max_tokens_out": 1,
+        "session_id": "s1",
+    }
+    with pytest.raises(ProtocolError, match="ciphertext"):
+        parse_inference_request({**base, "ciphertext": [1, 2, 300]})
+    with pytest.raises(ProtocolError, match="ciphertext"):
+        parse_inference_request({**base, "ciphertext": [1, "x", 3]})
+
+
 def test_parse_ping() -> None:
     assert parse_ping({"type": "ping", "nonce": "n1"}).nonce == "n1"
