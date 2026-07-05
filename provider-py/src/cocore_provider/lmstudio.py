@@ -59,6 +59,13 @@ class LMStudioClient:
                 event = json.loads(data)
                 choices = event.get("choices") or []
                 if not choices:
+                    usage = event.get("usage")
+                    if usage is not None:
+                        yield ChatDelta(
+                            content="",
+                            finish_reason=None,
+                            usage=(usage["prompt_tokens"], usage["completion_tokens"]),
+                        )
                     continue
                 choice = choices[0]
                 content = (choice.get("delta") or {}).get("content", "")

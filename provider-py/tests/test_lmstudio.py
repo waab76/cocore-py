@@ -38,11 +38,12 @@ async def test_stream_chat_yields_content_deltas_then_usage() -> None:
     client = LMStudioClient(base_url="http://localhost:1234", http=async_client)
     deltas = [d async for d in client.stream_chat(model="llama-3.1-8b", prompt="hi", max_tokens=64)]
 
-    assert [d.content for d in deltas] == ["Hel", "lo", ""]
-    assert deltas[-1].finish_reason == "stop"
-    assert deltas[-1].usage is None
+    assert [d.content for d in deltas] == ["Hel", "lo", "", ""]
+    assert deltas[2].finish_reason == "stop"
+    assert deltas[2].usage is None
     # the final usage-only event arrives as a distinct terminal delta
-    assert deltas[-1].usage is None
+    assert deltas[-1].usage == (5, 2)
+    assert deltas[-1].finish_reason is None
 
 
 @pytest.mark.asyncio
