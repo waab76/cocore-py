@@ -47,6 +47,7 @@ class AdvisorConnection:
         identity: Identity,
         provider_did: str,
         mint_auth_jwt: Callable[[], Awaitable[str | None]],
+        attestation_uri: str,
         supported_models: list[str] | None = None,
         ram_gb: int = 0,
     ) -> None:
@@ -54,6 +55,7 @@ class AdvisorConnection:
         self._identity = identity
         self._provider_did = provider_did
         self._mint_auth_jwt = mint_auth_jwt
+        self._attestation_uri = attestation_uri
         self._supported_models = supported_models or []
         self._ram_gb = ram_gb
         self._busy = False
@@ -101,7 +103,7 @@ class AdvisorConnection:
                 supported_models=self._supported_models,
                 encryption_pub_key=self._identity.encryption_public_b64,
                 attestation_pub_key=self._identity.signing_public_b64,
-                attestation_uri="",
+                attestation_uri=self._attestation_uri,
                 tier="best-effort",
                 auth_jwt=auth_jwt,
             )

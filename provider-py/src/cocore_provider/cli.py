@@ -66,6 +66,7 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         identity=identity,
         provider_did=provider_did,
         mint_auth_jwt=mint_auth_jwt,
+        attestation_uri=published_attestation.uri,
         supported_models=supported_models,
     )
     await conn.run(on_inference_request=on_inference_request)

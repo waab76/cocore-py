@@ -45,6 +45,7 @@ async def test_register_then_inference_dispatch_calls_callback() -> None:
         first = json.loads(await ws.recv())
         assert first["type"] == "register"
         assert first["provider_did"] == "did:plc:abc"
+        assert first["attestation_uri"] == "at://did:plc:abc/dev.cocore.compute.attestation/1"
         received_register.set()
 
         await ws.send(
@@ -72,6 +73,7 @@ async def test_register_then_inference_dispatch_calls_callback() -> None:
             identity=_identity(),
             provider_did="did:plc:abc",
             mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
         )
 
         async def on_request(req: object, send: object) -> None:
@@ -178,6 +180,7 @@ async def test_run_propagates_cancellation_when_connection_drop_races_with_cance
             identity=_identity(),
             provider_did="did:plc:abc",
             mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
         )
 
         async def on_request(req: object, send: object) -> None:

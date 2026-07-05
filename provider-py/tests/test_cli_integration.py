@@ -29,6 +29,7 @@ async def test_serve_registers_and_serves_one_job(
         register = json.loads(await ws.recv())
         assert register["type"] == "register"
         assert register["supported_models"] == ["llama-3.1-8b"]
+        assert register["attestation_uri"] == "at://did:plc:p/dev.cocore.compute.attestation/1"
         provider_encryption_pub_b64 = register["encryption_pub_key"]
 
         box = Box(requester_priv, PublicKey(base64.b64decode(provider_encryption_pub_b64)))
@@ -80,6 +81,15 @@ async def test_serve_registers_and_serves_one_job(
         if request.url.path == "/api/pds/getServiceAuth":
             return httpx.Response(200, json={"token": "jwt.abc"})
         if request.url.path == "/api/pds/createRecord":
+            body = json.loads(request.content)
+            if body["collection"] == "dev.cocore.compute.attestation":
+                return httpx.Response(
+                    200,
+                    json={
+                        "uri": "at://did:plc:p/dev.cocore.compute.attestation/1",
+                        "cid": "bafyattest",
+                    },
+                )
             return httpx.Response(
                 200, json={"uri": "at://did:plc:p/dev.cocore.compute.receipt/1", "cid": "bafyrec"}
             )

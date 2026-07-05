@@ -56,19 +56,31 @@ class LMStudioClient:
                 data = line[len("data:") :].strip()
                 if data == "[DONE]":
                     return
-                event = json.loads(data)
-                choices = event.get("choices") or []
-                if not choices:
-                    usage = event.get("usage")
-                    if usage is not None:
-                        yield ChatDelta(
-                            content="",
-                            finish_reason=None,
-                            usage=(usage["prompt_tokens"], usage["completion_tokens"]),
+                try:
+                    event = json.loads(data)
+                    choices = event.get("choices") or []
+                    if not choices:
+                        usage = event.get("usage")
+                        if usage is not None:
+                            delta = ChatDelta(
+                                content="",
+                                finish_reason=None,
+                                usage=(usage["prompt_tokens"], usage["completion_tokens"]),
+                            )
+                        else:
+                            delta = None
+                    else:
+                        choice = choices[0]
+                        content = (choice.get("delta") or {}).get("content", "")
+                        finish_reason = choice.get("finish_reason")
+                        delta = (
+                            ChatDelta(content=content, finish_reason=finish_reason, usage=None)
+                            if (content or finish_reason)
+                            else None
                         )
-                    continue
-                choice = choices[0]
-                content = (choice.get("delta") or {}).get("content", "")
-                finish_reason = choice.get("finish_reason")
-                if content or finish_reason:
-                    yield ChatDelta(content=content, finish_reason=finish_reason, usage=None)
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+                    raise LMStudioError(
+                        f"malformed SSE event from /v1/chat/completions: {data!r}"
+                    ) from e
+                if delta is not None:
+                    yield delta

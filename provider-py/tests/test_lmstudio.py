@@ -57,3 +57,26 @@ async def test_stream_chat_http_error_raises() -> None:
     with pytest.raises(LMStudioError):
         async for _ in client.stream_chat(model="m", prompt="hi", max_tokens=1):
             pass
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_malformed_sse_line_raises_lmstudio_error() -> None:
+    # A non-JSON `data:` line (e.g. a truncated/corrupted event from a
+    # misbehaving proxy in front of LMStudio) must not escape as a bare
+    # json.JSONDecodeError -- callers (run_session) only catch
+    # LMStudioError, and an uncaught exception here would silently hang the
+    # requester (no inference_complete frame ever sent).
+    sse_body = (
+        'data: {"choices":[{"delta":{"content":"Hel"},"finish_reason":null}]}\n\n'
+        "data: not-json-at-all\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
+
+    transport = httpx.MockTransport(handler)
+    async_client = httpx.AsyncClient(transport=transport)
+    client = LMStudioClient(base_url="http://localhost:1234", http=async_client)
+    with pytest.raises(LMStudioError):
+        async for _ in client.stream_chat(model="m", prompt="hi", max_tokens=64):
+            pass
