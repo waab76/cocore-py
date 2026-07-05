@@ -88,5 +88,112 @@ async def test_register_then_inference_dispatch_calls_callback() -> None:
     assert seen_model == ["llama-3.1-8b"]
 
 
+# Number of bare `await asyncio.sleep(0)` event-loop turns to let elapse
+# between aborting the connection and calling `.cancel()` on the task
+# running `conn.run()` in the regression test below. See that test's
+# docstring for exactly what this is tuned to hit and why.
+_RACE_YIELD_COUNT = 5
+
+
+@pytest.mark.asyncio
+async def test_run_propagates_cancellation_when_connection_drop_races_with_cancel() -> None:
+    """Regression test for the race between an external `.cancel()` on the
+    task running `AdvisorConnection.run()` and an ordinary connection
+    failure inside `_receive_loop` (`ConnectionClosed`, or -- in production --
+    the `wait_for` idle-timeout firing).
+
+    Mechanism: `asyncio.TaskGroup.__aexit__` (see cpython
+    `Lib/asyncio/taskgroups.py:_aexit`) gives an ordinary child-task error
+    priority over a bare `CancelledError`. When a genuine external cancel()
+    on the parent task (the task running `run()`) and an ordinary failure in
+    a child task (`_heartbeat_loop`/`_receive_loop`) are *both* still being
+    processed when `__aexit__` finishes unwinding the group, `__aexit__`
+    raises the child's real exception -- wrapped in an `ExceptionGroup` --
+    instead of a bare `CancelledError`, even though the parent task's own
+    cancellation request is still outstanding (`Task.cancelling() > 0`).
+    That's because TaskGroup only ever rebalances, via `uncancel()`, the one
+    cancel-to-interrupt-the-wait call *it* makes internally when a child
+    fails; it never rebalances a genuine external cancel(), so that debt
+    survives. Before the fix, `run()`'s `except Exception:` handler had no
+    way to tell the two situations apart: it logged "reconnecting" and
+    looped back into `_run_once`, ignoring the pending cancellation -- a
+    shutdown signal racing a connection drop would not stop the provider
+    promptly (this matches the empirically-observed "5+ reconnect attempts
+    against an already-dead server before a hard kill was needed").
+
+    Forcing the exact race deterministically isn't practical (it hinges on
+    which of two independently-scheduled asyncio callbacks -- the child
+    task's done-callback vs. the future our cancel() targets -- the event
+    loop happens to process first), so this test gets as close as
+    practically possible and was tuned empirically against this exact
+    module:
+
+    1. Abort the server-side transport *synchronously* (`transport.abort()`,
+       no clean WS close handshake) so `_receive_loop`'s `ws.recv()` fails
+       with an ordinary `ConnectionClosedError` rather than being pre-empted
+       by our own cancellation.
+    2. Let exactly `_RACE_YIELD_COUNT` bare event-loop turns
+       (`await asyncio.sleep(0)`) elapse. This is the window between "the
+       child task's failure has been recorded" and "TaskGroup has fully
+       unwound" -- too few turns and our external cancel() still wins the
+       race outright (receive_loop gets pre-emptively cancelled before its
+       real exception is recorded, `TaskGroup` raises a bare
+       `CancelledError`, and the bug never had a chance to trigger); too
+       many and `_run_once` has already returned/raised by the time we
+       cancel, which is just an ordinary "cancelled during backoff sleep"
+       and also doesn't exercise the bug.
+    3. Call `run_task.cancel()` while the TaskGroup is inside that window.
+
+    Verified locally by temporarily reverting just the `run()` fix (keeping
+    this test as-is): with `_RACE_YIELD_COUNT` in a broad range (empirically
+    3-9 turns on this module/Python/websockets version), the test reliably
+    failed -- `run()` swallowed an `ExceptionGroup` wrapping
+    `ConnectionClosedError` while `Task.cancelling() > 0`, logged
+    "reconnecting", slept out the first backoff, attempted (and failed) a
+    real reconnect against the aborted server, and the test's
+    `asyncio.wait_for(run_task, timeout=5)` timed out instead of observing a
+    `CancelledError`. With the fix restored, the same range of turn counts
+    reliably passes. `_RACE_YIELD_COUNT = 5` sits in the middle of that
+    empirically-confirmed window.
+    """
+    registered = asyncio.Event()
+    server_conns: list[websockets.ServerConnection] = []
+
+    async def fake_advisor(ws: websockets.ServerConnection) -> None:
+        first = json.loads(await ws.recv())
+        assert first["type"] == "register"
+        server_conns.append(ws)
+        registered.set()
+        # Tie this handler's lifetime to the connection itself (rather than
+        # e.g. sleeping) so that once the test aborts the transport below,
+        # the handler -- and thus `websockets.serve`'s teardown -- unwinds
+        # promptly instead of leaking a task.
+        await ws.wait_closed()
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = _config(f"ws://localhost:{port}/v1/agent")
+        conn = AdvisorConnection(
+            config=config,
+            identity=_identity(),
+            provider_did="did:plc:abc",
+            mint_auth_jwt=lambda: _async_none(),
+        )
+
+        async def on_request(req: object, send: object) -> None:
+            return None
+
+        run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+        await asyncio.wait_for(registered.wait(), timeout=5)
+
+        server_conns[0].transport.abort()
+        for _ in range(_RACE_YIELD_COUNT):
+            await asyncio.sleep(0)
+        run_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run_task, timeout=5)
+
+
 async def _async_none() -> None:
     return None

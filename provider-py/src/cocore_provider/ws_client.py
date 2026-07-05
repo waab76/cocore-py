@@ -66,7 +66,24 @@ class AdvisorConnection:
                 backoff_idx = 0
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                # asyncio.TaskGroup.__aexit__ gives an ordinary child-task
+                # error priority over a bare CancelledError: if an external
+                # cancel() on *this* task races with an ordinary failure in
+                # _heartbeat_loop/_receive_loop (ConnectionClosed, the
+                # wait_for idle-timeout, ...), __aexit__ can raise the
+                # child's real exception -- bare, or wrapped in an
+                # ExceptionGroup/BaseExceptionGroup -- instead of surfacing a
+                # plain CancelledError, even though this task's own
+                # cancellation request is still outstanding. See
+                # cpython Lib/asyncio/taskgroups.py:_aexit: TaskGroup always
+                # rebalances (uncancel()) its *own* internal cancel-to-wake
+                # -the-parent call, so Task.cancelling() only remains > 0
+                # here when an external cancellation genuinely has not been
+                # acknowledged yet. Treat that as "stop", not "reconnect".
+                current_task = asyncio.current_task()
+                if current_task is not None and current_task.cancelling() > 0:
+                    raise asyncio.CancelledError() from exc
                 logger.exception("advisor connection dropped; reconnecting")
             delay = RECONNECT_BACKOFFS[min(backoff_idx, len(RECONNECT_BACKOFFS) - 1)]
             backoff_idx += 1
