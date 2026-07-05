@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-from cocore.p256 import verify_attestation_signature, verify_p256
 from cocore.canonical import canonical_bytes
+from cocore.p256 import verify_attestation_signature, verify_p256
+from cryptography.hazmat.primitives.asymmetric import ec
+from nacl.public import PrivateKey
 
 from cocore_provider.attestation import build_attestation_record, build_challenge_response
 from cocore_provider.identity import Identity
 from cocore_provider.protocol import AttestationChallenge
-from cryptography.hazmat.primitives.asymmetric import ec
-from nacl.public import PrivateKey
 
 
 def _identity() -> Identity:

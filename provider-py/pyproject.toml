@@ -24,6 +24,10 @@ cocore = { path = "../sdk/py", editable = true }
 [tool.mypy]
 strict = true
 
+[[tool.mypy.overrides]]
+module = "cocore.*"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 100
 
