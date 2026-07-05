@@ -18,13 +18,20 @@ async def test_mint_service_auth_success() -> None:
         assert request.url.path == "/api/pds/getServiceAuth"
         assert request.headers["authorization"] == "Bearer key123"
         body = json.loads(request.content)
-        assert body == {"aud": "did:web:advisor.cocore.dev", "lxm": "dev.cocore.compute.register"}
+        assert body == {
+            "aud": "did:web:advisor.cocore.dev",
+            "lxm": "dev.cocore.compute.register",
+        }
         return httpx.Response(200, json={"token": "jwt.abc"})
 
     client = PdsClient(
-        api_base="https://console.example", api_key="key123", http=_client(httpx.MockTransport(handler))
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(handler)),
     )
-    token = await client.mint_service_auth("did:web:advisor.cocore.dev", "dev.cocore.compute.register")
+    token = await client.mint_service_auth(
+        "did:web:advisor.cocore.dev", "dev.cocore.compute.register"
+    )
     assert token == "jwt.abc"
 
 
@@ -34,9 +41,25 @@ async def test_mint_service_auth_failure_raises_pds_error() -> None:
         return httpx.Response(401, text="unauthorized")
 
     client = PdsClient(
-        api_base="https://console.example", api_key="bad", http=_client(httpx.MockTransport(handler))
+        api_base="https://console.example",
+        api_key="bad",
+        http=_client(httpx.MockTransport(handler)),
     )
     with pytest.raises(PdsError, match="401"):
+        await client.mint_service_auth("aud", "lxm")
+
+
+@pytest.mark.asyncio
+async def test_mint_service_auth_malformed_response_raises_pds_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"notToken": "jwt.abc"})
+
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(handler)),
+    )
+    with pytest.raises(PdsError, match="malformed"):
         await client.mint_service_auth("aud", "lxm")
 
 
@@ -57,7 +80,9 @@ async def test_publish_success() -> None:
         )
 
     client = PdsClient(
-        api_base="https://console.example", api_key="key123", http=_client(httpx.MockTransport(handler))
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(handler)),
     )
     published = await client.publish("dev.cocore.compute.receipt", {"model": "m"})
     assert published.uri == "at://did:plc:p/dev.cocore.compute.receipt/1"
@@ -70,7 +95,23 @@ async def test_publish_failure_raises_pds_error() -> None:
         return httpx.Response(500, text="boom")
 
     client = PdsClient(
-        api_base="https://console.example", api_key="key123", http=_client(httpx.MockTransport(handler))
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(handler)),
     )
     with pytest.raises(PdsError, match="500"):
+        await client.publish("dev.cocore.compute.receipt", {})
+
+
+@pytest.mark.asyncio
+async def test_publish_malformed_response_raises_pds_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"uri": "at://did:plc:p/dev.cocore.compute.receipt/1"})
+
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(handler)),
+    )
+    with pytest.raises(PdsError, match="malformed"):
         await client.publish("dev.cocore.compute.receipt", {})

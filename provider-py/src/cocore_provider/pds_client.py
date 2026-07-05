@@ -35,7 +35,10 @@ class PdsClient:
         )
         if resp.status_code != 200:
             raise PdsError(f"console proxy getServiceAuth returned {resp.status_code}: {resp.text}")
-        return str(resp.json()["token"])
+        try:
+            return str(resp.json()["token"])
+        except (KeyError, ValueError) as e:
+            raise PdsError(f"console proxy getServiceAuth returned 200 but malformed: {e}") from e
 
     async def publish(self, collection: str, record: dict[str, object]) -> PublishedRecord:
         resp = await self._http.post(
@@ -47,5 +50,10 @@ class PdsClient:
             raise PdsError(
                 f"console proxy createRecord {collection} returned {resp.status_code}: {resp.text}"
             )
-        body = resp.json()
-        return PublishedRecord(uri=body["uri"], cid=body["cid"])
+        try:
+            body = resp.json()
+            return PublishedRecord(uri=body["uri"], cid=body["cid"])
+        except (KeyError, ValueError) as e:
+            raise PdsError(
+                f"console proxy createRecord {collection} returned 200 but malformed: {e}"
+            ) from e
