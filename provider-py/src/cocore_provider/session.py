@@ -98,7 +98,7 @@ async def run_session(req: InferenceRequestFrame, send: Send, ctx: SessionContex
         await send(
             build_inference_chunk(
                 session_id=req.session_id,
-                seq=0,
+                seq=seq,
                 ciphertext_b64=base64.b64encode(framed).decode("ascii"),
             )
         )
