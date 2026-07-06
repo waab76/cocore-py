@@ -281,6 +281,31 @@ def test_log_file_none_sentinel_disables_file_logging() -> None:
     assert config.log_file is None
 
 
+def test_log_file_expands_tilde(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Regression: a config-file/env value of "~/..." must resolve against
+    # the real home dir, not become a literal "~" directory relative to
+    # whatever the process's cwd happens to be. `expanduser()` reads $HOME
+    # directly (not `Path.home()`), so that's what has to be patched here.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = load_config(
+        {
+            "COCORE_API_KEY": "key123",
+            "COCORE_API_BASE": "https://console.example",
+            "COCORE_LOG_FILE": "~/custom/provider.log",
+        }
+    )
+    assert config.log_file == tmp_path / "custom" / "provider.log"
+
+
+def test_identity_path_expands_tilde(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config = load_config(
+        {"COCORE_API_KEY": "key123", "COCORE_API_BASE": "https://console.example"},
+        config_file={"identity_path": "~/custom/identity.json"},
+    )
+    assert config.identity_path == tmp_path / "custom" / "identity.json"
+
+
 def test_resolve_provider_did_cli_arg_wins_over_everything() -> None:
     provider_did = resolve_provider_did(
         cli_arg="did:plc:cli",

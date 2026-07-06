@@ -23,6 +23,26 @@ def test_find_config_path_falls_back_to_default() -> None:
     assert path == DEFAULT_CONFIG_PATH
 
 
+def test_find_config_path_expands_tilde_in_cli_arg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: a literal "~/..." must resolve against the real home dir
+    # via expanduser(), not become a relative "~" directory under whatever
+    # the process's cwd happens to be. `expanduser()` reads $HOME directly
+    # (not `Path.home()`), so that's what has to be patched here.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = find_config_path(cli_arg="~/custom.toml", env={})
+    assert path == tmp_path / "custom.toml"
+
+
+def test_find_config_path_expands_tilde_in_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = find_config_path(cli_arg=None, env={"COCORE_CONFIG_PATH": "~/custom.toml"})
+    assert path == tmp_path / "custom.toml"
+
+
 def test_find_config_path_default_honors_monkeypatched_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

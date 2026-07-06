@@ -168,7 +168,7 @@ def load_config(
         "identity_path", file=file, env=env, env_key="COCORE_IDENTITY_PATH"
     )
     identity_path = (
-        Path(identity_path_raw)
+        Path(identity_path_raw).expanduser()
         if identity_path_raw
         else Path.home() / ".cocore" / "provider-py" / "identity.json"
     )
@@ -190,7 +190,7 @@ def load_config(
     if log_file_raw and log_file_raw.strip().lower() == "none":
         log_file = None
     elif log_file_raw:
-        log_file = Path(log_file_raw)
+        log_file = Path(log_file_raw).expanduser()
     else:
         # Computed fresh rather than a module-level constant: see
         # find_config_path()'s identical fix for why a Path.home()-based
