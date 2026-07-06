@@ -42,7 +42,26 @@ def test_build_register_matches_wire_field_names() -> None:
     assert frame["attestation_pub_key"] == "apk=="
     assert frame["tier"] == "best-effort"
     assert frame["auth_jwt"] == "jwt.token.here"
+    assert "binary_version" not in frame
     json.dumps(frame)  # must be JSON-serializable
+
+
+def test_build_register_includes_binary_version_when_given() -> None:
+    frame = build_register(
+        provider_did="did:plc:abc",
+        machine_id="win-1",
+        machine_label="my-pc",
+        chip="lmstudio:windows",
+        ram_gb=32,
+        supported_models=["llama-3.1-8b"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+        tier="best-effort",
+        auth_jwt=None,
+        binary_version="0.1.0",
+    )
+    assert frame["binary_version"] == "0.1.0"
 
 
 def test_build_heartbeat() -> None:

@@ -12,6 +12,7 @@ from typing import Any
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from cocore_provider import __version__
 from cocore_provider.attestation import build_challenge_response
 from cocore_provider.config import (
     HEARTBEAT_INTERVAL_SECS,
@@ -119,6 +120,7 @@ class AdvisorConnection:
                 attestation_uri=self._attestation_uri,
                 tier="best-effort",
                 auth_jwt=auth_jwt,
+                binary_version=__version__,
             )
             await ws.send(_dumps(register))
             logger.info("registered with advisor at %s", self._config.advisor_url)

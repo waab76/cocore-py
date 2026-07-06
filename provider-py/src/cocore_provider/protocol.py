@@ -79,6 +79,7 @@ def build_register(
     attestation_uri: str,
     tier: str,
     auth_jwt: str | None,
+    binary_version: str | None = None,
 ) -> dict[str, object]:
     frame: dict[str, object] = {
         "type": "register",
@@ -95,6 +96,8 @@ def build_register(
     }
     if auth_jwt is not None:
         frame["auth_jwt"] = auth_jwt
+    if binary_version is not None:
+        frame["binary_version"] = binary_version
     return frame
 
 

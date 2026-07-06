@@ -12,6 +12,7 @@ import websockets
 from nacl.public import Box, PrivateKey, PublicKey
 from nacl.utils import random as nacl_random
 
+from cocore_provider import __version__
 from cocore_provider.cli import serve
 from cocore_provider.config import AgentConfig
 
@@ -31,6 +32,7 @@ async def test_serve_registers_and_serves_one_job(
         assert register["supported_models"] == ["llama-3.1-8b"]
         assert register["attestation_uri"] == "at://did:plc:p/dev.cocore.compute.attestation/1"
         assert register["machine_id"] == "prov1"
+        assert register["binary_version"] == __version__
         provider_encryption_pub_b64 = register["encryption_pub_key"]
 
         box = Box(requester_priv, PublicKey(base64.b64decode(provider_encryption_pub_b64)))

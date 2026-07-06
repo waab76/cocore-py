@@ -7,7 +7,9 @@ receipt_uri (no receipt is published for a failed job)."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable
@@ -15,6 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from cocore_provider import pricing
+from cocore_provider.config import STREAM_KEEPALIVE_INTERVAL_SECS
 from cocore_provider.crypto import open_from_requester, seal_to_requester
 from cocore_provider.identity import Identity
 from cocore_provider.lmstudio import LMStudioClient, LMStudioError
@@ -23,12 +26,26 @@ from cocore_provider.protocol import (
     InferenceRequestFrame,
     build_inference_chunk,
     build_inference_complete,
+    build_inference_keepalive,
 )
 from cocore_provider.receipt import ReceiptInputs, build_receipt
 
 logger = logging.getLogger(__name__)
 
 Send = Callable[[dict[str, object]], Awaitable[None]]
+
+
+async def _stream_keepalives(send: Send, session_id: str) -> None:
+    """Ticks every STREAM_KEEPALIVE_INTERVAL_SECS while a job is in flight,
+    so the advisor's session idle-timer (main.ts SessionManager) doesn't
+    expire during a slow model load or a long silent generation gap.
+    Mirrors provider/src/advisor.rs's STREAM_KEEPALIVE_INTERVAL ticker --
+    without this, a job whose first token takes longer than the advisor's
+    firstChunkTimeoutMs (120s default) is killed as `idle-timeout` even
+    though the provider is still working."""
+    while True:
+        await asyncio.sleep(STREAM_KEEPALIVE_INTERVAL_SECS)
+        await send(build_inference_keepalive(session_id=session_id))
 
 
 @dataclass
@@ -69,18 +86,36 @@ async def run_session(req: InferenceRequestFrame, send: Send, ctx: SessionContex
     tokens_out: int | None = None
     seq = 0
 
+    keepalive_task = asyncio.create_task(_stream_keepalives(send, req.session_id))
     try:
-        async for delta in ctx.lmstudio.stream_chat(
-            model=req.model, prompt=prompt, max_tokens=req.max_tokens_out
-        ):
-            if delta.usage is not None:
-                tokens_in, tokens_out = delta.usage
-                continue
-            if not delta.content:
-                continue
-            output_parts.append(delta.content)
+        try:
+            async for delta in ctx.lmstudio.stream_chat(
+                model=req.model, prompt=prompt, max_tokens=req.max_tokens_out
+            ):
+                if delta.usage is not None:
+                    tokens_in, tokens_out = delta.usage
+                    continue
+                if not delta.content:
+                    continue
+                output_parts.append(delta.content)
+                framed = seal_to_requester(
+                    delta.content.encode("utf-8"),
+                    req.requester_pub_key,
+                    ctx.identity.encryption_key,
+                )
+                await send(
+                    build_inference_chunk(
+                        session_id=req.session_id,
+                        seq=seq,
+                        ciphertext_b64=base64.b64encode(framed).decode("ascii"),
+                    )
+                )
+                seq += 1
+        except LMStudioError:
+            logger.warning("LMStudio failure for session %s", req.session_id, exc_info=True)
+            error_text = "[cocore provider] the local LMStudio backend failed to complete this job"
             framed = seal_to_requester(
-                delta.content.encode("utf-8"), req.requester_pub_key, ctx.identity.encryption_key
+                error_text.encode("utf-8"), req.requester_pub_key, ctx.identity.encryption_key
             )
             await send(
                 build_inference_chunk(
@@ -89,22 +124,12 @@ async def run_session(req: InferenceRequestFrame, send: Send, ctx: SessionContex
                     ciphertext_b64=base64.b64encode(framed).decode("ascii"),
                 )
             )
-            seq += 1
-    except LMStudioError:
-        logger.warning("LMStudio failure for session %s", req.session_id, exc_info=True)
-        error_text = "[cocore provider] the local LMStudio backend failed to complete this job"
-        framed = seal_to_requester(
-            error_text.encode("utf-8"), req.requester_pub_key, ctx.identity.encryption_key
-        )
-        await send(
-            build_inference_chunk(
-                session_id=req.session_id,
-                seq=seq,
-                ciphertext_b64=base64.b64encode(framed).decode("ascii"),
-            )
-        )
-        await _send_empty_completion(send, req.session_id)
-        return
+            await _send_empty_completion(send, req.session_id)
+            return
+    finally:
+        keepalive_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await keepalive_task
 
     output_bytes = "".join(output_parts).encode("utf-8")
     output_commitment = hashlib.sha256(output_bytes).hexdigest()
