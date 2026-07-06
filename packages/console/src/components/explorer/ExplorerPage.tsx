@@ -414,6 +414,13 @@ export function ExplorerPage() {
             </div>
           ) : null}
 
+          {graph?.summary.rendered.truncated ? (
+            <div {...stylex.props(styles.metaRow)}>
+              Graphing the {intFmt.format(graph.summary.rendered.nodes)} most-connected of{" "}
+              {intFmt.format(graph.summary.people)} — search to find anyone not drawn.
+            </div>
+          ) : null}
+
           <div {...stylex.props(styles.controls)}>
             <div {...stylex.props(styles.searchWrap)}>
               <SearchField
