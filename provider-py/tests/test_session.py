@@ -73,6 +73,7 @@ async def test_run_session_happy_path_streams_and_publishes_receipt() -> None:
         api_base="https://console.example",
         api_key="key123",
         http=httpx.AsyncClient(transport=httpx.MockTransport(pds_handler)),
+        did="did:plc:p",
     )
     ctx = SessionContext(
         identity=identity,
@@ -141,6 +142,7 @@ async def test_run_session_lmstudio_failure_sends_error_chunk_and_empty_receipt(
         api_base="https://console.example",
         api_key="key123",
         http=httpx.AsyncClient(transport=httpx.MockTransport(pds_handler)),
+        did="did:plc:p",
     )
     ctx = SessionContext(
         identity=identity,
@@ -215,6 +217,7 @@ async def test_run_session_sends_keepalive_during_slow_stream(
         api_base="https://console.example",
         api_key="key123",
         http=httpx.AsyncClient(transport=httpx.MockTransport(pds_handler)),
+        did="did:plc:p",
     )
     ctx = SessionContext(
         identity=identity,

@@ -15,10 +15,12 @@ from websockets.asyncio.client import ClientConnection
 from cocore_provider import __version__
 from cocore_provider.attestation import build_challenge_response
 from cocore_provider.config import (
+    ACTIVE_POLL_INTERVAL_SECS,
     HEARTBEAT_INTERVAL_SECS,
     AgentConfig,
 )
 from cocore_provider.identity import Identity
+from cocore_provider.pds_client import PdsClient
 from cocore_provider.protocol import (
     InferenceRequestFrame,
     build_heartbeat,
@@ -47,6 +49,7 @@ class AdvisorConnection:
         identity: Identity,
         provider_did: str,
         machine_id: str,
+        pds: PdsClient,
         mint_auth_jwt: Callable[[], Awaitable[str | None]],
         attestation_uri: str,
         supported_models: list[str] | None = None,
@@ -56,15 +59,31 @@ class AdvisorConnection:
         self._identity = identity
         self._provider_did = provider_did
         self._machine_id = machine_id
+        self._pds = pds
         self._mint_auth_jwt = mint_auth_jwt
         self._attestation_uri = attestation_uri
         self._supported_models = supported_models or []
         self._ram_gb = ram_gb
         self._busy = False
+        # The owner's start/stop switch, last read from our own PDS record.
+        # Reported in every heartbeat and re-checked every
+        # ACTIVE_POLL_INTERVAL_SECS by `_active_poll_loop`. Absent/unreadable
+        # == serving (the lexicon default), so this starts True.
+        self._active = True
+
+    async def _is_active(self) -> bool:
+        active = await self._pds.get_provider_active(self._machine_id)
+        return True if active is None else active
 
     async def run(self, *, on_inference_request: OnInferenceRequest) -> None:
         backoff_idx = 0
         while True:
+            if not await self._is_active():
+                logger.info(
+                    "owner has this machine stopped; waiting to be re-enabled from the console"
+                )
+                await asyncio.sleep(ACTIVE_POLL_INTERVAL_SECS)
+                continue
             try:
                 await self._run_once(on_inference_request)
                 backoff_idx = 0
@@ -131,14 +150,37 @@ class AdvisorConnection:
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(self._heartbeat_loop(send))
                 tg.create_task(self._receive_loop(ws, send, on_inference_request))
+                tg.create_task(self._active_poll_loop(ws))
 
     async def _heartbeat_loop(self, send: Callable[[dict[str, object]], Awaitable[None]]) -> None:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL_SECS)
-            logger.debug("sending heartbeat (busy=%s)", self._busy)
+            logger.debug("sending heartbeat (busy=%s, active=%s)", self._busy, self._active)
             await send(
-                build_heartbeat(load=1.0 if self._busy else 0.0, queue_depth=int(self._busy))
+                build_heartbeat(
+                    load=1.0 if self._busy else 0.0,
+                    queue_depth=int(self._busy),
+                    active=self._active,
+                )
             )
+
+    async def _active_poll_loop(self, ws: ClientConnection) -> None:
+        """Re-reads the owner's PDS active switch every
+        ACTIVE_POLL_INTERVAL_SECS -- the fallback path for a missed nudge
+        (provider-py doesn't yet act on a `control_changed` fast-path frame;
+        see provider/src/advisor.rs's dual poll+nudge design). Closing our
+        own end of the socket -- rather than raising some bespoke signal --
+        lets an owner-stop reuse the exact same, already-tested
+        disconnect/backoff/reconnect path as an ordinary network drop;
+        `run()`'s gate at the top of its loop is what actually holds us out
+        of the registry afterward instead of immediately reconnecting."""
+        while True:
+            await asyncio.sleep(ACTIVE_POLL_INTERVAL_SECS)
+            self._active = await self._is_active()
+            if not self._active:
+                logger.info("owner stopped this machine from the console; disconnecting")
+                await ws.close(code=1000, reason="owner-stopped")
+                return
 
     async def _receive_loop(
         self,

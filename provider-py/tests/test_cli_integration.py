@@ -81,6 +81,20 @@ async def test_serve_registers_and_serves_one_job(
         return httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
 
     def console_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [
+                        {"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"},
+                    ]
+                },
+            )
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            # No existing provider record for this DID -- get_provider_active
+            # falls back to "active" (matches a fresh machine with nothing
+            # published yet).
+            return httpx.Response(200, json={"records": []})
         if request.url.path == "/api/pds/getServiceAuth":
             return httpx.Response(200, json={"token": "jwt.abc"})
         if request.url.path == "/api/pds/createRecord":

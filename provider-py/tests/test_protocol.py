@@ -66,8 +66,19 @@ def test_build_register_includes_binary_version_when_given() -> None:
 
 def test_build_heartbeat() -> None:
     frame = build_heartbeat(load=0.5, queue_depth=1)
-    assert frame == {"type": "heartbeat", "load": 0.5, "queue_depth": 1, "at": frame["at"]}
+    assert frame == {
+        "type": "heartbeat",
+        "load": 0.5,
+        "queue_depth": 1,
+        "at": frame["at"],
+        "active": True,
+    }
     assert isinstance(frame["at"], str)
+
+
+def test_build_heartbeat_active_false() -> None:
+    frame = build_heartbeat(load=0.0, queue_depth=0, active=False)
+    assert frame["active"] is False
 
 
 def test_build_inference_chunk_and_complete() -> None:

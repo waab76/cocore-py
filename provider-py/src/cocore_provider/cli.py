@@ -62,7 +62,9 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
     identity = load_or_create(config.identity_path)
     logger.info("identity loaded from %s", config.identity_path)
     console_http = _build_console_http()
-    pds = PdsClient(api_base=config.api_base, api_key=config.api_key, http=console_http)
+    pds = PdsClient(
+        api_base=config.api_base, api_key=config.api_key, http=console_http, did=provider_did
+    )
 
     lmstudio_http = _build_lmstudio_http()
     lmstudio = LMStudioClient(base_url=config.lmstudio_url, http=lmstudio_http)
@@ -115,6 +117,7 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         identity=identity,
         provider_did=provider_did,
         machine_id=published_provider.rkey,
+        pds=pds,
         mint_auth_jwt=mint_auth_jwt,
         attestation_uri=published_attestation.uri,
         supported_models=supported_models,

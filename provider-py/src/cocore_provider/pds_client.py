@@ -1,8 +1,11 @@
-"""HTTP client over the console's PDS-proxy, mirroring
-`provider/src/pds.rs`'s `PdsClient` exactly: the agent never talks to a real
-PDS/AT-Proto endpoint directly (no DPoP-bound OAuth session here) — every
-write goes through `POST {api_base}/api/pds/createRecord` /
-`/api/pds/getServiceAuth` with a plain `Bearer <api_key>`."""
+"""HTTP client for this agent's PDS interactions, mirroring
+`provider/src/pds.rs`'s `PdsClient`. Writes go through the console's
+PDS-proxy (`POST {api_base}/api/pds/createRecord` / `/api/pds/getServiceAuth`
+with a plain `Bearer <api_key>`) since the agent has no DPoP-bound OAuth
+session to write with directly. Reads (`list_records` / `get_provider_active`)
+go straight to the provider's own PDS instead: `com.atproto.repo.listRecords`
+is public, unauthenticated AT Protocol XRPC, and the console proxy exposes no
+read endpoint to route them through anyway."""
 
 from __future__ import annotations
 
@@ -27,10 +30,11 @@ class PublishedRecord:
 
 
 class PdsClient:
-    def __init__(self, *, api_base: str, api_key: str, http: httpx.AsyncClient) -> None:
+    def __init__(self, *, api_base: str, api_key: str, http: httpx.AsyncClient, did: str) -> None:
         self._api_base = api_base.rstrip("/")
         self._api_key = api_key
         self._http = http
+        self._did = did
 
     async def mint_service_auth(self, aud: str, lxm: str) -> str:
         resp = await self._http.post(
@@ -62,3 +66,74 @@ class PdsClient:
             raise PdsError(
                 f"console proxy createRecord {collection} returned 200 but malformed: {e}"
             ) from e
+
+    async def resolve_pds_endpoint(self) -> str:
+        """Resolve this agent's own DID to its PDS's HTTP base URL: the PLC
+        directory for `did:plc`, the well-known doc for `did:web`. Both are
+        public, unauthenticated lookups. Mirrors
+        `provider/src/pds.rs::resolve_pds_endpoint`."""
+        if self._did.startswith("did:plc:"):
+            resp = await self._http.get(f"https://plc.directory/{self._did}")
+            if resp.status_code != 200:
+                raise PdsError(f"plc resolve {self._did} returned {resp.status_code}")
+            doc = resp.json()
+            for svc in doc.get("service") or []:
+                if svc.get("id") == "#atproto_pds":
+                    endpoint = svc.get("serviceEndpoint")
+                    if isinstance(endpoint, str) and endpoint:
+                        return endpoint
+            raise PdsError(f"no atproto_pds service in PLC doc for {self._did}")
+        if self._did.startswith("did:web:"):
+            host = self._did[len("did:web:") :]
+            return f"https://{host}"
+        raise PdsError(f"unsupported DID method: {self._did}")
+
+    async def list_records(self, collection: str) -> list[dict[str, object]]:
+        """List every record this DID owns under `collection`, read straight
+        off its own PDS's public `com.atproto.repo.listRecords` (no console
+        proxy involved). Paginated the same way
+        `provider/src/pds.rs::list_my_records` is: 100 pages of up to 100
+        records, comfortably above any realistic count."""
+        pds_endpoint = await self.resolve_pds_endpoint()
+        out: list[dict[str, object]] = []
+        cursor: str | None = None
+        for _ in range(100):
+            params: dict[str, str | int] = {
+                "repo": self._did,
+                "collection": collection,
+                "limit": 100,
+            }
+            if cursor is not None:
+                params["cursor"] = cursor
+            resp = await self._http.get(
+                f"{pds_endpoint.rstrip('/')}/xrpc/com.atproto.repo.listRecords",
+                params=params,
+            )
+            if resp.status_code != 200:
+                raise PdsError(f"listRecords {collection} returned {resp.status_code}: {resp.text}")
+            body = resp.json()
+            records = body.get("records") or []
+            out.extend(records)
+            next_cursor = body.get("cursor")
+            if not next_cursor or not records:
+                break
+            cursor = next_cursor
+        return out
+
+    async def get_provider_active(self, rkey: str) -> bool | None:
+        """Read the owner's start/stop switch off this DID's own
+        `dev.cocore.compute.provider` record at `rkey`. `None` means the
+        field is absent (the lexicon default: serving) or the read failed --
+        callers should treat that the same as `True`. Mirrors
+        `provider/src/pds.rs::get_provider_active`."""
+        try:
+            records = await self.list_records("dev.cocore.compute.provider")
+        except PdsError:
+            return None
+        for record in records:
+            uri = record.get("uri")
+            if isinstance(uri, str) and uri.rsplit("/", 1)[-1] == rkey:
+                value = record.get("value")
+                active = value.get("active") if isinstance(value, dict) else None
+                return active if isinstance(active, bool) else None
+        return None

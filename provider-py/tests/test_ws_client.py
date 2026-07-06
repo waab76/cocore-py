@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import httpx
 import pytest
 import websockets
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -12,6 +13,7 @@ from nacl.public import PrivateKey
 import cocore_provider.ws_client as ws_client_module
 from cocore_provider.config import AgentConfig
 from cocore_provider.identity import Identity
+from cocore_provider.pds_client import PdsClient
 from cocore_provider.ws_client import AdvisorConnection
 
 
@@ -33,6 +35,20 @@ def _identity() -> Identity:
     return Identity(
         signing_key=ec.generate_private_key(ec.SECP256R1()),
         encryption_key=PrivateKey.generate(),
+    )
+
+
+def _never_stopped_pds() -> PdsClient:
+    """A PdsClient whose reads always fail cleanly (a plain non-200, not a
+    raised exception) so `get_provider_active` falls back to `None` ->
+    `_is_active()` treats the machine as active. Used by tests that don't
+    care about the owner-stop feature, so they behave exactly as before it
+    existed."""
+    return PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))),
+        did="did:plc:abc",
     )
 
 
@@ -74,6 +90,7 @@ async def test_register_then_inference_dispatch_calls_callback() -> None:
             identity=_identity(),
             provider_did="did:plc:abc",
             machine_id="m1",
+            pds=_never_stopped_pds(),
             mint_auth_jwt=lambda: _async_none(),
             attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
         )
@@ -182,6 +199,7 @@ async def test_run_propagates_cancellation_when_connection_drop_races_with_cance
             identity=_identity(),
             provider_did="did:plc:abc",
             machine_id="m1",
+            pds=_never_stopped_pds(),
             mint_auth_jwt=lambda: _async_none(),
             attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
         )
@@ -254,6 +272,7 @@ async def test_run_reconnects_after_ordinary_failure_without_external_cancel(
             identity=_identity(),
             provider_did="did:plc:abc",
             machine_id="m1",
+            pds=_never_stopped_pds(),
             mint_auth_jwt=lambda: _async_none(),
             attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
         )
@@ -273,6 +292,151 @@ async def test_run_reconnects_after_ordinary_failure_without_external_cancel(
             run_task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await run_task
+
+
+def _stopped_pds() -> PdsClient:
+    """A PdsClient reporting `active: False` for the one provider record it
+    knows about, unconditionally."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "records": [
+                    {
+                        "uri": "at://did:plc:abc/dev.cocore.compute.provider/m1",
+                        "cid": "bafy",
+                        "value": {"active": False},
+                    }
+                ]
+            },
+        )
+
+    return PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_gates_on_owner_stopped_before_connecting() -> None:
+    connected = asyncio.Event()
+
+    async def fake_advisor(ws: websockets.ServerConnection) -> None:
+        connected.set()
+        await ws.wait_closed()
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = _config(f"ws://localhost:{port}/v1/agent")
+        conn = AdvisorConnection(
+            config=config,
+            identity=_identity(),
+            provider_did="did:plc:abc",
+            machine_id="m1",
+            pds=_stopped_pds(),
+            mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+        )
+
+        async def on_request(req: object, send: object) -> None:
+            return None
+
+        run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(connected.wait(), timeout=0.3)
+        assert not run_task.done()
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+
+@pytest.mark.asyncio
+async def test_run_disconnects_when_owner_stops_mid_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ws_client_module, "ACTIVE_POLL_INTERVAL_SECS", 0.05)
+    monkeypatch.setattr(ws_client_module, "HEARTBEAT_INTERVAL_SECS", 10.0)
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        calls += 1
+        # Active on the very first read (the pre-connect gate), stopped on
+        # every read after (the in-connection poll).
+        active = calls <= 1
+        return httpx.Response(
+            200,
+            json={
+                "records": [
+                    {
+                        "uri": "at://did:plc:abc/dev.cocore.compute.provider/m1",
+                        "cid": "bafy",
+                        "value": {"active": active},
+                    }
+                ]
+            },
+        )
+
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+
+    disconnected = asyncio.Event()
+
+    async def fake_advisor(ws: websockets.ServerConnection) -> None:
+        first = json.loads(await ws.recv())
+        assert first["type"] == "register"
+        try:
+            await ws.wait_closed()
+        finally:
+            disconnected.set()
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = _config(f"ws://localhost:{port}/v1/agent")
+        conn = AdvisorConnection(
+            config=config,
+            identity=_identity(),
+            provider_did="did:plc:abc",
+            machine_id="m1",
+            pds=pds,
+            mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+        )
+
+        async def on_request(req: object, send: object) -> None:
+            return None
+
+        run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+        await asyncio.wait_for(disconnected.wait(), timeout=5)
+        # run() must not have exited/crashed -- it should have looped back
+        # into the owner-stopped gate and be sleeping there.
+        await asyncio.sleep(0.1)
+        assert not run_task.done()
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
 
 
 async def _async_none() -> None:

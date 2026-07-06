@@ -101,12 +101,13 @@ def build_register(
     return frame
 
 
-def build_heartbeat(*, load: float, queue_depth: int) -> dict[str, object]:
+def build_heartbeat(*, load: float, queue_depth: int, active: bool = True) -> dict[str, object]:
     return {
         "type": "heartbeat",
         "load": load,
         "queue_depth": queue_depth,
         "at": _now_rfc3339(),
+        "active": active,
     }
 
 

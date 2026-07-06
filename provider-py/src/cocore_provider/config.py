@@ -23,6 +23,10 @@ REGISTER_LXM = "dev.cocore.compute.register"
 
 HEARTBEAT_INTERVAL_SECS = 30.0
 STREAM_KEEPALIVE_INTERVAL_SECS = 10.0
+# How often the agent re-reads the owner's start/stop switch off its own
+# `dev.cocore.compute.provider` PDS record (provider/src/advisor.rs's
+# `active_poll` ticker uses the same 30s cadence as its heartbeat).
+ACTIVE_POLL_INTERVAL_SECS = 30.0
 
 
 class ConfigError(RuntimeError):
