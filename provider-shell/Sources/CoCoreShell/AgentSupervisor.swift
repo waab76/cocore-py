@@ -730,7 +730,25 @@ final class AgentSupervisor {
     /// non-entitled default binary. Synchronous + called once per spawn (the
     /// same pattern as the other CLI shell-outs in this type).
     nonisolated static func probeTier() -> String {
-        guard let bin = locateBinary() else { return "best-effort" }
+        probeTierResilient()
+    }
+
+    /// UserDefaults key holding the last *definite* tier the CLI resolved, so a
+    /// transient probe failure (the CLI couldn't launch, or returned nothing)
+    /// doesn't flip a confidential machine's worker to best-effort and set off
+    /// the reconcile→auto-bounce churn. This is worker *selection* only, never a
+    /// security grant: the advisor still gates the confidential tier on cdHash +
+    /// code-attestation, so preferring the confidential worker on an ambiguous
+    /// read cannot upgrade an ineligible machine — it just avoids a needless
+    /// restart while the CLI/PDS read recovers.
+    private nonisolated static let lastResolvedTierKey = "lastResolvedTier"
+
+    /// Definite CLI answer, or `nil` when the probe *failed to execute* (couldn't
+    /// launch the binary, or produced no output). A clean read of best-effort is
+    /// NOT a failure — it returns `"best-effort"`. Only genuine execution
+    /// failures return `nil` so the caller can hold the last known tier.
+    private nonisolated static func probeTierRaw() -> String? {
+        guard let bin = locateBinary() else { return nil }
         let p = Process()
         p.executableURL = bin
         p.arguments = ["agent", "tier"]
@@ -743,10 +761,31 @@ final class AgentSupervisor {
             p.waitUntilExit()
             let out = (String(data: data, encoding: .utf8) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if out.isEmpty { return nil }
             return out == "attested-confidential" ? "attested-confidential" : "best-effort"
         } catch {
-            return "best-effort"
+            return nil
         }
+    }
+
+    /// Resolve the tier for worker selection, tolerant of a transient probe
+    /// failure. A definite answer is authoritative and cached; a hard failure
+    /// falls back to the last cached answer (defaulting to best-effort). The
+    /// Rust `agent tier` already survives an expired PDS session by honoring its
+    /// own durable cache — this layer only guards the case where the CLI itself
+    /// couldn't be run, so one bad spawn doesn't restart the wrong worker.
+    nonisolated static func probeTierResilient() -> String {
+        if let definite = probeTierRaw() {
+            UserDefaults.standard.set(definite, forKey: lastResolvedTierKey)
+            return definite
+        }
+        let cached = UserDefaults.standard.string(forKey: lastResolvedTierKey)
+        if cached == "attested-confidential" {
+            NSLog(
+                "cocore: `agent tier` probe failed to run — holding last-known tier=attested-confidential (worker selection only; advisor still gates confidential)")
+            return "attested-confidential"
+        }
+        return "best-effort"
     }
 
     /// This machine's receipt-signing P-256 public key (base64 of the raw

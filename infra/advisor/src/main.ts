@@ -308,7 +308,11 @@ async function main(): Promise<void> {
   // Known-good cdHash set (WS-COORDINATOR). Empty unless COCORE_KNOWN_GOOD_CDHASHES
   // is set → fail-closed (no machine is confidential-eligible until a blessed-
   // build set is configured). Confidential eligibility is computed per-machine.
-  const registry = new ProviderRegistry(KnownGoodSet.fromEnv(), REGISTRY_MAX_SIZE);
+  // ADR-0005 soft cutover: enforce the Secure-Enclave-resident-key leg only
+  // when COCORE_CONFIDENTIAL_REQUIRE_SE_KEY=1. Default OFF (observe-only) so the
+  // fleet can adopt SE builds before enforcement flips a machine to best-effort.
+  const requireSeKey = process.env["COCORE_CONFIDENTIAL_REQUIRE_SE_KEY"] === "1";
+  const registry = new ProviderRegistry(KnownGoodSet.fromEnv(), REGISTRY_MAX_SIZE, requireSeKey);
   // Rolling time-to-first-token window (received → first chunk relayed),
   // surfaced at GET /ttft. Folds in the worker's model-load/prefill/gen.
   const ttft = new LatencyWindow(TTFT_WINDOW_SAMPLES);
@@ -458,7 +462,15 @@ async function main(): Promise<void> {
               cdHashKnownGood: p.cdHashKnownGood,
               challengeVerifiedSip: p.challengeVerifiedSip,
               codeAttested: p.codeAttested,
+              // ADR-0005: the SE-resident-key leg. Observe-only until the lever
+              // is enforced; surfaced so the console can name it as the blocker
+              // and ops can watch adoption.
+              secureEnclaveAvailable: p.secureEnclaveAvailable,
             },
+            // ADR-0005 confidential evidence, exposed so the console recompute
+            // can gate on it and ops can watch SE adoption across the fleet.
+            secureEnclaveAvailable: p.secureEnclaveAvailable,
+            encScheme: p.encScheme,
             // C1: whether this registration proved control of its DID. `false`
             // means the console recompute caps it at best-effort (soft cutover
             // — it still serves, just not at an attested tier).

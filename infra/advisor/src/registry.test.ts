@@ -720,3 +720,41 @@ describe("ProviderRegistry", () => {
     });
   });
 });
+
+describe("codeAttested survives a brief reconnect (WS-churn bridge)", () => {
+  const GOOD_CD = "abc123".padEnd(40, "0");
+  const confReg = { ...baseReg, cd_hash: GOOD_CD, tier: "attested-confidential" };
+
+  it("carries codeAttested across a reconnect within the grace window (same cdHash)", () => {
+    const r = new ProviderRegistry(new KnownGoodSet([GOOD_CD]));
+    r.upsert(confReg, noop, noopSend, noopPing, 1000);
+    r.markCodeAttested(DID, MID, 1000);
+    expect(r.get(DID, MID)?.codeAttested).toBe(true);
+    // Reconnect 30s later (a WS blip / supervisor bounce) — must NOT reset.
+    r.upsert(confReg, noop, noopSend, noopPing, 31_000);
+    expect(r.get(DID, MID)?.codeAttested).toBe(true);
+  });
+
+  it("does NOT carry after the grace window elapses (re-challenge)", () => {
+    const r = new ProviderRegistry(new KnownGoodSet([GOOD_CD]));
+    r.upsert(confReg, noop, noopSend, noopPing, 1000);
+    r.markCodeAttested(DID, MID, 1000);
+    r.upsert(confReg, noop, noopSend, noopPing, 1000 + 6 * 60_000); // 6 min later
+    expect(r.get(DID, MID)?.codeAttested).toBe(false);
+  });
+
+  it("does NOT carry when the measured cdHash changed (a different binary)", () => {
+    const r = new ProviderRegistry(new KnownGoodSet([GOOD_CD]));
+    r.upsert(confReg, noop, noopSend, noopPing, 1000);
+    r.markCodeAttested(DID, MID, 1000);
+    const otherBinary = { ...confReg, cd_hash: "different".padEnd(40, "1") };
+    r.upsert(otherBinary, noop, noopSend, noopPing, 5000); // quick reconnect, new cdHash
+    expect(r.get(DID, MID)?.codeAttested).toBe(false);
+  });
+
+  it("never fabricates attestation for a first-time register", () => {
+    const r = new ProviderRegistry(new KnownGoodSet([GOOD_CD]));
+    r.upsert(confReg, noop, noopSend, noopPing, 1000);
+    expect(r.get(DID, MID)?.codeAttested).toBe(false);
+  });
+});

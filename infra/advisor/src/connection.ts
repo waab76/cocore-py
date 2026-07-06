@@ -301,6 +301,9 @@ export function handleConnection(
       entry.apnsDeviceToken,
       entry.encryptionPubKey,
       nonce,
+      // Seal with the codec the agent advertised: p256-ecies-se to a
+      // Secure-Enclave key, else the X25519 default for older agents.
+      entry.encScheme ?? undefined,
     );
     if (!res.ok) {
       console.error(

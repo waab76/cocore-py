@@ -45,7 +45,18 @@ pub trait SigningIdentity: Send + Sync {
 pub fn load_or_create_identity() -> Result<Box<dyn SigningIdentity>> {
     #[cfg(all(target_os = "macos", feature = "secure_enclave"))]
     {
-        return Ok(Box::new(macos::EnclaveIdentity::load_or_create()?));
+        // Fall back rather than abort if the enclave is compiled in but
+        // unavailable at runtime (a chip-replaced host, a VM). The machine then
+        // signs with a software key, reports is_hardware_bound()=false, and
+        // self-caps at best-effort — no crash. This shouldn't fire on Apple
+        // Silicon, but the soft-degradation keeps such an edge host serving.
+        match macos::EnclaveIdentity::load_or_create() {
+            Ok(id) => return Ok(Box::new(id)),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "Secure Enclave signing identity unavailable; falling back to software identity (best-effort)"
+            ),
+        }
     }
     #[allow(unreachable_code)]
     Ok(Box::new(software::SoftwareIdentity::generate()?))

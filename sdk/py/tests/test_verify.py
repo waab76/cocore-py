@@ -193,6 +193,29 @@ def test_require_hardware_bound_key_gate():
     assert "key-not-hardware-bound" not in codes(default_off)
 
 
+def test_require_secure_enclave_key_gate():
+    """ADR-0005 Secure-Enclave-resident-key gate (parity with verify-provider.ts).
+    Default OFF (soft cutover); when on, a machine without
+    secureEnclaveAvailable=True fails closed with `se-key-not-available`."""
+
+    def codes(r):
+        return [fd["code"] for fd in r.findings]
+
+    sw = {"publicKey": "AA==", "secureEnclaveAvailable": False}
+    se = {"publicKey": "AA==", "secureEnclaveAvailable": True}
+
+    # Default OFF: not blocked on the SE code.
+    assert "se-key-not-available" not in codes(verify_provider_for_seal(sw, None))
+    # Enforced + software key → blocks.
+    assert "se-key-not-available" in codes(
+        verify_provider_for_seal(sw, None, require_secure_enclave_key=True)
+    )
+    # Enforced + SE key → no SE blocker.
+    assert "se-key-not-available" not in codes(
+        verify_provider_for_seal(se, None, require_secure_enclave_key=True)
+    )
+
+
 def test_freshness_binds_key_option_b():
     """Option-B binding parity with mda.rs::freshness_binds + verify-provider.ts.
     Uses the SAME vector as the Rust/TS tests (64 bytes of 0x07)."""

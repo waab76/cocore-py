@@ -81,6 +81,12 @@ def verify_provider_for_seal(
     # receipt-validation time (cocore.brokerage). Default False; kept opt-in for a
     # future confidential-compute backend. Mirrors the TS SDK.
     require_hardware_bound_key: bool = False,
+    # ADR-0005: require a Secure-Enclave-resident signing key
+    # (attestation.secureEnclaveAvailable is True) for the confidential tier —
+    # the workable macOS replacement for the retired App Attest gate. Default
+    # False for the soft cutover; flip to True once the fleet adopts SE builds.
+    # Fail-closed when on; additive to the brokerage countersignature. Mirrors TS.
+    require_secure_enclave_key: bool = False,
     trust_anchor_der: Optional[bytes] = None,
     app_attest_trust_anchor_der: Optional[bytes] = None,
     allow_development_app_attest: bool = False,
@@ -212,6 +218,17 @@ def verify_provider_for_seal(
             else "signing key is not proven Secure-Enclave-resident: no bound App Attest object "
             "whose attested key is the signing key (an MDA-freshness binding attests the device "
             "that vouched for the public key, not that the private key is non-exportable)",
+        )
+
+    # 2c. ADR-0005 Secure-Enclave-resident-key gate — the workable macOS
+    # replacement for 2b. `secureEnclaveAvailable` is authenticated by the
+    # selfSignature gate, so a copied software key (which reports False) can't
+    # clear it. Additive to the brokerage countersignature; fail-closed when on.
+    if require_secure_enclave_key and attestation.get("secureEnclaveAvailable") is not True:
+        block(
+            "se-key-not-available",
+            "provider does not advertise a Secure-Enclave-resident signing key "
+            "(attestation.secureEnclaveAvailable is not true)",
         )
 
     # 3. cdHash in the known-good set.

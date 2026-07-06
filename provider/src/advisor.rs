@@ -20,7 +20,7 @@
 )]
 
 use crate::canonical::to_canonical_bytes;
-use crate::crypto::ProviderKeypair;
+use crate::crypto::{EncryptionKey, ProviderKeypair};
 use crate::engines::{DeltaChannel, Engine, EngineRegistry};
 use crate::error::{ProviderError, Result};
 use crate::hypervisor;
@@ -80,7 +80,12 @@ impl Drop for ZeroizeOnDrop {
 /// it publishes its receipt.
 struct ServeContext<'a> {
     signer: &'a dyn SigningIdentity,
-    encryption: &'a ProviderKeypair,
+    /// The provider's long-lived encryption key `K`: opens the requester's
+    /// sealed prompt and seals replies + APNs nonces. On a confidential
+    /// (`secure_enclave`) build this is the SE-resident P-256 ECIES key, so the
+    /// decrypting scalar never leaves the enclave; otherwise the software
+    /// X25519 key. The wire codec follows the advertised `encScheme`.
+    encryption: &'a dyn EncryptionKey,
     pds: &'a PdsClient,
     attestation: Arc<RwLock<Option<StrongRef>>>,
     /// Per-model engine registry. `cmd_serve` constructs the
@@ -110,7 +115,7 @@ impl AdvisorClient {
         &self,
         mut register: Register,
         signer: &dyn SigningIdentity,
-        encryption: &ProviderKeypair,
+        encryption: &dyn EncryptionKey,
         pds: &PdsClient,
         // Shared, refreshable attestation cell (see `ServeContext`). Cloned
         // from `cmd_serve`, which also hands a clone to the refresh task; on
@@ -1459,8 +1464,18 @@ async fn handle_inference_request_inner(
     // ordered ciphertext stream (so outputCipherCommitment still covers every
     // delivered byte) but accumulated separately so each gets its own plaintext
     // commitment, and each chunk is tagged with its channel for the requester.
-    let mut reply = Zeroizing::new(String::new());
-    let mut reasoning = Zeroizing::new(String::new());
+    // Output plaintext hygiene (ADR-0005 step 3): reserve a stable backing
+    // buffer up front and mlock its whole CAPACITY once, so the accumulating
+    // answer/reasoning don't spray un-pinned copies across the heap as they grow
+    // (a String realloc would leave the old bytes behind un-mlock'd). Sized from
+    // the request's token ceiling (~4 bytes/token, plus headroom); a rare
+    // overrun reallocs beyond capacity, but the common case stays in one pinned
+    // allocation for the whole stream. The `Zeroizing` wrapper wipes on drop.
+    let out_cap = (req.max_tokens_out as usize).saturating_mul(4).max(4096);
+    let mut reply = Zeroizing::new(String::with_capacity(out_cap));
+    let mut reasoning = Zeroizing::new(String::with_capacity(out_cap));
+    mlock_capacity(&reply);
+    mlock_capacity(&reasoning);
     let mut all_ciphertext = Vec::new();
     let mut seq = 0u32;
 
@@ -1876,6 +1891,29 @@ fn mlock_buffer(bytes: &[u8]) {
     }
 }
 
+/// Best-effort mlock over a String's whole reserved CAPACITY (not just its
+/// current length). Used for the streaming output buffers, which start empty
+/// but reserve up front: pinning the capacity means every append that stays
+/// within it lands in already-locked pages, instead of only pinning the bytes
+/// after the fact. Same non-fatal semantics as [`mlock_buffer`].
+#[allow(clippy::ptr_arg)] // need String::capacity(), which &str doesn't expose
+fn mlock_capacity(s: &String) {
+    #[cfg(unix)]
+    {
+        let cap = s.capacity();
+        if cap == 0 {
+            return;
+        }
+        // SAFETY: `as_ptr()` is the start of the String's single backing
+        // allocation, which is at least `capacity` bytes; mlock only needs the
+        // pages to be mapped (they are — reserved by `with_capacity`) and
+        // returns -1 on failure, which we ignore.
+        let _ = unsafe { libc::mlock(s.as_ptr() as *const libc::c_void, cap) };
+    }
+    #[cfg(not(unix))]
+    let _ = s;
+}
+
 /// Build the signed [`AttestationResponse`] for a challenge.
 ///
 /// The signature covers a sorted-key canonical JSON of
@@ -1972,7 +2010,7 @@ pub fn build_session_key(
 /// nonce) is silent at the security layer: no response means no code-attested
 /// standing, which is the fail-closed default.
 pub fn recover_code_challenge(
-    encryption: &ProviderKeypair,
+    encryption: &dyn EncryptionKey,
     signer: &dyn SigningIdentity,
     advisor_eph_pub_b64: &str,
     sealed_b64: &str,
@@ -2020,7 +2058,7 @@ async fn next_push(rx: &mut Option<&mut mpsc::UnboundedReceiver<String>>) -> Opt
 }
 
 pub fn handle_code_challenge_payload(
-    encryption: &ProviderKeypair,
+    encryption: &dyn EncryptionKey,
     signer: &dyn SigningIdentity,
     json_str: &str,
     cd_hash: Option<&str>,
