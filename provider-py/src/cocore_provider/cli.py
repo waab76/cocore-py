@@ -4,10 +4,12 @@ import argparse
 import asyncio
 import logging
 import os
+import platform
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 
 import httpx
+import psutil
 
 from cocore_provider import __version__
 from cocore_provider.attestation import build_attestation_record
@@ -24,8 +26,14 @@ from cocore_provider.lmstudio import LMStudioClient
 from cocore_provider.logging_setup import configure_logging
 from cocore_provider.pds_client import PdsClient
 from cocore_provider.protocol import InferenceRequestFrame
+from cocore_provider.provider_record import build_provider_record
 from cocore_provider.session import SessionContext, run_session
 from cocore_provider.ws_client import AdvisorConnection
+
+
+def _ram_gb() -> int:
+    return int(psutil.virtual_memory().total // (1024**3))
+
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +77,19 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
     published_attestation = await pds.publish("dev.cocore.compute.attestation", attestation_record)
     logger.info("published attestation record %s", published_attestation.uri)
 
+    ram_gb = config.ram_gb if config.ram_gb is not None else _ram_gb()
+    provider_record = build_provider_record(
+        machine_label=config.machine_label,
+        chip=f"lmstudio:{platform.system().lower()}",
+        ram_gb=ram_gb,
+        supported_models=supported_models,
+        encryption_pub_key=identity.encryption_public_b64,
+        attestation_pub_key=identity.signing_public_b64,
+        binary_version=__version__,
+    )
+    published_provider = await pds.publish("dev.cocore.compute.provider", provider_record)
+    logger.info("published provider record %s", published_provider.uri)
+
     ctx = SessionContext(
         identity=identity,
         provider_did=provider_did,
@@ -93,9 +114,11 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         config=config,
         identity=identity,
         provider_did=provider_did,
+        machine_id=published_provider.rkey,
         mint_auth_jwt=mint_auth_jwt,
         attestation_uri=published_attestation.uri,
         supported_models=supported_models,
+        ram_gb=ram_gb,
     )
     logger.info("connecting to advisor at %s", config.advisor_url)
     await conn.run(on_inference_request=on_inference_request)

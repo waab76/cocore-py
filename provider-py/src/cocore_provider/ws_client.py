@@ -45,6 +45,7 @@ class AdvisorConnection:
         config: AgentConfig,
         identity: Identity,
         provider_did: str,
+        machine_id: str,
         mint_auth_jwt: Callable[[], Awaitable[str | None]],
         attestation_uri: str,
         supported_models: list[str] | None = None,
@@ -53,6 +54,7 @@ class AdvisorConnection:
         self._config = config
         self._identity = identity
         self._provider_did = provider_did
+        self._machine_id = machine_id
         self._mint_auth_jwt = mint_auth_jwt
         self._attestation_uri = attestation_uri
         self._supported_models = supported_models or []
@@ -107,7 +109,7 @@ class AdvisorConnection:
             auth_jwt = await self._mint_auth_jwt()
             register = build_register(
                 provider_did=self._provider_did,
-                machine_id=self._identity.signing_public_b64,
+                machine_id=self._machine_id,
                 machine_label=self._config.machine_label,
                 chip=f"lmstudio:{_platform_name()}",
                 ram_gb=self._ram_gb,

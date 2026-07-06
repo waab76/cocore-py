@@ -53,6 +53,7 @@ Optional (defaults shown):
 | `COCORE_LMSTUDIO_URL` | `lmstudio_url` | `http://localhost:1234` | Base URL of your local LMStudio server. |
 | `COCORE_IDENTITY_PATH` | `identity_path` | `~/.cocore/provider-py/identity.json` | Where the provider's P-256 signing key + X25519 encryption key are persisted (created on first run). |
 | `COCORE_MACHINE_LABEL` | `machine_label` | hostname | Human-readable label sent at registration. |
+| `COCORE_RAM_GB` | `ram_gb` | auto-detected (this process's host) | Total RAM (GB) of the machine actually running the models. Auto-detect is only correct when LMStudio runs on the same machine as this agent — if `lmstudio_url` points at a remote/network LMStudio server, set this explicitly (LMStudio's API has no way to report the host's RAM). |
 | `COCORE_ALLOW_INSECURE_ADVISOR` | `allow_insecure_advisor` | unset / `false` | Allow a non-`wss://` advisor URL (local dev only). |
 | `COCORE_LOG_LEVEL` | `log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `COCORE_LOG_FILE` | `log_file` | `~/.cocore/provider-py/provider.log` | Rotating log file path (5MB x 3 backups), in addition to the console. Set to `none` to disable file logging. |

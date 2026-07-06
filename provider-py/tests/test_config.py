@@ -39,6 +39,50 @@ def test_missing_required_var_raises_config_error() -> None:
         load_config({"COCORE_API_BASE": "https://console.example"})
 
 
+def test_ram_gb_defaults_to_none() -> None:
+    env = {"COCORE_API_KEY": "key123", "COCORE_API_BASE": "https://console.example"}
+    assert load_config(env).ram_gb is None
+
+
+def test_ram_gb_from_env() -> None:
+    env = {
+        "COCORE_API_KEY": "key123",
+        "COCORE_API_BASE": "https://console.example",
+        "COCORE_RAM_GB": "64",
+    }
+    assert load_config(env).ram_gb == 64
+
+
+def test_ram_gb_from_config_file_wins_over_env() -> None:
+    env = {
+        "COCORE_API_KEY": "key123",
+        "COCORE_API_BASE": "https://console.example",
+        "COCORE_RAM_GB": "64",
+    }
+    config = load_config(env, config_file={"ram_gb": 128})
+    assert config.ram_gb == 128
+
+
+def test_ram_gb_invalid_raises_config_error() -> None:
+    env = {
+        "COCORE_API_KEY": "key123",
+        "COCORE_API_BASE": "https://console.example",
+        "COCORE_RAM_GB": "not-a-number",
+    }
+    with pytest.raises(ConfigError, match="COCORE_RAM_GB"):
+        load_config(env)
+
+
+def test_ram_gb_zero_raises_config_error() -> None:
+    env = {
+        "COCORE_API_KEY": "key123",
+        "COCORE_API_BASE": "https://console.example",
+        "COCORE_RAM_GB": "0",
+    }
+    with pytest.raises(ConfigError, match="ram_gb must be >= 1"):
+        load_config(env)
+
+
 def test_insecure_advisor_url_rejected_without_escape_hatch() -> None:
     env = {
         "COCORE_API_KEY": "key123",

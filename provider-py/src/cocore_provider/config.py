@@ -40,6 +40,14 @@ class AgentConfig:
     machine_label: str
     log_level: str = DEFAULT_LOG_LEVEL
     log_file: Path | None = None
+    # Total RAM (GB) of the machine actually running the models, for the
+    # published provider record. `None` means auto-detect via psutil on the
+    # machine this agent process runs on — correct only when `lmstudio_url`
+    # points at localhost. When LMStudio runs on a different host (e.g. a
+    # remote/network LMStudio server), psutil measures the wrong machine;
+    # LMStudio's REST API exposes no system/hardware endpoint to read the
+    # real figure from, so the operator must set this explicitly instead.
+    ram_gb: int | None = None
 
 
 def _truthy(value: str | None) -> bool:
@@ -76,6 +84,31 @@ def _resolve_bool(
     if isinstance(file_value, str) and file_value:
         return _truthy(file_value)
     return _truthy(env.get(env_key))
+
+
+def _resolve_int(
+    key: str, *, file: Mapping[str, object], env: Mapping[str, str], env_key: str
+) -> int | None:
+    """Same file-wins-over-env precedence as `_resolve`, but for an integer
+    setting. A present value that doesn't parse as an int raises rather than
+    silently falling through, since a typo'd override should not be treated
+    as "unset" (which for `ram_gb` means "you get a different, silently
+    wrong, auto-detected value")."""
+    file_value = file.get(key)
+    if isinstance(file_value, int) and not isinstance(file_value, bool):
+        return file_value
+    if isinstance(file_value, str) and file_value:
+        try:
+            return int(file_value)
+        except ValueError as e:
+            raise ConfigError(f"{key!r} must be an integer, got {file_value!r}") from e
+    env_value = env.get(env_key)
+    if env_value:
+        try:
+            return int(env_value)
+        except ValueError as e:
+            raise ConfigError(f"{env_key} must be an integer, got {env_value!r}") from e
+    return None
 
 
 def load_config(
@@ -155,6 +188,10 @@ def load_config(
         # default must not be frozen at import time.
         log_file = Path.home() / ".cocore" / "provider-py" / "provider.log"
 
+    ram_gb = _resolve_int("ram_gb", file=file, env=env, env_key="COCORE_RAM_GB")
+    if ram_gb is not None and ram_gb < 1:
+        raise ConfigError(f"ram_gb must be >= 1, got {ram_gb}")
+
     return AgentConfig(
         advisor_url=advisor_url,
         advisor_did=advisor_did,
@@ -163,6 +200,7 @@ def load_config(
         lmstudio_url=lmstudio_url,
         identity_path=identity_path,
         machine_label=machine_label,
+        ram_gb=ram_gb,
         log_level=log_level,
         log_file=log_file,
     )

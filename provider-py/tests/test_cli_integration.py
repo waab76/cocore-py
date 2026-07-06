@@ -30,6 +30,7 @@ async def test_serve_registers_and_serves_one_job(
         assert register["type"] == "register"
         assert register["supported_models"] == ["llama-3.1-8b"]
         assert register["attestation_uri"] == "at://did:plc:p/dev.cocore.compute.attestation/1"
+        assert register["machine_id"] == "prov1"
         provider_encryption_pub_b64 = register["encryption_pub_key"]
 
         box = Box(requester_priv, PublicKey(base64.b64decode(provider_encryption_pub_b64)))
@@ -88,6 +89,16 @@ async def test_serve_registers_and_serves_one_job(
                     json={
                         "uri": "at://did:plc:p/dev.cocore.compute.attestation/1",
                         "cid": "bafyattest",
+                    },
+                )
+            if body["collection"] == "dev.cocore.compute.provider":
+                assert body["record"]["supportedModels"] == ["llama-3.1-8b"]
+                assert body["record"]["priceList"][0]["modelId"] == "llama-3.1-8b"
+                return httpx.Response(
+                    200,
+                    json={
+                        "uri": "at://did:plc:p/dev.cocore.compute.provider/prov1",
+                        "cid": "bafyprov",
                     },
                 )
             return httpx.Response(

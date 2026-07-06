@@ -20,6 +20,11 @@ class PublishedRecord:
     uri: str
     cid: str
 
+    @property
+    def rkey(self) -> str:
+        """The record key, i.e. the last `/`-separated segment of `at://did/collection/rkey`."""
+        return self.uri.rsplit("/", 1)[-1]
+
 
 class PdsClient:
     def __init__(self, *, api_base: str, api_key: str, http: httpx.AsyncClient) -> None:

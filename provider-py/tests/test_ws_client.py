@@ -73,6 +73,7 @@ async def test_register_then_inference_dispatch_calls_callback() -> None:
             config=config,
             identity=_identity(),
             provider_did="did:plc:abc",
+            machine_id="m1",
             mint_auth_jwt=lambda: _async_none(),
             attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
         )
@@ -180,6 +181,7 @@ async def test_run_propagates_cancellation_when_connection_drop_races_with_cance
             config=config,
             identity=_identity(),
             provider_did="did:plc:abc",
+            machine_id="m1",
             mint_auth_jwt=lambda: _async_none(),
             attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
         )
@@ -251,6 +253,7 @@ async def test_run_reconnects_after_ordinary_failure_without_external_cancel(
             config=config,
             identity=_identity(),
             provider_did="did:plc:abc",
+            machine_id="m1",
             mint_auth_jwt=lambda: _async_none(),
             attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
         )

@@ -35,6 +35,12 @@
 # Human-readable label sent at registration. Default: this machine's hostname.
 # machine_label = "my-gaming-pc"
 
+# Total RAM (GB) of the machine actually running the models. Default:
+# auto-detected on this process's own host -- only correct when LMStudio
+# runs on that same machine. Set this explicitly if lmstudio_url points at
+# a remote/network LMStudio server (its API can't report the host's RAM).
+# ram_gb = 64
+
 # Allow a non-wss:// advisor_url (local dev only). Default: false
 # allow_insecure_advisor = false
 
