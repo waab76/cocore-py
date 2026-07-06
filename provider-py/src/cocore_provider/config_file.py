@@ -36,3 +36,5 @@ def load_config_file(path: Path, *, is_explicit: bool) -> dict[str, Any]:
             return tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"config file {path} is not valid TOML: {e}") from e
+    except OSError as e:
+        raise ConfigError(f"config file {path} cannot be read: {e}") from e

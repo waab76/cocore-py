@@ -50,6 +50,15 @@ def test_load_config_file_raises_config_error_on_malformed_toml(tmp_path: Path) 
         load_config_file(path, is_explicit=False)
 
 
+def test_load_config_file_raises_config_error_when_path_is_directory(
+    tmp_path: Path,
+) -> None:
+    dir_path = tmp_path / "a_directory"
+    dir_path.mkdir()
+    with pytest.raises(ConfigError, match="cannot be read"):
+        load_config_file(dir_path, is_explicit=True)
+
+
 def test_example_config_file_parses_as_valid_toml() -> None:
     example_path = Path(__file__).parent.parent / "config.toml.example"
     result = load_config_file(example_path, is_explicit=True)
