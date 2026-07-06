@@ -72,6 +72,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func registerLoginItem() {
+        // Only the app installed in /Applications may register itself as a login
+        // item. Dev builds run from the build directory must NOT, otherwise every
+        // local build accumulates its own login item and they all launch at boot,
+        // each spawning a competing `agent serve` against the advisor.
+        guard Bundle.main.bundlePath.hasPrefix("/Applications/") else {
+            NSLog("cocore: skipping login-item registration (not installed in /Applications): %@", Bundle.main.bundlePath)
+            return
+        }
         do {
             if SMAppService.mainApp.status != .enabled {
                 try SMAppService.mainApp.register()
