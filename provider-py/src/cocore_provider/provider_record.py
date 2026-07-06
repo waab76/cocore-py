@@ -37,9 +37,8 @@ OWNER_INTENT_KEYS: frozenset[str] = frozenset(
 # others (a tier the machine earned then lost, a fault that cleared). A key
 # here that this serve's `agent_record` does NOT include gets deleted from
 # the merged body, so a stale value doesn't linger. Mirrors
-# `provider/src/pds.rs::AGENT_OPTIONAL_KEYS`; empty today because
-# `build_provider_record` doesn't emit any such field yet.
-AGENT_OPTIONAL_KEYS: frozenset[str] = frozenset()
+# `provider/src/pds.rs::AGENT_OPTIONAL_KEYS`.
+AGENT_OPTIONAL_KEYS: frozenset[str] = frozenset({"engineFault", "attestationFault", "advisorFault"})
 
 
 def _rfc3339(dt: datetime) -> str:
@@ -55,9 +54,11 @@ def build_provider_record(
     encryption_pub_key: str,
     attestation_pub_key: str,
     binary_version: str,
+    engine_fault: dict[str, object] | None = None,
+    attestation_fault: dict[str, object] | None = None,
 ) -> dict[str, object]:
     now = datetime.now(UTC)
-    return {
+    record: dict[str, object] = {
         "machineLabel": machine_label,
         "chip": chip,
         # `max(ram_gb, 1)`: the lexicon requires ramGB >= 1; an unreadable /
@@ -83,6 +84,36 @@ def build_provider_record(
         "serving": True,
         "createdAt": _rfc3339(now),
     }
+    if engine_fault is not None:
+        record["engineFault"] = engine_fault
+    if attestation_fault is not None:
+        record["attestationFault"] = attestation_fault
+    return record
+
+
+def build_engine_fault(*, code: str, message: str, models: list[str]) -> dict[str, object]:
+    """Present when the agent couldn't bring its inference backend online.
+    Mirrors the lexicon's `engineFault` shape. `message` is truncated to the
+    lexicon's 600-char cap."""
+    return {
+        "code": code,
+        "message": message[:600],
+        "models": models,
+        "at": _rfc3339(datetime.now(UTC)),
+    }
+
+
+def build_attestation_fault(*, code: str, message: str) -> dict[str, object]:
+    """Present when the agent couldn't build/publish its attestation record.
+    Mirrors the lexicon's `attestationFault` shape."""
+    return {"code": code, "message": message[:600], "at": _rfc3339(datetime.now(UTC))}
+
+
+def build_advisor_fault(*, code: str, message: str) -> dict[str, object]:
+    """Present when the agent can't establish its WebSocket connection to the
+    advisor after repeated consecutive attempts. Mirrors the lexicon's
+    `advisorFault` shape (note: `observedAt`, not `at`)."""
+    return {"code": code, "message": message[:600], "observedAt": _rfc3339(datetime.now(UTC))}
 
 
 def merge_agent_fields(
@@ -110,6 +141,29 @@ def merge_agent_fields(
     return out
 
 
+def _attestation_pub_key_of(r: dict[str, object]) -> object:
+    value = r.get("value")
+    return value.get("attestationPubKey") if isinstance(value, dict) else None
+
+
+def _created_at_of(r: dict[str, object]) -> str:
+    value = r.get("value")
+    ts = value.get("createdAt") if isinstance(value, dict) else None
+    return ts if isinstance(ts, str) else ""
+
+
+def _matching_provider_records(
+    listed: list[dict[str, object]], attestation_pub_key: str
+) -> list[dict[str, object]]:
+    """This machine's own provider record(s) -- possibly several if a past
+    bug left duplicates -- newest first by `createdAt`. A record with a
+    DIFFERENT attestationPubKey describes a sibling machine under the same
+    DID and is never touched."""
+    matching = [r for r in listed if _attestation_pub_key_of(r) == attestation_pub_key]
+    matching.sort(key=_created_at_of, reverse=True)
+    return matching
+
+
 async def publish_provider_record(
     pds: PdsClient, attestation_pub_key: str, record: dict[str, object]
 ) -> PublishedRecord:
@@ -121,22 +175,11 @@ async def publish_provider_record(
     `provider/src/main.rs::dedup_and_publish_provider`, without its
     compare-and-swap retry loop -- provider-py is a single process, so the
     rare concurrent-write race is accepted rather than built out."""
-
-    def attestation_pub_key_of(r: dict[str, object]) -> object:
-        value = r.get("value")
-        return value.get("attestationPubKey") if isinstance(value, dict) else None
-
     listed = await pds.list_records("dev.cocore.compute.provider")
-    matching = [r for r in listed if attestation_pub_key_of(r) == attestation_pub_key]
+    matching = _matching_provider_records(listed, attestation_pub_key)
     if not matching:
         return await pds.publish("dev.cocore.compute.provider", record)
 
-    def created_at(r: dict[str, object]) -> str:
-        value = r.get("value")
-        ts = value.get("createdAt") if isinstance(value, dict) else None
-        return ts if isinstance(ts, str) else ""
-
-    matching.sort(key=created_at, reverse=True)
     keeper = matching[0]
     keeper_rkey = str(keeper["uri"]).rsplit("/", 1)[-1]
 
@@ -154,3 +197,36 @@ async def publish_provider_record(
     base = keeper_value if isinstance(keeper_value, dict) else {}
     merged = merge_agent_fields(base, record)
     return await pds.put_record("dev.cocore.compute.provider", keeper_rkey, merged)
+
+
+async def patch_provider_fault(
+    pds: PdsClient, attestation_pub_key: str, field: str, value: dict[str, object] | None
+) -> bool:
+    """Set (`value` given) or clear (`value=None`) a single agent-diagnostic
+    fault field -- `engineFault`, `attestationFault`, or `advisorFault` -- on
+    this machine's EXISTING provider record, touching nothing else on it.
+    Distinct from the full republish in `publish_provider_record`: this is a
+    narrow, best-effort patch for a fault discovered mid-serve (advisorFault
+    in particular is only known well after the initial publish). Mirrors
+    `provider/src/main.rs::patch_provider_advisor_fault` /
+    `republish_attestation_fault`. Returns False (logged, no-op) when no
+    matching record exists yet to patch -- the next successful publish will
+    include the field if it's still relevant then."""
+    listed = await pds.list_records("dev.cocore.compute.provider")
+    matching = _matching_provider_records(listed, attestation_pub_key)
+    if not matching:
+        logger.warning(
+            "no provider record found to patch %s onto; skipping (will retry next cycle)", field
+        )
+        return False
+
+    keeper = matching[0]
+    rkey = str(keeper["uri"]).rsplit("/", 1)[-1]
+    keeper_value = keeper.get("value")
+    base = dict(keeper_value) if isinstance(keeper_value, dict) else {}
+    if value is None:
+        base.pop(field, None)
+    else:
+        base[field] = value
+    await pds.put_record("dev.cocore.compute.provider", rkey, base)
+    return True

@@ -150,3 +150,167 @@ async def test_serve_registers_and_serves_one_job(
         hold_connection_open.set()
 
     assert len(seen_chunks) == 1
+
+
+@pytest.mark.asyncio
+async def test_serve_survives_lmstudio_down_with_engine_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LMStudio unreachable at boot must not crash the whole agent -- it
+    should register with an empty supportedModels (excluded from routing)
+    and surface `engineFault` on the provider record, matching the Rust
+    agent's "stays visible but degraded" behavior."""
+    registered = asyncio.Event()
+    seen_register: dict[str, object] = {}
+    provider_record_bodies: list[dict[str, object]] = []
+
+    async def fake_advisor(ws: websockets.WebSocketServerProtocol) -> None:
+        register = json.loads(await ws.recv())
+        seen_register.update(register)
+        registered.set()
+        await ws.wait_closed()
+
+    def lmstudio_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="connection refused")
+
+    def console_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(200, json={"records": []})
+        if request.url.path == "/api/pds/getServiceAuth":
+            return httpx.Response(200, json={"token": "jwt.abc"})
+        if request.url.path == "/api/pds/createRecord":
+            body = json.loads(request.content)
+            if body["collection"] == "dev.cocore.compute.attestation":
+                return httpx.Response(
+                    200,
+                    json={
+                        "uri": "at://did:plc:p/dev.cocore.compute.attestation/1",
+                        "cid": "bafyattest",
+                    },
+                )
+            if body["collection"] == "dev.cocore.compute.provider":
+                provider_record_bodies.append(body["record"])
+                return httpx.Response(
+                    200,
+                    json={
+                        "uri": "at://did:plc:p/dev.cocore.compute.provider/prov1",
+                        "cid": "bafyprov",
+                    },
+                )
+            raise AssertionError(f"unexpected collection: {body['collection']}")
+        raise AssertionError(f"unexpected console call: {request.url.path}")
+
+    monkeypatch.setattr(
+        "cocore_provider.cli._build_lmstudio_http",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lmstudio_handler)),
+    )
+    monkeypatch.setattr(
+        "cocore_provider.cli._build_console_http",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(console_handler)),
+    )
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = AgentConfig(
+            advisor_url=f"ws://localhost:{port}/v1/agent",
+            advisor_did="did:web:advisor.cocore.dev",
+            api_base="https://console.example",
+            api_key="key123",
+            lmstudio_url="http://localhost:1234",
+            identity_path=tmp_path / "identity.json",
+            machine_label="test-machine",
+        )
+        serve_task = asyncio.create_task(serve(config, provider_did="did:plc:abc"))
+        await asyncio.wait_for(registered.wait(), timeout=10)
+        serve_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await serve_task
+
+    assert seen_register["supported_models"] == []
+    assert provider_record_bodies[0]["supportedModels"] == []
+    assert provider_record_bodies[0]["engineFault"]["code"] == "model-load-failed"
+
+
+@pytest.mark.asyncio
+async def test_serve_survives_attestation_publish_failure_with_attestation_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed attestation publish must not crash the whole agent -- it
+    should register with an empty attestation_uri and surface
+    `attestationFault` on the provider record."""
+    registered = asyncio.Event()
+    seen_register: dict[str, object] = {}
+    provider_record_bodies: list[dict[str, object]] = []
+
+    async def fake_advisor(ws: websockets.WebSocketServerProtocol) -> None:
+        register = json.loads(await ws.recv())
+        seen_register.update(register)
+        registered.set()
+        await ws.wait_closed()
+
+    def lmstudio_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "llama-3.1-8b"}]})
+
+    def console_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(200, json={"records": []})
+        if request.url.path == "/api/pds/getServiceAuth":
+            return httpx.Response(200, json={"token": "jwt.abc"})
+        if request.url.path == "/api/pds/createRecord":
+            body = json.loads(request.content)
+            if body["collection"] == "dev.cocore.compute.attestation":
+                return httpx.Response(500, text="pds unavailable")
+            if body["collection"] == "dev.cocore.compute.provider":
+                provider_record_bodies.append(body["record"])
+                return httpx.Response(
+                    200,
+                    json={
+                        "uri": "at://did:plc:p/dev.cocore.compute.provider/prov1",
+                        "cid": "bafyprov",
+                    },
+                )
+            raise AssertionError(f"unexpected collection: {body['collection']}")
+        raise AssertionError(f"unexpected console call: {request.url.path}")
+
+    monkeypatch.setattr(
+        "cocore_provider.cli._build_lmstudio_http",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lmstudio_handler)),
+    )
+    monkeypatch.setattr(
+        "cocore_provider.cli._build_console_http",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(console_handler)),
+    )
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = AgentConfig(
+            advisor_url=f"ws://localhost:{port}/v1/agent",
+            advisor_did="did:web:advisor.cocore.dev",
+            api_base="https://console.example",
+            api_key="key123",
+            lmstudio_url="http://localhost:1234",
+            identity_path=tmp_path / "identity.json",
+            machine_label="test-machine",
+        )
+        serve_task = asyncio.create_task(serve(config, provider_did="did:plc:abc"))
+        await asyncio.wait_for(registered.wait(), timeout=10)
+        serve_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await serve_task
+
+    assert seen_register["attestation_uri"] == ""
+    assert provider_record_bodies[0]["attestationFault"]["code"] == "attestation-publish-failed"

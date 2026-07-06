@@ -22,11 +22,16 @@ from cocore_provider.config import (
 )
 from cocore_provider.config_file import find_config_path, load_config_file
 from cocore_provider.identity import load_or_create
-from cocore_provider.lmstudio import LMStudioClient
+from cocore_provider.lmstudio import LMStudioClient, LMStudioError
 from cocore_provider.logging_setup import configure_logging
-from cocore_provider.pds_client import PdsClient
+from cocore_provider.pds_client import PdsClient, PdsError
 from cocore_provider.protocol import InferenceRequestFrame
-from cocore_provider.provider_record import build_provider_record, publish_provider_record
+from cocore_provider.provider_record import (
+    build_attestation_fault,
+    build_engine_fault,
+    build_provider_record,
+    publish_provider_record,
+)
 from cocore_provider.session import SessionContext, run_session
 from cocore_provider.ws_client import AdvisorConnection
 
@@ -68,16 +73,65 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
 
     lmstudio_http = _build_lmstudio_http()
     lmstudio = LMStudioClient(base_url=config.lmstudio_url, http=lmstudio_http)
-    supported_models = await lmstudio.list_models()
-    if not supported_models:
-        raise RuntimeError(f"no models loaded in LMStudio at {config.lmstudio_url}")
-    logger.info(
-        "LMStudio at %s reports models: %s", config.lmstudio_url, ", ".join(supported_models)
-    )
+    # A dead/empty LMStudio must not crash the whole agent -- the Rust agent
+    # keeps serving `stub` and surfaces `engineFault` on the provider record
+    # instead. provider-py has no stub engine to fall back to, so it
+    # registers with an empty `supported_models` (excluded from routing,
+    # per registry.ts's M2 rule) rather than not appearing at all.
+    engine_fault: dict[str, object] | None = None
+    try:
+        supported_models = await lmstudio.list_models()
+    except LMStudioError as e:
+        supported_models = []
+        engine_fault = build_engine_fault(
+            code="model-load-failed",
+            message=f"LMStudio unreachable at {config.lmstudio_url}: {e}",
+            models=[],
+        )
+        logger.error(
+            "LMStudio unreachable at %s: %s; continuing with no models", config.lmstudio_url, e
+        )
+    else:
+        if not supported_models:
+            engine_fault = build_engine_fault(
+                code="model-load-failed",
+                message=f"no models loaded in LMStudio at {config.lmstudio_url}",
+                models=[],
+            )
+            logger.error(
+                "no models loaded in LMStudio at %s; continuing degraded", config.lmstudio_url
+            )
+        else:
+            logger.info(
+                "LMStudio at %s reports models: %s",
+                config.lmstudio_url,
+                ", ".join(supported_models),
+            )
 
-    attestation_record = build_attestation_record(identity, provider_did=provider_did)
-    published_attestation = await pds.publish("dev.cocore.compute.attestation", attestation_record)
-    logger.info("published attestation record %s", published_attestation.uri)
+    # Same principle for a failed attestation publish: the Rust agent keeps
+    # serving with an empty attestation_uri (receipts just aren't published
+    # for that job) and surfaces `attestationFault`, rather than crashing.
+    attestation_fault: dict[str, object] | None = None
+    attestation_uri = ""
+    attestation_cid = ""
+    try:
+        attestation_record = build_attestation_record(identity, provider_did=provider_did)
+        published_attestation = await pds.publish(
+            "dev.cocore.compute.attestation", attestation_record
+        )
+        attestation_uri = published_attestation.uri
+        attestation_cid = published_attestation.cid
+        logger.info("published attestation record %s", attestation_uri)
+    except PdsError as e:
+        attestation_fault = build_attestation_fault(
+            code="attestation-publish-failed",
+            message=f"failed to publish attestation record: {e}",
+        )
+        logger.error(
+            "failed to publish attestation record: %s; continuing without one "
+            "(receipts will be skipped)",
+            e,
+        )
 
     ram_gb = config.ram_gb if config.ram_gb is not None else _ram_gb()
     provider_record = build_provider_record(
@@ -88,6 +142,8 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         encryption_pub_key=identity.encryption_public_b64,
         attestation_pub_key=identity.signing_public_b64,
         binary_version=__version__,
+        engine_fault=engine_fault,
+        attestation_fault=attestation_fault,
     )
     published_provider = await publish_provider_record(
         pds, identity.signing_public_b64, provider_record
@@ -99,8 +155,8 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         provider_did=provider_did,
         lmstudio=lmstudio,
         pds=pds,
-        attestation_uri=published_attestation.uri,
-        attestation_cid=published_attestation.cid,
+        attestation_uri=attestation_uri,
+        attestation_cid=attestation_cid,
     )
 
     async def mint_auth_jwt() -> str | None:
@@ -121,7 +177,7 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         machine_id=published_provider.rkey,
         pds=pds,
         mint_auth_jwt=mint_auth_jwt,
-        attestation_uri=published_attestation.uri,
+        attestation_uri=attestation_uri,
         supported_models=supported_models,
         ram_gb=ram_gb,
         lmstudio=lmstudio,

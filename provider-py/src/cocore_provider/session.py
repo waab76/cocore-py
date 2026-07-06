@@ -141,28 +141,36 @@ async def run_session(req: InferenceRequestFrame, send: Send, ctx: SessionContex
     completed_at = datetime.now(UTC)
     price_amount = pricing.price_minor(tokens_in, tokens_out)
 
-    receipt = build_receipt(
-        ctx.identity,
-        ReceiptInputs(
-            job_uri=req.job_uri,
-            job_cid=req.job_cid or "",
-            requester_did=req.requester_did,
-            model=req.model,
-            input_commitment=input_commitment,
-            output_commitment=output_commitment,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            started_at=started_at,
-            completed_at=completed_at,
-            price_amount=price_amount,
-            price_currency=pricing.UNIFORM_CURRENCY,
-            attestation_uri=ctx.attestation_uri,
-            attestation_cid=ctx.attestation_cid,
-        ),
-    )
-
     receipt_uri = ""
-    if req.job_cid:
+    if req.job_cid and not ctx.attestation_uri:
+        # attestationFault: this serve has no attestation to strong-ref (its
+        # publish failed at boot). A receipt without one is invalid per the
+        # lexicon, so -- matching the Rust agent -- the job still answers,
+        # it just doesn't get a receipt.
+        logger.warning(
+            "skipping receipt for session %s: no attestation available (attestationFault)",
+            req.session_id,
+        )
+    elif req.job_cid:
+        receipt = build_receipt(
+            ctx.identity,
+            ReceiptInputs(
+                job_uri=req.job_uri,
+                job_cid=req.job_cid,
+                requester_did=req.requester_did,
+                model=req.model,
+                input_commitment=input_commitment,
+                output_commitment=output_commitment,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                started_at=started_at,
+                completed_at=completed_at,
+                price_amount=price_amount,
+                price_currency=pricing.UNIFORM_CURRENCY,
+                attestation_uri=ctx.attestation_uri,
+                attestation_cid=ctx.attestation_cid,
+            ),
+        )
         try:
             published = await ctx.pds.publish("dev.cocore.compute.receipt", receipt)
             receipt_uri = published.uri

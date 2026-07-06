@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
+import ssl
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -16,12 +18,13 @@ from cocore_provider import __version__
 from cocore_provider.attestation import build_challenge_response
 from cocore_provider.config import (
     ACTIVE_POLL_INTERVAL_SECS,
+    ADVISOR_FAULT_THRESHOLD,
     HEARTBEAT_INTERVAL_SECS,
     AgentConfig,
 )
 from cocore_provider.identity import Identity
 from cocore_provider.lmstudio import LMStudioClient, LMStudioError
-from cocore_provider.pds_client import PdsClient
+from cocore_provider.pds_client import PdsClient, PdsError
 from cocore_provider.protocol import (
     InferenceRequestFrame,
     build_heartbeat,
@@ -36,6 +39,7 @@ from cocore_provider.protocol import (
     parse_ping,
     parse_recover_request,
 )
+from cocore_provider.provider_record import build_advisor_fault, patch_provider_fault
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,44 @@ OnInferenceRequest = Callable[
 ]
 
 RECONNECT_BACKOFFS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
+
+
+class _AdvisorConnectError(Exception):
+    """Raised when `websockets.connect()` itself failed to establish the
+    connection at all -- distinct from an ordinary drop after a successful
+    connect+register. `run()` catches this by name to drive the
+    `advisorFault` threshold/classification; anything else lands in the
+    generic reconnect path unchanged."""
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+def _classify_connect_error(exc: BaseException) -> str:
+    """Best-effort classification of a connect failure into one of the
+    lexicon's known `advisorFault` codes. Mirrors the code list documented on
+    `dev.cocore.compute.provider#advisorFault`; an unrecognized shape falls
+    back to `network-unreachable` rather than guessing -- the lexicon
+    requires consumers to treat an unknown code as generic anyway."""
+    if isinstance(exc, TimeoutError):
+        return "connect-timeout"
+    if isinstance(exc, ConnectionRefusedError):
+        return "connect-refused"
+    if isinstance(exc, socket.gaierror):
+        return "dns-failure"
+    if isinstance(exc, ssl.SSLError):
+        return "tls-failure"
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        return f"http-{status}"
+    close_code = getattr(exc, "code", None)
+    if isinstance(close_code, int):
+        return f"closed-{close_code}"
+    return "network-unreachable"
 
 
 class AdvisorConnection:
@@ -84,6 +126,11 @@ class AdvisorConnection:
         # True.
         self._active = True
         self._recheck_active = asyncio.Event()
+        # True once an `advisorFault` has actually been published (i.e. the
+        # consecutive-connect-failure streak crossed ADVISOR_FAULT_THRESHOLD),
+        # so a successful reconnect only bothers clearing it when there's
+        # something to clear.
+        self._advisor_fault_published = False
 
     async def _is_active(self) -> bool:
         active = await self._pds.get_provider_active(self._machine_id)
@@ -91,6 +138,12 @@ class AdvisorConnection:
 
     async def run(self, *, on_inference_request: OnInferenceRequest) -> None:
         backoff_idx = 0
+        # Consecutive CONNECT failures -- the WS never came up at all. An
+        # ordinary drop after a successful connect (the `except Exception`
+        # branch below) resets this to 0, matching
+        # `provider/src/main.rs::AdvisorFaultTracker`'s "cleared on the next
+        # successful registration" contract.
+        consecutive_connect_failures = 0
         while True:
             if not await self._is_active():
                 logger.info(
@@ -101,6 +154,16 @@ class AdvisorConnection:
             try:
                 await self._run_once(on_inference_request)
                 backoff_idx = 0
+                consecutive_connect_failures = 0
+            except _AdvisorConnectError as e:
+                consecutive_connect_failures += 1
+                logger.warning(
+                    "failed to connect to advisor (%d consecutive): %s",
+                    consecutive_connect_failures,
+                    e.cause,
+                )
+                if consecutive_connect_failures >= ADVISOR_FAULT_THRESHOLD:
+                    await self._report_advisor_fault(e.cause)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -133,13 +196,25 @@ class AdvisorConnection:
                     if current_task.cancelling() > 0:
                         raise asyncio.CancelledError() from exc
                 logger.exception("advisor connection dropped; reconnecting")
+                # This attempt's WS DID come up (registration succeeded) and
+                # then dropped for an ordinary reason -- not a connect
+                # failure. Clear any standing streak/fault from earlier.
+                consecutive_connect_failures = 0
+                await self._clear_advisor_fault()
             delay = RECONNECT_BACKOFFS[min(backoff_idx, len(RECONNECT_BACKOFFS) - 1)]
             backoff_idx += 1
             logger.info("reconnecting to advisor in %.0fs", delay)
             await asyncio.sleep(delay)
 
     async def _run_once(self, on_inference_request: OnInferenceRequest) -> None:
-        async with websockets.connect(self._config.advisor_url) as ws:
+        try:
+            ws = await websockets.connect(self._config.advisor_url)
+        except Exception as e:
+            # Anything raised establishing the connection itself (DNS, TLS,
+            # refused, timeout, a non-101 upgrade response) -- distinct from
+            # a failure after we're connected, which is everything below.
+            raise _AdvisorConnectError(e) from e
+        try:
             auth_jwt = await self._mint_auth_jwt()
             register = build_register(
                 provider_did=self._provider_did,
@@ -165,6 +240,38 @@ class AdvisorConnection:
                 tg.create_task(self._heartbeat_loop(send))
                 tg.create_task(self._receive_loop(ws, send, on_inference_request))
                 tg.create_task(self._active_poll_loop(ws))
+        finally:
+            await ws.close()
+
+    async def _report_advisor_fault(self, cause: BaseException) -> None:
+        """Publish `advisorFault` after ADVISOR_FAULT_THRESHOLD consecutive
+        connect failures -- the remote diagnosability for "serving locally,
+        invisible on the network" (LMStudio and PDS writes still work over
+        plain HTTPS; only the advisor WebSocket is blocked). Mirrors
+        `provider/src/main.rs::AdvisorFaultTracker`."""
+        code = _classify_connect_error(cause)
+        fault = build_advisor_fault(code=code, message=f"advisor connect failed: {cause}")
+        try:
+            published = await patch_provider_fault(
+                self._pds, self._identity.signing_public_b64, "advisorFault", fault
+            )
+            if published:
+                self._advisor_fault_published = True
+                logger.error("published advisorFault (%s) on provider record", code)
+        except PdsError:
+            logger.warning("failed to publish advisorFault", exc_info=True)
+
+    async def _clear_advisor_fault(self) -> None:
+        if not self._advisor_fault_published:
+            return
+        try:
+            await patch_provider_fault(
+                self._pds, self._identity.signing_public_b64, "advisorFault", None
+            )
+            self._advisor_fault_published = False
+            logger.info("cleared advisorFault on provider record after successful registration")
+        except PdsError:
+            logger.warning("failed to clear advisorFault", exc_info=True)
 
     async def _heartbeat_loop(self, send: Callable[[dict[str, object]], Awaitable[None]]) -> None:
         while True:

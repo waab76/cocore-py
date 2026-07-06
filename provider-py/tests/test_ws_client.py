@@ -653,5 +653,180 @@ async def test_recover_request_ignored_when_no_lmstudio_configured() -> None:
             await run_task
 
 
+def _unused_port() -> int:
+    import socket as _socket
+
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("localhost", 0))
+        return int(s.getsockname()[1])
+
+
+def test_classify_connect_error() -> None:
+    import socket
+    import ssl
+
+    from cocore_provider.ws_client import _classify_connect_error
+
+    assert _classify_connect_error(ConnectionRefusedError()) == "connect-refused"
+    assert _classify_connect_error(TimeoutError()) == "connect-timeout"
+    assert _classify_connect_error(socket.gaierror()) == "dns-failure"
+    assert _classify_connect_error(ssl.SSLError()) == "tls-failure"
+    assert _classify_connect_error(OSError("boom")) == "network-unreachable"
+
+    class _FakeStatusError(Exception):
+        status_code = 403
+
+    assert _classify_connect_error(_FakeStatusError()) == "http-403"
+
+
+@pytest.mark.asyncio
+async def test_report_and_clear_advisor_fault() -> None:
+    identity = _identity()
+    put_calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "uri": "at://did:plc:abc/dev.cocore.compute.provider/m1",
+                            "cid": "c1",
+                            "value": {"attestationPubKey": identity.signing_public_b64},
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/api/pds/putRecord":
+            body = json.loads(request.content)
+            put_calls.append(body)
+            return httpx.Response(
+                200, json={"uri": "at://did:plc:abc/dev.cocore.compute.provider/m1", "cid": "c2"}
+            )
+        raise AssertionError(f"unexpected call: {request.url}")
+
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+    conn = AdvisorConnection(
+        config=_config("ws://localhost:1/v1/agent"),
+        identity=identity,
+        provider_did="did:plc:abc",
+        machine_id="m1",
+        pds=pds,
+        mint_auth_jwt=lambda: _async_none(),
+        attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+    )
+
+    await conn._report_advisor_fault(ConnectionRefusedError())
+    assert len(put_calls) == 1
+    assert put_calls[0]["record"]["advisorFault"]["code"] == "connect-refused"
+    assert conn._advisor_fault_published is True
+
+    await conn._clear_advisor_fault()
+    assert len(put_calls) == 2
+    assert "advisorFault" not in put_calls[1]["record"]
+    assert conn._advisor_fault_published is False
+
+    # A second clear with nothing published is a no-op (no extra PDS call).
+    await conn._clear_advisor_fault()
+    assert len(put_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_publishes_advisor_fault_after_threshold_consecutive_connect_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ws_client_module, "ADVISOR_FAULT_THRESHOLD", 2)
+    monkeypatch.setattr(ws_client_module, "RECONNECT_BACKOFFS", (0.01,))
+
+    identity = _identity()
+    put_calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "uri": "at://did:plc:abc/dev.cocore.compute.provider/m1",
+                            "cid": "c1",
+                            "value": {"attestationPubKey": identity.signing_public_b64},
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/api/pds/putRecord":
+            body = json.loads(request.content)
+            put_calls.append(body)
+            return httpx.Response(
+                200, json={"uri": "at://did:plc:abc/dev.cocore.compute.provider/m1", "cid": "c2"}
+            )
+        raise AssertionError(f"unexpected call: {request.url}")
+
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+    # Nothing is listening on this port -- every connect attempt fails
+    # immediately with ConnectionRefusedError.
+    dead_port = _unused_port()
+    conn = AdvisorConnection(
+        config=_config(f"ws://localhost:{dead_port}/v1/agent"),
+        identity=identity,
+        provider_did="did:plc:abc",
+        machine_id="m1",
+        pds=pds,
+        mint_auth_jwt=lambda: _async_none(),
+        attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+    )
+
+    async def on_request(req: object, send: object) -> None:
+        return None
+
+    run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+    try:
+        for _ in range(200):
+            if put_calls:
+                break
+            await asyncio.sleep(0.02)
+        assert put_calls, "advisorFault was never published"
+        # The exact code depends on how the platform's asyncio dual-stack
+        # (happy-eyeballs) connect attempt reports a refused localhost port
+        # -- sometimes a plain ConnectionRefusedError, sometimes an
+        # aggregated OSError -- so accept either classification. What
+        # matters here is that a fault got published at all, promptly.
+        assert put_calls[0]["record"]["advisorFault"]["code"] in {
+            "connect-refused",
+            "network-unreachable",
+        }
+        assert conn._advisor_fault_published is True
+    finally:
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+
 async def _async_none() -> None:
     return None

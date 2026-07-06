@@ -112,6 +112,74 @@ async def test_run_session_happy_path_streams_and_publishes_receipt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_session_skips_receipt_when_no_attestation() -> None:
+    """attestationFault: when the boot-time attestation publish failed,
+    `ctx.attestation_uri` is empty. The job must still answer, it just must
+    not attempt (and fail lexicon validation on) a receipt with an empty
+    strong-ref."""
+    identity = _identity()
+    requester_priv = PrivateKey.generate()
+    requester_pub_b64 = base64.b64encode(bytes(requester_priv.public_key)).decode("ascii")
+
+    ciphertext = _seal(b"say hi", identity.encryption_key.public_key, requester_priv)
+    req = InferenceRequestFrame(
+        job_uri="at://did:plc:r/dev.cocore.compute.job/1",
+        job_cid="bafyjob",
+        requester_did="did:plc:r",
+        requester_pub_key=requester_pub_b64,
+        model="llama-3.1-8b",
+        max_tokens_out=64,
+        ciphertext_b64=base64.b64encode(ciphertext).decode("ascii"),
+        session_id="s1",
+    )
+
+    sse_body = (
+        'data: {"choices":[{"delta":{"content":"Hi!"},"finish_reason":"stop"}]}\n\n'
+        'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2}}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    def lmstudio_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
+
+    def pds_handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no PDS call should happen when there's no attestation")
+
+    lmstudio = LMStudioClient(
+        base_url="http://localhost:1234",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(lmstudio_handler)),
+    )
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(pds_handler)),
+        did="did:plc:p",
+    )
+    ctx = SessionContext(
+        identity=identity,
+        provider_did="did:plc:p",
+        lmstudio=lmstudio,
+        pds=pds,
+        attestation_uri="",
+        attestation_cid="",
+    )
+
+    sent: list[dict[str, object]] = []
+
+    async def send(frame: dict[str, object]) -> None:
+        sent.append(frame)
+
+    await run_session(req, send, ctx)
+
+    complete_frames = [f for f in sent if f["type"] == "inference_complete"]
+    assert len(complete_frames) == 1
+    assert complete_frames[0]["receipt_uri"] == ""
+    # The job still answered normally -- only the receipt was skipped.
+    chunk_frames = [f for f in sent if f["type"] == "inference_chunk"]
+    assert len(chunk_frames) > 0
+
+
+@pytest.mark.asyncio
 async def test_run_session_lmstudio_failure_sends_error_chunk_and_empty_receipt() -> None:
     identity = _identity()
     requester_priv = PrivateKey.generate()

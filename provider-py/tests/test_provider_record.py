@@ -5,8 +5,12 @@ import pytest
 
 from cocore_provider.pds_client import PdsClient
 from cocore_provider.provider_record import (
+    build_advisor_fault,
+    build_attestation_fault,
+    build_engine_fault,
     build_provider_record,
     merge_agent_fields,
+    patch_provider_fault,
     publish_provider_record,
 )
 
@@ -273,3 +277,169 @@ async def test_publish_provider_record_ignores_other_machines_pubkey() -> None:
     # A record with a DIFFERENT attestationPubKey describes a sibling
     # machine under the same DID -- must be left alone, not reused/deleted.
     assert published.rkey == "fresh"
+
+
+def test_build_provider_record_includes_faults_only_when_given() -> None:
+    record_without = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=["m1"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+    )
+    assert "engineFault" not in record_without
+    assert "attestationFault" not in record_without
+
+    record_with = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=[],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+        engine_fault=build_engine_fault(code="model-load-failed", message="no models", models=[]),
+        attestation_fault=build_attestation_fault(
+            code="attestation-publish-failed", message="boom"
+        ),
+    )
+    assert record_with["engineFault"]["code"] == "model-load-failed"  # type: ignore[index]
+    assert record_with["attestationFault"]["code"] == "attestation-publish-failed"  # type: ignore[index]
+
+
+def test_build_engine_fault_shape() -> None:
+    fault = build_engine_fault(code="model-load-failed", message="x" * 700, models=["m1"])
+    assert fault["code"] == "model-load-failed"
+    assert fault["models"] == ["m1"]
+    assert len(fault["message"]) == 600  # lexicon cap
+    assert isinstance(fault["at"], str)
+
+
+def test_build_attestation_fault_shape() -> None:
+    fault = build_attestation_fault(code="attestation-publish-failed", message="boom")
+    assert fault == {
+        "code": "attestation-publish-failed",
+        "message": "boom",
+        "at": fault["at"],
+    }
+
+
+def test_build_advisor_fault_shape() -> None:
+    fault = build_advisor_fault(code="dns-failure", message="boom")
+    assert fault["code"] == "dns-failure"
+    assert fault["message"] == "boom"
+    assert "observedAt" in fault
+    assert "at" not in fault
+
+
+def _plc_and_listrecords_handler(records: list[dict[str, object]]) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return _plc_handler()
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(200, json={"records": records})
+        raise AssertionError(f"unexpected call: {request.url}")
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_patch_provider_fault_sets_field() -> None:
+    put_calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return _plc_handler()
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "uri": "at://did:plc:abc/dev.cocore.compute.provider/r1",
+                            "cid": "c1",
+                            "value": {"attestationPubKey": "apk==", "machineLabel": "m"},
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/api/pds/putRecord":
+            import json
+
+            put_calls.append(json.loads(request.content))
+            return httpx.Response(
+                200, json={"uri": "at://did:plc:abc/dev.cocore.compute.provider/r1", "cid": "c2"}
+            )
+        raise AssertionError(f"unexpected call: {request.url}")
+
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+    fault = build_advisor_fault(code="dns-failure", message="boom")
+    ok = await patch_provider_fault(pds, "apk==", "advisorFault", fault)
+    assert ok is True
+    assert len(put_calls) == 1
+    assert put_calls[0]["rkey"] == "r1"
+    assert put_calls[0]["record"]["advisorFault"] == fault
+    # Everything else on the record survives untouched.
+    assert put_calls[0]["record"]["machineLabel"] == "m"
+
+
+@pytest.mark.asyncio
+async def test_patch_provider_fault_clears_field() -> None:
+    put_calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return _plc_handler()
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "uri": "at://did:plc:abc/dev.cocore.compute.provider/r1",
+                            "cid": "c1",
+                            "value": {
+                                "attestationPubKey": "apk==",
+                                "advisorFault": {"code": "dns-failure"},
+                            },
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/api/pds/putRecord":
+            import json
+
+            put_calls.append(json.loads(request.content))
+            return httpx.Response(
+                200, json={"uri": "at://did:plc:abc/dev.cocore.compute.provider/r1", "cid": "c2"}
+            )
+        raise AssertionError(f"unexpected call: {request.url}")
+
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+    ok = await patch_provider_fault(pds, "apk==", "advisorFault", None)
+    assert ok is True
+    assert "advisorFault" not in put_calls[0]["record"]
+
+
+@pytest.mark.asyncio
+async def test_patch_provider_fault_no_matching_record_returns_false() -> None:
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=_plc_and_listrecords_handler([])),
+        did="did:plc:abc",
+    )
+    ok = await patch_provider_fault(pds, "apk==", "advisorFault", {"code": "dns-failure"})
+    assert ok is False

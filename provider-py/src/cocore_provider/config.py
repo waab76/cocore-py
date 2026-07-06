@@ -27,6 +27,11 @@ STREAM_KEEPALIVE_INTERVAL_SECS = 10.0
 # `dev.cocore.compute.provider` PDS record (provider/src/advisor.rs's
 # `active_poll` ticker uses the same 30s cadence as its heartbeat).
 ACTIVE_POLL_INTERVAL_SECS = 30.0
+# Consecutive advisor CONNECT failures (the WebSocket never came up at all --
+# an ordinary drop after a successful connect doesn't count) before the agent
+# publishes `advisorFault` on its provider record. Mirrors
+# `provider/src/main.rs::ADVISOR_FAULT_THRESHOLD`.
+ADVISOR_FAULT_THRESHOLD = 3
 
 
 class ConfigError(RuntimeError):
