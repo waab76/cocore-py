@@ -4,19 +4,27 @@ import argparse
 import asyncio
 import os
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 
 import httpx
 
 from cocore_provider import __version__
 from cocore_provider.attestation import build_attestation_record
 from cocore_provider.config import REGISTER_LXM, AgentConfig, ConfigError, load_config
+from cocore_provider.config_file import find_config_path, load_config_file
 from cocore_provider.identity import load_or_create
 from cocore_provider.lmstudio import LMStudioClient
 from cocore_provider.pds_client import PdsClient
 from cocore_provider.protocol import InferenceRequestFrame
 from cocore_provider.session import SessionContext, run_session
 from cocore_provider.ws_client import AdvisorConnection
+
+
+def _resolve_agent_config(args: argparse.Namespace, env: Mapping[str, str]) -> AgentConfig:
+    is_explicit = bool(args.config) or bool(env.get("COCORE_CONFIG_PATH"))
+    config_path = find_config_path(cli_arg=args.config, env=env)
+    config_file = load_config_file(config_path, is_explicit=is_explicit)
+    return load_config(env, config_file=config_file)
 
 
 def _build_lmstudio_http() -> httpx.AsyncClient:
@@ -78,6 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     serve_parser = subparsers.add_parser("serve", help="connect to the advisor and serve jobs")
     serve_parser.add_argument("--provider-did", required=True, help="this provider's DID")
+    serve_parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "path to a TOML config file (default: --config flag > "
+            "COCORE_CONFIG_PATH env var > ~/.cocore/provider-py/config.toml)"
+        ),
+    )
     return parser
 
 
@@ -89,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "serve":
         try:
-            config = load_config(os.environ)
+            config = _resolve_agent_config(args, os.environ)
         except ConfigError as e:
             print(f"config error: {e}", file=sys.stderr)
             return 1
