@@ -105,7 +105,10 @@ On first run this:
    nothing is.
 3. Builds and publishes a `dev.cocore.compute.attestation` record (software
    self-attestation; every hardware-measurement posture field is honestly
-   reported `false` since there's no Secure Enclave off Apple silicon).
+   reported `false` since there's no Secure Enclave off Apple silicon), then
+   a `dev.cocore.compute.provider` record (so the machine shows up in the
+   console's device list), deduping/merging against any stale copy already
+   on the PDS.
 4. Connects to the advisor, registers, and serves jobs until stopped
    (`Ctrl+C` / `SIGTERM`).
 
@@ -131,10 +134,28 @@ Pricing is uniform for every model — no per-model catalog in v1 — at
 (`src/cocore_provider/pricing.py`), matching the Rust provider's fallback
 rate for off-catalog models.
 
+## Diagnosing a stuck install
+
+Two read-only subcommands (no serve loop, no repairs — see
+`docs/plans/0004-provider-py-rust-parity-gap-analysis.md` item 2) help
+diagnose an installed agent that isn't showing up as expected:
+
+```bash
+uv run cocore-provider doctor --provider-did did:plc:<your-did>
+uv run cocore-provider attestation-status --provider-did did:plc:<your-did>
+```
+
+`doctor` checks LMStudio reachability + loaded models, whether
+`COCORE_API_KEY` still resolves against the console (`/api/agent/whoami`),
+and — if the key is valid — the console's cross-system diagnosis
+(`/api/agent/health`: is the advisor seeing this machine, is there a fresh
+provider record on the PDS). `attestation-status` reads this identity's
+newest `dev.cocore.compute.attestation` record straight off its own PDS,
+reports whether it's expired, and surfaces any `attestationFault` recorded
+on the provider record. Both exit non-zero if any check fails, for scripting.
+
 ## Scope (v1)
 
-- No `dev.cocore.compute.provider` record is published — registration is
-  WS-only, so the machine won't appear in the console's device list yet.
 - No tool-calling, `output_schema`-guided decoding, or `reasoning` channel —
   plain `content`-channel chat completion only.
 - `best-effort` attestation tier only (no confidential/enclave tier).
@@ -166,4 +187,5 @@ src/cocore_provider/
   pds_client.py   console PDS-proxy HTTP client (publish records, mint service auth)
   receipt.py      dev.cocore.compute.receipt record builder + signer
   pricing.py      uniform token pricing + byte-length token estimate
+  diagnostics.py  read-only checks backing `doctor` / `attestation-status`
 ```

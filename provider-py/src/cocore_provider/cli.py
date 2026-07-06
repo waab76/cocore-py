@@ -21,6 +21,7 @@ from cocore_provider.config import (
     resolve_provider_did,
 )
 from cocore_provider.config_file import find_config_path, load_config_file
+from cocore_provider.diagnostics import check_attestation_status, format_check, run_doctor
 from cocore_provider.identity import load_or_create
 from cocore_provider.lmstudio import LMStudioClient, LMStudioError
 from cocore_provider.logging_setup import configure_logging
@@ -186,12 +187,44 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
     await conn.run(on_inference_request=on_inference_request)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cocore-provider")
-    parser.add_argument("--version", action="store_true", help="print version and exit")
-    subparsers = parser.add_subparsers(dest="command")
-    serve_parser = subparsers.add_parser("serve", help="connect to the advisor and serve jobs")
-    serve_parser.add_argument(
+async def doctor(config: AgentConfig, *, provider_did: str) -> int:
+    print(f"==> cocore-provider doctor {__version__}")
+    print(f"  console: {config.api_base}")
+    print(f"  advisor: {config.advisor_url}")
+    print(f"  provider_did: {provider_did}")
+    print()
+    lmstudio_http = _build_lmstudio_http()
+    console_http = _build_console_http()
+    checks = await run_doctor(config, lmstudio_http=lmstudio_http, console_http=console_http)
+    for check in checks:
+        print(format_check(check))
+    failed = [c for c in checks if not c.ok]
+    print()
+    if not failed:
+        print("==> all checks passed.")
+        return 0
+    print(f"==> {len(failed)} check(s) failed:")
+    for c in failed:
+        print(f"  - {c.name}: {c.note}")
+    return 1
+
+
+async def attestation_status(config: AgentConfig, *, provider_did: str) -> int:
+    print(f"==> cocore-provider attestation-status {__version__}")
+    print(f"  provider_did: {provider_did}")
+    print()
+    identity = load_or_create(config.identity_path)
+    console_http = _build_console_http()
+    pds = PdsClient(
+        api_base=config.api_base, api_key=config.api_key, http=console_http, did=provider_did
+    )
+    check = await check_attestation_status(pds, identity)
+    print(format_check(check))
+    return 0 if check.ok else 1
+
+
+def _add_config_args(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument(
         "--provider-did",
         default=None,
         help=(
@@ -199,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
             "> COCORE_PROVIDER_DID env var)"
         ),
     )
-    serve_parser.add_argument(
+    subparser.add_argument(
         "--config",
         default=None,
         help=(
@@ -207,6 +240,24 @@ def build_parser() -> argparse.ArgumentParser:
             "COCORE_CONFIG_PATH env var > ~/.cocore/provider-py/config.toml)"
         ),
     )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="cocore-provider")
+    parser.add_argument("--version", action="store_true", help="print version and exit")
+    subparsers = parser.add_subparsers(dest="command")
+    serve_parser = subparsers.add_parser("serve", help="connect to the advisor and serve jobs")
+    _add_config_args(serve_parser)
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="read-only health checks: LMStudio reachability, API key, cross-system status",
+    )
+    _add_config_args(doctor_parser)
+    attestation_parser = subparsers.add_parser(
+        "attestation-status",
+        help="report this machine's latest published attestation record and any fault",
+    )
+    _add_config_args(attestation_parser)
     return parser
 
 
@@ -216,15 +267,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.version:
         print(__version__)
         return 0
-    if args.command == "serve":
+    if args.command in ("serve", "doctor", "attestation-status"):
         try:
             config, provider_did = _resolve_agent_config(args, os.environ)
         except ConfigError as e:
             print(f"config error: {e}", file=sys.stderr)
             return 1
-        configure_logging(config.log_level, config.log_file)
-        asyncio.run(serve(config, provider_did=provider_did))
-        return 0
+        if args.command == "serve":
+            configure_logging(config.log_level, config.log_file)
+            asyncio.run(serve(config, provider_did=provider_did))
+            return 0
+        if args.command == "doctor":
+            return asyncio.run(doctor(config, provider_did=provider_did))
+        return asyncio.run(attestation_status(config, provider_did=provider_did))
     parser.print_help()
     return 1
 
