@@ -485,33 +485,158 @@ fn is_swap_conflict(e: &cocore_provider::error::ProviderError) -> bool {
     matches!(e, cocore_provider::error::ProviderError::Pds(msg) if msg.contains("InvalidSwap"))
 }
 
-/// Read this machine's owner-chosen `desiredTier` from its PDS provider
-/// record. Returns `None` when not paired, when this machine has no record yet
-/// (never served), or on any read error — all of which the caller treats as
-/// best-effort. Backs both the confidential entry gate and the `agent tier`
-/// probe the macOS supervisor runs to pick a worker binary.
-async fn read_my_desired_tier() -> Option<String> {
-    let session = oauth::load_session().ok()??;
-    let pds = PdsClient::new(session);
-    let signer = secure_enclave::load_or_create_identity().ok()?;
+/// The outcome of trying to read the owner's `desiredTier` from the PDS.
+enum TierRead {
+    /// The provider record was read cleanly. `Some("attested-confidential")`
+    /// when the owner opted in; `None` when the field is absent (best-effort).
+    Read(Option<String>),
+    /// The PDS could not be reached or authenticated — most commonly an expired
+    /// OAuth session that 401s every read. The caller must NOT treat this as
+    /// best-effort (that's the silent-downgrade bug that abandons a confidential
+    /// machine's worker on a transient hiccup); it honors cached intent instead.
+    Unreadable,
+}
+
+/// This machine's current identity `(did, attestationPubKey)`, or `None` when
+/// not paired / the enclave key can't be loaded. Scopes the durable tier cache
+/// the same way `provider-rkey.json` is scoped.
+fn current_identity() -> Option<(String, String)> {
+    let session = oauth::load_session().ok().flatten()?;
+    let pubkey = secure_enclave::load_or_create_identity()
+        .ok()?
+        .public_key_b64();
+    Some((session.did, pubkey))
+}
+
+/// Read this machine's owner-chosen `desiredTier` straight from its PDS provider
+/// record, distinguishing a clean read (best-effort or confidential) from an
+/// unreadable PDS. The list read is split out from the record match so a
+/// transport/auth failure is `Unreadable` while a genuine "no record / no field"
+/// stays a clean best-effort answer.
+async fn read_desired_tier_live() -> TierRead {
+    let Some(session) = oauth::load_session().ok().flatten() else {
+        return TierRead::Unreadable; // not paired / no session on disk
+    };
+    let Ok(signer) = secure_enclave::load_or_create_identity() else {
+        return TierRead::Unreadable;
+    };
     let pubkey = signer.public_key_b64();
-    let (_rkey, value, _cid) = find_my_provider_record(&pds, &pubkey).await.ok()?;
-    value
-        .get("desiredTier")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
+    let pds = PdsClient::new(session);
+    let listed = match pds.list_my_records("dev.cocore.compute.provider").await {
+        Ok(l) => l,
+        // A transport/auth failure (e.g. 401 "session no longer valid") is
+        // Unreadable — honor cached intent, don't collapse to best-effort.
+        Err(_) => return TierRead::Unreadable,
+    };
+    let tier = listed
+        .into_iter()
+        .find(|r| {
+            r.value.get("attestationPubKey").and_then(|v| v.as_str()) == Some(pubkey.as_str())
+        })
+        .and_then(|r| {
+            r.value
+                .get("desiredTier")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
+    TierRead::Read(tier)
+}
+
+/// Resolve the owner-chosen tier to one of the two worker-selection answers
+/// (`"attested-confidential"` | `"best-effort"`), backed by a durable cache so a
+/// stale/expired session can't silently collapse a confidential machine to
+/// best-effort. A clean read refreshes the cache; an unreadable PDS falls back
+/// to the last cached intent; only with neither do we default to best-effort.
+/// Backs both `agent tier` and the in-process confidential gate.
+async fn resolve_desired_tier() -> &'static str {
+    let ident = current_identity();
+    match read_desired_tier_live().await {
+        TierRead::Read(Some(t)) if t == "attested-confidential" => {
+            if let Some((did, pk)) = &ident {
+                cache_desired_tier(did, pk, "attested-confidential");
+            }
+            "attested-confidential"
+        }
+        TierRead::Read(_) => {
+            // Read cleanly; owner is best-effort (field absent or other value).
+            if let Some((did, pk)) = &ident {
+                cache_desired_tier(did, pk, "best-effort");
+            }
+            "best-effort"
+        }
+        TierRead::Unreadable => {
+            match ident
+                .as_ref()
+                .and_then(|(did, pk)| cached_desired_tier(did, pk))
+            {
+                Some(t) if t == "attested-confidential" => {
+                    tracing::warn!(
+                        "could not read desiredTier from PDS (session may be expired); honoring cached owner intent = attested-confidential"
+                    );
+                    "attested-confidential"
+                }
+                Some(_) => "best-effort",
+                None => {
+                    tracing::warn!(
+                        "could not read desiredTier from PDS and no cached intent; defaulting to best-effort"
+                    );
+                    "best-effort"
+                }
+            }
+        }
+    }
+}
+
+/// `~/.cocore/desired-tier.json` — the last SUCCESSFULLY-READ owner tier intent
+/// for this identity, so `resolve_desired_tier` can survive a transient/expired
+/// session instead of collapsing a confidential machine to best-effort. Keyed
+/// to (did, attestationPubKey) exactly like `provider-rkey.json`: a re-pair or a
+/// re-keyed enclave invalidates it rather than resurrecting a foreign intent.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedDesiredTier {
+    did: String,
+    attestation_pub_key: String,
+    /// "attested-confidential" | "best-effort"
+    tier: String,
+}
+
+fn desired_tier_cache_path() -> Option<std::path::PathBuf> {
+    dirs::home_dir().map(|h| h.join(".cocore").join("desired-tier.json"))
+}
+
+/// Best-effort: never blocks or fails the tier probe.
+fn cache_desired_tier(did: &str, attestation_pub_key: &str, tier: &str) {
+    let Some(path) = desired_tier_cache_path() else {
+        return;
+    };
+    let entry = CachedDesiredTier {
+        did: did.to_string(),
+        attestation_pub_key: attestation_pub_key.to_string(),
+        tier: tier.to_string(),
+    };
+    if let Ok(json) = serde_json::to_string(&entry) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn cached_desired_tier(did: &str, attestation_pub_key: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(desired_tier_cache_path()?).ok()?;
+    parse_cached_desired_tier(&raw, did, attestation_pub_key)
+}
+
+/// Honor the cache only for the exact identity that wrote it; a foreign DID,
+/// a re-keyed enclave, or a corrupt file reads as no cache.
+fn parse_cached_desired_tier(raw: &str, did: &str, attestation_pub_key: &str) -> Option<String> {
+    let entry: CachedDesiredTier = serde_json::from_str(raw).ok()?;
+    (entry.did == did && entry.attestation_pub_key == attestation_pub_key).then_some(entry.tier)
 }
 
 /// `cocore agent tier`: print this machine's owner-chosen trust tier
-/// (`attested-confidential` or `best-effort`). Normalises an absent/unknown
-/// value to `best-effort` so the caller (the macOS supervisor) always gets one
-/// of the two binary-selection answers.
+/// (`attested-confidential` or `best-effort`). Cache-backed so a stale session
+/// can't silently downgrade the answer the macOS supervisor uses to pick a
+/// worker binary.
 async fn cmd_print_tier() -> Result<()> {
-    let tier = match read_my_desired_tier().await.as_deref() {
-        Some("attested-confidential") => "attested-confidential",
-        _ => "best-effort",
-    };
-    println!("{tier}");
+    println!("{}", resolve_desired_tier().await);
     Ok(())
 }
 
@@ -1116,8 +1241,7 @@ async fn cmd_serve_entry(advisor: String) -> Result<()> {
     // (The macOS supervisor normally only spawns this binary for confidential
     // machines via `agent tier`; this in-process gate is the backstop so a
     // stale/raced spawn can never silently flip a machine's behaviour.)
-    let desired_tier = read_my_desired_tier().await;
-    let confidential = desired_tier.as_deref() == Some("attested-confidential");
+    let confidential = resolve_desired_tier().await == "attested-confidential";
     if !confidential {
         tracing::info!(
             "desiredTier is not attested-confidential — serving best-effort (no push host, subprocess engine)"
@@ -3532,6 +3656,63 @@ mod apply_desired_tier_tests {
         let mut v = serde_json::json!({});
         assert!(!apply_desired_tier(&mut v, false)); // absent == off already
         assert!(apply_desired_tier(&mut v, true)); // off -> on
+    }
+}
+
+#[cfg(test)]
+mod desired_tier_cache_tests {
+    use super::*;
+
+    fn write(did: &str, pk: &str, tier: &str) -> String {
+        serde_json::to_string(&CachedDesiredTier {
+            did: did.to_string(),
+            attestation_pub_key: pk.to_string(),
+            tier: tier.to_string(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn round_trips_for_the_same_identity() {
+        let raw = write("did:plc:abc", "PUBKEY", "attested-confidential");
+        assert_eq!(
+            parse_cached_desired_tier(&raw, "did:plc:abc", "PUBKEY").as_deref(),
+            Some("attested-confidential"),
+        );
+    }
+
+    #[test]
+    fn ignores_a_foreign_did_or_rekeyed_enclave() {
+        let raw = write("did:plc:abc", "PUBKEY", "attested-confidential");
+        // Different DID (re-pair under another account) → no cache.
+        assert_eq!(
+            parse_cached_desired_tier(&raw, "did:plc:xyz", "PUBKEY"),
+            None
+        );
+        // Different attestation key (re-keyed enclave) → no cache.
+        assert_eq!(
+            parse_cached_desired_tier(&raw, "did:plc:abc", "OTHER"),
+            None
+        );
+    }
+
+    #[test]
+    fn corrupt_file_reads_as_no_cache() {
+        assert_eq!(
+            parse_cached_desired_tier("not json", "did:plc:abc", "PUBKEY"),
+            None,
+        );
+    }
+
+    #[test]
+    fn best_effort_intent_round_trips_too() {
+        // The cache stores best-effort as well, so a clean read of an opted-out
+        // machine doesn't leave a stale confidential cache to resurrect.
+        let raw = write("did:plc:abc", "PUBKEY", "best-effort");
+        assert_eq!(
+            parse_cached_desired_tier(&raw, "did:plc:abc", "PUBKEY").as_deref(),
+            Some("best-effort"),
+        );
     }
 }
 
