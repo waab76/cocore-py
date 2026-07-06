@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import pytest
 from cocore.canonical import canonical_bytes
 from cocore.p256 import verify_attestation_signature, verify_p256
 from cryptography.hazmat.primitives.asymmetric import ec
 from nacl.public import PrivateKey
 
+from cocore_provider import attestation as attestation_module
 from cocore_provider.attestation import build_attestation_record, build_challenge_response
 from cocore_provider.identity import Identity
 from cocore_provider.protocol import AttestationChallenge
@@ -45,7 +47,10 @@ def test_attestation_record_required_fields_present_and_signed() -> None:
     assert verify_attestation_signature(record, identity.signing_public_b64)
 
 
-def test_challenge_response_signature_covers_echoed_timestamp() -> None:
+def test_challenge_response_signature_covers_echoed_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(attestation_module.hypervisor, "detect", lambda: None)
     identity = _identity()
     challenge = AttestationChallenge(nonce="n1", timestamp="2026-01-01T00:00:00Z")
     response = build_challenge_response(identity, challenge)
@@ -54,5 +59,41 @@ def test_challenge_response_signature_covers_echoed_timestamp() -> None:
     assert response["sip_enabled"] is False
     message = canonical_bytes(
         {"nonce": "n1", "sipEnabled": False, "timestamp": "2026-01-01T00:00:00Z"}
+    )
+    assert verify_p256(identity.signing_public_b64, response["signature"], message)
+
+
+def test_challenge_response_omits_hypervisor_present_when_undetected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(attestation_module.hypervisor, "detect", lambda: None)
+    identity = _identity()
+    challenge = AttestationChallenge(nonce="n1", timestamp="2026-01-01T00:00:00Z")
+    response = build_challenge_response(identity, challenge)
+
+    assert "hypervisor_present" not in response
+    message = canonical_bytes(
+        {"nonce": "n1", "sipEnabled": False, "timestamp": "2026-01-01T00:00:00Z"}
+    )
+    assert verify_p256(identity.signing_public_b64, response["signature"], message)
+
+
+@pytest.mark.parametrize("hyp", [True, False])
+def test_challenge_response_includes_hypervisor_present_when_detected(
+    monkeypatch: pytest.MonkeyPatch, hyp: bool
+) -> None:
+    monkeypatch.setattr(attestation_module.hypervisor, "detect", lambda: hyp)
+    identity = _identity()
+    challenge = AttestationChallenge(nonce="n1", timestamp="2026-01-01T00:00:00Z")
+    response = build_challenge_response(identity, challenge)
+
+    assert response["hypervisor_present"] is hyp
+    message = canonical_bytes(
+        {
+            "nonce": "n1",
+            "sipEnabled": False,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "hypervisorPresent": hyp,
+        }
     )
     assert verify_p256(identity.signing_public_b64, response["signature"], message)

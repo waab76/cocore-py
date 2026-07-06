@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping
 import httpx
 import psutil
 
-from cocore_provider import __version__
+from cocore_provider import __version__, geoip
 from cocore_provider.attestation import build_attestation_record
 from cocore_provider.config import (
     REGISTER_LXM,
@@ -31,6 +31,7 @@ from cocore_provider.provider_record import (
     build_attestation_fault,
     build_engine_fault,
     build_provider_record,
+    find_my_provider_record,
     publish_provider_record,
 )
 from cocore_provider.session import SessionContext, run_session
@@ -39,6 +40,11 @@ from cocore_provider.ws_client import AdvisorConnection
 
 def _ram_gb() -> int:
     return int(psutil.virtual_memory().total // (1024**3))
+
+
+def _cpu_cores() -> int | None:
+    count = psutil.cpu_count(logical=True)
+    return int(count) if count is not None else None
 
 
 logger = logging.getLogger(__name__)
@@ -135,6 +141,27 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         )
 
     ram_gb = config.ram_gb if config.ram_gb is not None else _ram_gb()
+
+    # Coarse, opt-in location (refresh-on-serve). Only when the owner opted
+    # in via the console's `shareLocation` switch -- read off our OWN
+    # existing record, before deciding whether to make the geoip call at
+    # all -- do we resolve this machine's country from its public IP.
+    # Absent/no-record-yet/read-failure all mean "not opted in", matching
+    # `provider/src/main.rs::find_my_provider_record`'s fallback.
+    existing_provider = await find_my_provider_record(pds, identity.signing_public_b64)
+    share_location = bool(existing_provider and existing_provider.get("shareLocation") is True)
+    region: str | None = None
+    region_source: str | None = None
+    if share_location:
+        region = await geoip.resolve_country(console_http)
+        if region is not None:
+            region_source = geoip.REGION_SOURCE_IP_GEO
+            logger.info("location sharing on — stamping provider record region=%s", region)
+        else:
+            logger.warning(
+                "location sharing on but country lookup failed; leaving region unset this serve"
+            )
+
     provider_record = build_provider_record(
         machine_label=config.machine_label,
         chip=f"lmstudio:{platform.system().lower()}",
@@ -145,6 +172,10 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         binary_version=__version__,
         engine_fault=engine_fault,
         attestation_fault=attestation_fault,
+        cpu_cores=_cpu_cores(),
+        os_name=platform.platform(),
+        region=region,
+        region_source=region_source,
     )
     published_provider = await publish_provider_record(
         pds, identity.signing_public_b64, provider_record

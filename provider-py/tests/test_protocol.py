@@ -127,6 +127,24 @@ def test_build_attestation_response() -> None:
     }
 
 
+def test_build_attestation_response_includes_hypervisor_present_when_given() -> None:
+    frame = build_attestation_response(
+        nonce="n1",
+        timestamp="2026-01-01T00:00:00Z",
+        sip_enabled=False,
+        signature="sig==",
+        hypervisor_present=True,
+    )
+    assert frame["hypervisor_present"] is True
+
+
+def test_build_attestation_response_omits_hypervisor_present_when_none() -> None:
+    frame = build_attestation_response(
+        nonce="n1", timestamp="2026-01-01T00:00:00Z", sip_enabled=False, signature="sig=="
+    )
+    assert "hypervisor_present" not in frame
+
+
 def test_frame_type() -> None:
     assert frame_type({"type": "ping", "nonce": "abc"}) == "ping"
 

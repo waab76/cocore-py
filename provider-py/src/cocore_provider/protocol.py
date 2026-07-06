@@ -112,15 +112,23 @@ def build_heartbeat(*, load: float, queue_depth: int, active: bool = True) -> di
 
 
 def build_attestation_response(
-    *, nonce: str, timestamp: str, sip_enabled: bool, signature: str
+    *,
+    nonce: str,
+    timestamp: str,
+    sip_enabled: bool,
+    signature: str,
+    hypervisor_present: bool | None = None,
 ) -> dict[str, object]:
-    return {
+    frame: dict[str, object] = {
         "type": "attestation_response",
         "nonce": nonce,
         "timestamp": timestamp,
         "sip_enabled": sip_enabled,
         "signature": signature,
     }
+    if hypervisor_present is not None:
+        frame["hypervisor_present"] = hypervisor_present
+    return frame
 
 
 def build_inference_chunk(*, session_id: str, seq: int, ciphertext_b64: str) -> dict[str, object]:

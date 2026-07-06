@@ -314,3 +314,212 @@ async def test_serve_survives_attestation_publish_failure_with_attestation_fault
 
     assert seen_register["attestation_uri"] == ""
     assert provider_record_bodies[0]["attestationFault"]["code"] == "attestation-publish-failed"
+
+
+@pytest.mark.asyncio
+async def test_serve_stamps_region_when_owner_opted_into_location_sharing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The owner's `shareLocation: true` on the EXISTING provider record must
+    gate a geoip lookup that stamps `region`/`regionSource` onto the fresh
+    republish -- mirrors provider/src/main.rs's find_my_provider_record
+    gating."""
+    from cocore_provider.identity import load_or_create
+
+    identity_path = tmp_path / "identity.json"
+    identity = load_or_create(identity_path)
+    pub_key = identity.signing_public_b64
+
+    registered = asyncio.Event()
+    provider_record_bodies: list[dict[str, object]] = []
+
+    async def fake_advisor(ws: websockets.WebSocketServerProtocol) -> None:
+        json.loads(await ws.recv())
+        registered.set()
+        await ws.wait_closed()
+
+    def lmstudio_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "llama-3.1-8b"}]})
+
+    def console_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "uri": "at://did:plc:p/dev.cocore.compute.provider/existing1",
+                            "cid": "oldcid",
+                            "value": {"attestationPubKey": pub_key, "shareLocation": True},
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/geoip":
+            return httpx.Response(200, text="US")
+        if request.url.path == "/api/pds/getServiceAuth":
+            return httpx.Response(200, json={"token": "jwt.abc"})
+        if request.url.path == "/api/pds/createRecord":
+            body = json.loads(request.content)
+            assert body["collection"] == "dev.cocore.compute.attestation"
+            return httpx.Response(
+                200,
+                json={
+                    "uri": "at://did:plc:p/dev.cocore.compute.attestation/1",
+                    "cid": "bafyattest",
+                },
+            )
+        if request.url.path == "/api/pds/putRecord":
+            body = json.loads(request.content)
+            provider_record_bodies.append(body["record"])
+            return httpx.Response(
+                200,
+                json={
+                    "uri": "at://did:plc:p/dev.cocore.compute.provider/existing1",
+                    "cid": "bafyprov",
+                },
+            )
+        raise AssertionError(f"unexpected console call: {request.url.path}")
+
+    monkeypatch.setenv("COCORE_GEOIP_URL", "https://console.example/geoip")
+    monkeypatch.setattr(
+        "cocore_provider.cli._build_lmstudio_http",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lmstudio_handler)),
+    )
+    monkeypatch.setattr(
+        "cocore_provider.cli._build_console_http",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(console_handler)),
+    )
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = AgentConfig(
+            advisor_url=f"ws://localhost:{port}/v1/agent",
+            advisor_did="did:web:advisor.cocore.dev",
+            api_base="https://console.example",
+            api_key="key123",
+            lmstudio_url="http://localhost:1234",
+            identity_path=identity_path,
+            machine_label="test-machine",
+        )
+        serve_task = asyncio.create_task(serve(config, provider_did="did:plc:abc"))
+        await asyncio.wait_for(registered.wait(), timeout=10)
+        serve_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await serve_task
+
+    assert provider_record_bodies[0]["region"] == "US"
+    assert provider_record_bodies[0]["regionSource"] == "ip-geo"
+    assert "regionObservedAt" in provider_record_bodies[0]
+
+
+@pytest.mark.asyncio
+async def test_serve_skips_geoip_when_owner_has_not_opted_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absent (or false) `shareLocation` must not trigger any geoip network
+    call at all, and the published record must carry no region fields."""
+    from cocore_provider.identity import load_or_create
+
+    identity_path = tmp_path / "identity.json"
+    identity = load_or_create(identity_path)
+    pub_key = identity.signing_public_b64
+
+    registered = asyncio.Event()
+    provider_record_bodies: list[dict[str, object]] = []
+    geoip_calls: list[str] = []
+
+    async def fake_advisor(ws: websockets.WebSocketServerProtocol) -> None:
+        json.loads(await ws.recv())
+        registered.set()
+        await ws.wait_closed()
+
+    def lmstudio_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": "llama-3.1-8b"}]})
+
+    def console_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "uri": "at://did:plc:p/dev.cocore.compute.provider/existing1",
+                            "cid": "oldcid",
+                            "value": {"attestationPubKey": pub_key},
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/geoip":
+            geoip_calls.append(request.url.path)
+            return httpx.Response(200, text="US")
+        if request.url.path == "/api/pds/getServiceAuth":
+            return httpx.Response(200, json={"token": "jwt.abc"})
+        if request.url.path == "/api/pds/createRecord":
+            body = json.loads(request.content)
+            assert body["collection"] == "dev.cocore.compute.attestation"
+            return httpx.Response(
+                200,
+                json={
+                    "uri": "at://did:plc:p/dev.cocore.compute.attestation/1",
+                    "cid": "bafyattest",
+                },
+            )
+        if request.url.path == "/api/pds/putRecord":
+            body = json.loads(request.content)
+            provider_record_bodies.append(body["record"])
+            return httpx.Response(
+                200,
+                json={
+                    "uri": "at://did:plc:p/dev.cocore.compute.provider/existing1",
+                    "cid": "bafyprov",
+                },
+            )
+        raise AssertionError(f"unexpected console call: {request.url.path}")
+
+    monkeypatch.setenv("COCORE_GEOIP_URL", "https://console.example/geoip")
+    monkeypatch.setattr(
+        "cocore_provider.cli._build_lmstudio_http",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lmstudio_handler)),
+    )
+    monkeypatch.setattr(
+        "cocore_provider.cli._build_console_http",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(console_handler)),
+    )
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = AgentConfig(
+            advisor_url=f"ws://localhost:{port}/v1/agent",
+            advisor_did="did:web:advisor.cocore.dev",
+            api_base="https://console.example",
+            api_key="key123",
+            lmstudio_url="http://localhost:1234",
+            identity_path=identity_path,
+            machine_label="test-machine",
+        )
+        serve_task = asyncio.create_task(serve(config, provider_did="did:plc:abc"))
+        await asyncio.wait_for(registered.wait(), timeout=10)
+        serve_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await serve_task
+
+    assert geoip_calls == []
+    assert "region" not in provider_record_bodies[0]
+    assert "regionSource" not in provider_record_bodies[0]
+    assert "regionObservedAt" not in provider_record_bodies[0]

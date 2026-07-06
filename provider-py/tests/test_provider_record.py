@@ -9,6 +9,7 @@ from cocore_provider.provider_record import (
     build_attestation_fault,
     build_engine_fault,
     build_provider_record,
+    find_my_provider_record,
     merge_agent_fields,
     models_changed,
     patch_provider_fault,
@@ -444,6 +445,164 @@ async def test_patch_provider_fault_no_matching_record_returns_false() -> None:
     )
     ok = await patch_provider_fault(pds, "apk==", "advisorFault", {"code": "dns-failure"})
     assert ok is False
+
+
+def test_build_provider_record_omits_cpu_os_region_by_default() -> None:
+    record = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=["m1"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+    )
+    assert "cpuCores" not in record
+    assert "os" not in record
+    assert "region" not in record
+    assert "regionSource" not in record
+    assert "regionObservedAt" not in record
+
+
+def test_build_provider_record_includes_cpu_cores_and_os() -> None:
+    record = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=["m1"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+        cpu_cores=16,
+        os_name="Linux-6.1.0-x86_64",
+    )
+    assert record["cpuCores"] == 16
+    assert record["os"] == "Linux-6.1.0-x86_64"
+
+
+def test_build_provider_record_omits_cpu_cores_when_none_or_zero() -> None:
+    record_none = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=["m1"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+        cpu_cores=None,
+    )
+    assert "cpuCores" not in record_none
+
+    record_zero = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=["m1"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+        cpu_cores=0,
+    )
+    assert "cpuCores" not in record_zero
+
+
+def test_build_provider_record_truncates_long_os_name() -> None:
+    record = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=["m1"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+        os_name="x" * 100,
+    )
+    assert len(record["os"]) == 64  # type: ignore[arg-type]
+
+
+def test_build_provider_record_stamps_region_atomically() -> None:
+    record = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=["m1"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+        region="US",
+        region_source="ip-geo",
+    )
+    assert record["region"] == "US"
+    assert record["regionSource"] == "ip-geo"
+    assert isinstance(record["regionObservedAt"], str)
+
+
+def test_build_provider_record_region_without_source_is_omitted() -> None:
+    # Only region set, no source -- shouldn't happen from cli.py's wiring,
+    # but the atomic all-or-nothing guard must not half-publish.
+    record = build_provider_record(
+        machine_label="m",
+        chip="lmstudio:linux",
+        ram_gb=8,
+        supported_models=["m1"],
+        encryption_pub_key="epk==",
+        attestation_pub_key="apk==",
+        binary_version="0.1.0",
+        region="US",
+    )
+    assert "region" not in record
+    assert "regionSource" not in record
+    assert "regionObservedAt" not in record
+
+
+@pytest.mark.asyncio
+async def test_find_my_provider_record_returns_matching_value() -> None:
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(
+            transport=_plc_and_listrecords_handler(
+                [
+                    {
+                        "uri": "at://did:plc:abc/dev.cocore.compute.provider/r1",
+                        "cid": "c1",
+                        "value": {"attestationPubKey": "apk==", "shareLocation": True},
+                    }
+                ]
+            )
+        ),
+        did="did:plc:abc",
+    )
+    value = await find_my_provider_record(pds, "apk==")
+    assert value is not None
+    assert value["shareLocation"] is True
+
+
+@pytest.mark.asyncio
+async def test_find_my_provider_record_no_match_returns_none() -> None:
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=_plc_and_listrecords_handler([])),
+        did="did:plc:abc",
+    )
+    assert await find_my_provider_record(pds, "apk==") is None
+
+
+@pytest.mark.asyncio
+async def test_find_my_provider_record_read_error_returns_none() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return _plc_handler()
+        return httpx.Response(500, text="boom")
+
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+    assert await find_my_provider_record(pds, "apk==") is None
 
 
 def test_models_changed_ignores_order_and_dupes_but_catches_edits() -> None:

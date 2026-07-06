@@ -57,6 +57,7 @@ Optional (defaults shown):
 | `COCORE_ALLOW_INSECURE_ADVISOR` | `allow_insecure_advisor` | unset / `false` | Allow a non-`wss://` advisor URL (local dev only). |
 | `COCORE_LOG_LEVEL` | `log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 | `COCORE_LOG_FILE` | `log_file` | `~/.cocore/provider-py/provider.log` | Rotating log file path (5MB x 3 backups), in addition to the console. Set to `none` to disable file logging. |
+| `COCORE_GEOIP_URL` | — (env var only) | `https://ifconfig.co/country-iso` | Endpoint used to resolve this machine's country when the owner has opted into location sharing (`shareLocation` on the console). Not part of `config.toml` — read directly at serve start, mirroring the Rust agent's `geoip.rs`. |
 
 An empty value for any of these (in either source) is treated the same as
 unset (falls back to the next source) — a variable or key that's
@@ -134,6 +135,21 @@ Pricing is uniform for every model — no per-model catalog in v1 — at
 (`src/cocore_provider/pricing.py`), matching the Rust provider's fallback
 rate for off-catalog models.
 
+The published `dev.cocore.compute.provider` record also carries best-effort
+machine telemetry to help matchmaking: `cpuCores` (`psutil.cpu_count()`) and
+`os` (`platform.platform()`, truncated to the lexicon's 64-char cap) are
+always attempted. `region` (a coarse ISO 3166-1 alpha-2 country code) is
+resolved from this machine's public IP and stamped alongside `regionSource`
+only when the owner has opted in via `shareLocation` on the console — read
+off this machine's *existing* record before the lookup, so turning sharing
+off drops the value on the next republish. The attestation-challenge
+response also carries an optional `hypervisor_present` bit
+(`src/cocore_provider/hypervisor.py`): Linux reads /proc/cpuinfo's
+`hypervisor` flag, macOS reads `sysctl kern.hv_vmm_present`, and Windows
+falls back to a BIOS-vendor-string heuristic (no portable CPUID intrinsic in
+Python); any platform this can't confidently answer on omits the field
+entirely, same as the Rust agent.
+
 ## Diagnosing a stuck install
 
 Two read-only subcommands (no serve loop, no repairs — see
@@ -188,4 +204,7 @@ src/cocore_provider/
   receipt.py      dev.cocore.compute.receipt record builder + signer
   pricing.py      uniform token pricing + byte-length token estimate
   diagnostics.py  read-only checks backing `doctor` / `attestation-status`
+  provider_record.py  builds/publishes/merges the dev.cocore.compute.provider record
+  hypervisor.py   best-effort hypervisor_present detection (Linux/macOS/Windows)
+  geoip.py        opt-in public-IP -> country resolution for the `region` field
 ```

@@ -18,9 +18,11 @@ logger = logging.getLogger(__name__)
 # authored by the agent. Preserved verbatim across every republish. Mirrors
 # `provider/src/pds.rs::OWNER_INTENT_KEYS`. provider-py doesn't build any of
 # these onto its own record yet (no desiredModels/desiredTier/proBono/
-# shareLocation/toolCalls support here today) -- listed anyway so the merge
-# is correct the moment any of them lands, instead of needing this file
-# touched again at the same time.
+# toolCalls support here today) -- listed anyway so the merge is correct the
+# moment any of them lands, instead of needing this file touched again at the
+# same time. `shareLocation` is the one exception the agent already READS
+# (find_my_provider_record, to gate the region/geoip lookup) without ever
+# WRITING it -- it stays in this set for the same never-author reason.
 OWNER_INTENT_KEYS: frozenset[str] = frozenset(
     {
         "active",
@@ -38,7 +40,18 @@ OWNER_INTENT_KEYS: frozenset[str] = frozenset(
 # here that this serve's `agent_record` does NOT include gets deleted from
 # the merged body, so a stale value doesn't linger. Mirrors
 # `provider/src/pds.rs::AGENT_OPTIONAL_KEYS`.
-AGENT_OPTIONAL_KEYS: frozenset[str] = frozenset({"engineFault", "attestationFault", "advisorFault"})
+AGENT_OPTIONAL_KEYS: frozenset[str] = frozenset(
+    {
+        "engineFault",
+        "attestationFault",
+        "advisorFault",
+        "cpuCores",
+        "os",
+        "region",
+        "regionSource",
+        "regionObservedAt",
+    }
+)
 
 
 def _rfc3339(dt: datetime) -> str:
@@ -65,6 +78,10 @@ def build_provider_record(
     binary_version: str,
     engine_fault: dict[str, object] | None = None,
     attestation_fault: dict[str, object] | None = None,
+    cpu_cores: int | None = None,
+    os_name: str | None = None,
+    region: str | None = None,
+    region_source: str | None = None,
 ) -> dict[str, object]:
     now = datetime.now(UTC)
     record: dict[str, object] = {
@@ -97,6 +114,21 @@ def build_provider_record(
         record["engineFault"] = engine_fault
     if attestation_fault is not None:
         record["attestationFault"] = attestation_fault
+    # The lexicon requires cpuCores >= 1; an indeterminate psutil read (None)
+    # is omitted rather than guessed, same spirit as ramGB's floor above.
+    if cpu_cores is not None and cpu_cores >= 1:
+        record["cpuCores"] = cpu_cores
+    if os_name:
+        # Lexicon caps `os` at 64 chars; platform.platform() isn't bounded
+        # on every OS (some Linux distros produce long strings).
+        record["os"] = os_name[:64]
+    # Atomic: only stamped together, and only when the owner opted into
+    # location sharing (see find_my_provider_record) AND the geoip lookup
+    # actually resolved a country this serve.
+    if region is not None and region_source is not None:
+        record["region"] = region
+        record["regionSource"] = region_source
+        record["regionObservedAt"] = _rfc3339(now)
     return record
 
 
@@ -171,6 +203,26 @@ def _matching_provider_records(
     matching = [r for r in listed if _attestation_pub_key_of(r) == attestation_pub_key]
     matching.sort(key=_created_at_of, reverse=True)
     return matching
+
+
+async def find_my_provider_record(
+    pds: PdsClient, attestation_pub_key: str
+) -> dict[str, object] | None:
+    """Read this machine's existing `dev.cocore.compute.provider` record
+    body (if any), matched by `attestationPubKey` -- so the caller can
+    inspect owner-intent fields (like `shareLocation`) BEFORE deciding this
+    serve's behavior. Mirrors `provider/src/main.rs::find_my_provider_record`.
+    Returns `None` on first run (no matching record yet) or a read failure --
+    callers should treat both the same as "no owner intent known yet"."""
+    try:
+        listed = await pds.list_records("dev.cocore.compute.provider")
+    except PdsError:
+        return None
+    matching = _matching_provider_records(listed, attestation_pub_key)
+    if not matching:
+        return None
+    value = matching[0].get("value")
+    return value if isinstance(value, dict) else None
 
 
 async def publish_provider_record(

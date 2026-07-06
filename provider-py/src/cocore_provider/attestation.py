@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from cocore.canonical import canonical_bytes
 from cocore.p256 import sign_p256
 
-from cocore_provider import __version__
+from cocore_provider import __version__, hypervisor
 from cocore_provider.identity import Identity
 from cocore_provider.protocol import AttestationChallenge
 
@@ -54,10 +54,20 @@ def build_challenge_response(
     identity: Identity, challenge: AttestationChallenge
 ) -> dict[str, object]:
     sip_enabled = False
-    payload = {
+    hypervisor_present = hypervisor.detect()
+    payload: dict[str, object] = {
         "nonce": challenge.nonce,
         "sipEnabled": sip_enabled,
         "timestamp": challenge.timestamp,
     }
+    if hypervisor_present is not None:
+        payload["hypervisorPresent"] = hypervisor_present
     signature = sign_p256(identity.signing_key, canonical_bytes(payload))
-    return {"nonce": challenge.nonce, "sip_enabled": sip_enabled, "signature": signature}
+    response: dict[str, object] = {
+        "nonce": challenge.nonce,
+        "sip_enabled": sip_enabled,
+        "signature": signature,
+    }
+    if hypervisor_present is not None:
+        response["hypervisor_present"] = hypervisor_present
+    return response
