@@ -104,6 +104,9 @@ struct StatusRows: View {
                 switch state.secureModePhase {
                 case .on:
                     Text("On — hardware-attested (experimental)").foregroundStyle(.green)
+                case .reattesting:
+                    // Stays green: still attested hardware, just renewing the proof.
+                    Text("On · re-verifying").foregroundStyle(.green)
                 case .securing:
                     Text("Securing…").foregroundStyle(.orange)
                 case .off:
@@ -112,8 +115,17 @@ struct StatusRows: View {
             }
             switch state.secureModePhase {
             case .on:
+                if let last = state.hardwareAttestedLastAt {
+                    secureCaption("Attested \(AppState.agoText(last)). Renews automatically.", .secondary)
+                }
                 secureCaption(
                     "This Mac is enrolled and attested as genuine Apple hardware (SIP verified). Experimental — a best-effort signal, not a guarantee.",
+                    .secondary)
+            case .reattesting(let lastAttested):
+                // Not a loss of hardware trust — the periodic MDA chain refresh.
+                secureCaption("Attested \(AppState.agoText(lastAttested)), re-verifying now.", .green)
+                secureCaption(
+                    "Routine attestation renewal, not a lapse — this is still the same genuine Apple hardware. No action needed.",
                     .secondary)
             case .securing(let reason):
                 // The interstitial: tell the operator it's mid-flight and what,
@@ -133,7 +145,7 @@ struct StatusRows: View {
             // the actionable step until it clears).
             if state.session != nil, !state.needsReauth {
                 switch state.secureModePhase {
-                case .on:
+                case .on, .reattesting:
                     if let off = onTurnOffSecureMode {
                         Button("Turn off Secure Mode", action: off)
                     }
@@ -158,6 +170,9 @@ struct StatusRows: View {
                 switch state.confidentialPhase {
                 case .active:
                     Text("🔒 Confidential (experimental)").foregroundStyle(.green)
+                case .reverifying:
+                    // Stays green: still protected, just refreshing the proof.
+                    Text("🔒 Confidential · re-verifying").foregroundStyle(.green)
                 case .applying:
                     Text("Applying…").foregroundStyle(.orange)
                 case .off:
@@ -168,8 +183,19 @@ struct StatusRows: View {
             // prompts against YOU (this Mac's operator) — not the other way round.
             switch state.confidentialPhase {
             case .active:
+                if let last = state.confidentialLastVerifiedAt {
+                    secureCaption("Verified \(AppState.agoText(last)). Re-checks automatically every few minutes.", .secondary)
+                }
                 secureCaption(
                     "Requests run inside the measured, signed agent, under a hardened runtime with no subprocess to tap — this aims to keep what requestors send and receive unreadable to you, this Mac's operator. It's experimental and not independently audited: a software-sealed posture, not a hardware enclave, and it only holds as long as macOS and the signed build aren't compromised.",
+                    .secondary)
+            case .reverifying(let lastVerified):
+                // The key fix: a periodic re-attestation is NOT an insecure blip.
+                // Say so plainly — the protections are unchanged; only the live
+                // routing proof is refreshing.
+                secureCaption("🔒 Protected — verified \(AppState.agoText(lastVerified)), re-verifying now.", .green)
+                secureCaption(
+                    "This is the routine attestation refresh, not a lapse: the measured build and the enclave-held keys haven't changed. New confidential requests briefly route to another machine until it re-confirms — usually under a minute, longer just after an app update.",
                     .secondary)
             case .applying(let reason):
                 // The interstitial that fixes "I have to toggle until it takes":
@@ -196,6 +222,9 @@ struct StatusRows: View {
                     if let retry = onRetryConfidential {
                         Button("Retry now", action: retry)
                     }
+                case .reverifying:
+                    // Nothing is wrong — no "Retry now"; just allow turning off.
+                    Button("Turn off confidential") { setConfidential(false) }
                 case .active:
                     Button("Turn off confidential") { setConfidential(false) }
                 }
