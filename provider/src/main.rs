@@ -325,7 +325,7 @@ fn open_pds() -> Result<(PdsClient, String, String)> {
     let session = oauth::load_session()?.context("not paired — run `cocore agent pair` first")?;
     let did = session.did.clone();
     let pds = PdsClient::new(session);
-    let signer = secure_enclave::load_or_create_identity()?;
+    let signer = secure_enclave::shared_identity()?;
     Ok((pds, did, signer.public_key_b64()))
 }
 
@@ -567,7 +567,7 @@ async fn read_desired_tier_live() -> TierRead {
     let Some(session) = oauth::load_session().ok().flatten() else {
         return TierRead::Unreadable; // not paired / no session on disk
     };
-    let Ok(signer) = secure_enclave::load_or_create_identity() else {
+    let Ok(signer) = secure_enclave::shared_identity() else {
         return TierRead::Unreadable;
     };
     let pubkey = signer.public_key_b64();
@@ -1518,7 +1518,7 @@ async fn read_my_desired_models() -> Vec<String> {
     };
     let did = session.did.clone();
     let pds = PdsClient::new(session);
-    let Ok(signer) = secure_enclave::load_or_create_identity() else {
+    let Ok(signer) = secure_enclave::shared_identity() else {
         return Vec::new();
     };
     let pubkey = signer.public_key_b64();
@@ -1615,8 +1615,12 @@ async fn cmd_serve(
     // close the connection with `attestation-bad-signature`.
     // Held as an `Arc` so the background re-attestation task can share the same
     // signing identity as the serve loop (the trait is `Send + Sync`).
-    let signer: Arc<dyn secure_enclave::SigningIdentity> =
-        secure_enclave::load_or_create_identity()?.into();
+    let signer = secure_enclave::shared_identity()?;
+    // The serve is the single SE-key authority: publish its pubkey so the
+    // `agent pubkey` CLI (which the Secure Mode wizard runs) requests MDM
+    // attestation for THIS exact key, instead of loading a possibly-different
+    // usable key in its own process context.
+    secure_enclave::publish_signing_pubkey(&signer.public_key_b64());
 
     // Encryption key for sealed prompts + the APNs code-challenge nonce. On a
     // confidential (`secure_enclave`) build this is the SE-resident P-256 ECIES
@@ -3651,8 +3655,18 @@ fn cmd_whoami() -> Result<()> {
 /// (or creates) the Secure Enclave identity, same as the serve loop, so the
 /// printed key matches what attestations publish.
 fn cmd_pubkey() -> Result<()> {
-    let signer = secure_enclave::load_or_create_identity()?;
-    println!("{}", signer.public_key_b64());
+    // Prefer the SERVE's published pubkey. The serve is the single process that
+    // holds the SE key; a one-shot CLI (which is what the Secure Mode wizard runs
+    // to bind MDM attestation) may load a DIFFERENT usable SE key than the serve
+    // in its own process context, so loading a key here would request attestation
+    // for the wrong key. Reading the serve's published pubkey guarantees the
+    // wizard requests attestation for the exact key the serve signs with. Fall
+    // back to loading only when no serve has published one (e.g. pre-setup).
+    if let Some(pubkey) = secure_enclave::read_published_signing_pubkey() {
+        println!("{pubkey}");
+        return Ok(());
+    }
+    println!("{}", secure_enclave::shared_identity()?.public_key_b64());
     Ok(())
 }
 

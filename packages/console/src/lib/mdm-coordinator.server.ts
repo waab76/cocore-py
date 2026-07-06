@@ -63,10 +63,21 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { resolveBearerKey, type ResolvedKey } from "@/lib/api-keys.server.ts";
 import {
   getAttestationChain,
+  getExpectedAttestation,
   getExpectedAttestationKey,
   putAttestationChain,
   putExpectedAttestationKey,
 } from "@/lib/mdm-chain-store.server.ts";
+
+/** How long a DeviceInformation attestation request for a given key stays
+ *  "pending" before we'll enqueue a fresh command for that SAME key. NanoMDM's
+ *  queue is FIFO with no clear API, so re-enqueuing the same key just piles stale
+ *  commands ahead of the real one — and hammering Apple's rate-limited
+ *  DeviceAttestation makes it return a CACHED (old-key) chain. Within this window
+ *  a repeat request for the same key only RE-PUSHES the already-queued command
+ *  instead of adding another. A KEY CHANGE always enqueues immediately (bypasses
+ *  this). Comfortably under Apple's ~7-day attestation cadence. */
+const ATTEST_REQUEST_DEDUP_MS = 6 * 60 * 60_000;
 
 /** Apple's freshness-code OID — the leaf extension whose value equals the
  *  `DeviceAttestationNonce` we set (= sha256(pubkey)). Same OID the SDK/Rust/Py
@@ -861,6 +872,40 @@ export async function requestDeviceInformationAttestation(
   const root = base.replace(/\/$/, "");
   const authHeader = `Basic ${Buffer.from(`nanomdm:${apiKey}`).toString("base64")}`;
   const enc = encodeURIComponent(target);
+
+  // Idempotency: if we already requested attestation for THIS exact key recently,
+  // don't append another DeviceInformation command to NanoMDM's FIFO queue —
+  // that's what let stale old-key commands drain ahead of the real one and made
+  // Apple's rate-limited attestation return a cached (old-key) chain, so the
+  // capture was discarded forever. Instead just RE-PUSH so the device processes
+  // the command already queued for this key. A key change falls through and
+  // enqueues immediately (below).
+  const pending = getExpectedAttestation(serial);
+  const sameKeyPending =
+    pending?.pubkey === publicKeyB64 &&
+    Date.now() - Date.parse(pending.requestedAt) < ATTEST_REQUEST_DEDUP_MS;
+  if (sameKeyPending) {
+    let pushed = false;
+    try {
+      const rp = await fetch(`${root}/v1/push/${enc}`, {
+        method: "GET",
+        headers: { authorization: authHeader },
+      });
+      pushed = rp.ok;
+    } catch {
+      /* push is best-effort — the queued command is still there */
+    }
+    return {
+      queued: true,
+      commandUuid: null,
+      status: "queued",
+      stubbed: false,
+      detail: pushed
+        ? "attestation already requested for this key; re-pushed the queued command (no duplicate enqueue — avoids piling stale commands + Apple rate-limit)"
+        : "attestation already requested for this key; queued command awaits the device's next check-in",
+    };
+  }
+
   const commandUuid = crypto.randomUUID().toUpperCase();
   const enqueueBody = buildDeviceInformationAttestationCommand(
     commandUuid,

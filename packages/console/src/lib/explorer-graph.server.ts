@@ -63,6 +63,9 @@ export interface ExplorerGraph {
   generatedAt: string;
   nodes: ExplorerNode[];
   edges: ExplorerEdge[];
+  /** Counts over the WHOLE network, independent of the render cap
+   *  below. These are the headline stats; they must match the friends
+   *  directory's `total` and never get clamped by `MAX_NODES`. */
   summary: {
     people: number;
     providers: number;
@@ -70,14 +73,26 @@ export interface ExplorerGraph {
     totalRamGB: number;
     totalCpuCores: number;
     trustEdges: number;
+    /** What actually made it into `nodes`/`edges` after the render cap.
+     *  `truncated` is true when the network outgrew `MAX_NODES` and the
+     *  graph shows only the most-connected subset. */
+    rendered: { nodes: number; edges: number; truncated: boolean };
   };
 }
 
-// Hard cap on rendered nodes so the client force-sim stays smooth.
-// Far above today's network; we keep the most-connected + most-active
-// nodes if it's ever exceeded (see trimToCap).
-const MAX_NODES = 220;
-const CACHE_TTL_MS = 5 * 60_000;
+// Hard cap on rendered nodes so the client force-sim stays smooth. Kept
+// well above the current network so nothing is trimmed today; if it is
+// ever exceeded we keep the most-connected + most-active nodes (see the
+// trim in buildExplorerGraph). NOTE: this caps only what is DRAWN — the
+// `summary` counts above are always computed over the full network, so
+// the headline stats track the real network size even past the cap.
+const MAX_NODES = 10_000;
+const CACHE_TTL_MS = 2 * 60_000;
+// The AppView clamps `listAccounts` to 100 rows/page, so we page through
+// `offset` to seed every signed-up DID (not just the recent 100).
+const ACCOUNTS_PAGE = 100;
+// Safety bound on pagination so a runaway `total` can't loop forever.
+const MAX_ACCOUNTS = 5000;
 let cache: { expiresAt: number; graph: ExplorerGraph } | null = null;
 
 function asObject(body: JsonValue): Record<string, JsonValue> | null {
@@ -207,6 +222,31 @@ function nodeWeight(n: ExplorerNode): number {
   return n.trustsOut + n.trustedByIn + (n.isProvider ? 3 : 0) + n.machines;
 }
 
+/** Page through the whole accounts directory so the graph seeds EVERY
+ *  signed-up DID, not just the most-recent 100. The AppView clamps
+ *  `limit` to 100 and returns `total`, so we walk `offset` until we've
+ *  collected `total` (or hit the safety cap). A failed follow-up page
+ *  degrades to "what we have so far" rather than losing everything; a
+ *  failed first page propagates so the outer `Effect.either` can fall
+ *  back to the other sources. */
+const listAllAccountsEffect = Effect.gen(function* () {
+  const first = yield* appviewListAccountsEffect({
+    limit: ACCOUNTS_PAGE,
+    offset: 0,
+    sortBy: "recent",
+  });
+  const accounts: AppviewAccountSummary[] = [...first.accounts];
+  const total = Math.min(first.total ?? accounts.length, MAX_ACCOUNTS);
+  for (let offset = ACCOUNTS_PAGE; offset < total; offset += ACCOUNTS_PAGE) {
+    const pageR = yield* Effect.either(
+      appviewListAccountsEffect({ limit: ACCOUNTS_PAGE, offset, sortBy: "recent" }),
+    );
+    if (pageR._tag !== "Right" || pageR.right.accounts.length === 0) break;
+    accounts.push(...pageR.right.accounts);
+  }
+  return accounts;
+});
+
 async function buildExplorerGraph(): Promise<ExplorerGraph> {
   const generatedAt = new Date().toISOString();
 
@@ -214,7 +254,7 @@ async function buildExplorerGraph(): Promise<ExplorerGraph> {
     "explorer.graph.appview",
     Effect.all(
       [
-        Effect.either(appviewListAccountsEffect({ limit: 100, sortBy: "recent" })),
+        Effect.either(listAllAccountsEffect),
         Effect.either(appviewListProvidersEffect),
         Effect.either(appviewListFriendEdgesEffect({ limit: 5000 })),
         Effect.either(appviewListProfilesEffect),
@@ -223,8 +263,7 @@ async function buildExplorerGraph(): Promise<ExplorerGraph> {
     ),
   );
 
-  const accounts: AppviewAccountSummary[] =
-    accountsR._tag === "Right" ? accountsR.right.accounts : [];
+  const accounts: AppviewAccountSummary[] = accountsR._tag === "Right" ? accountsR.right : [];
   const providers: AppviewIndexedRecord[] =
     providersR._tag === "Right" ? providersR.right.providers : [];
   const rawEdges: AppviewFriendEdge[] = edgesR._tag === "Right" ? edgesR.right.edges : [];
@@ -281,12 +320,28 @@ async function buildExplorerGraph(): Promise<ExplorerGraph> {
     edges.push({ source: e.friender, target: e.subject });
   }
 
-  // Cap node count for client-side sim performance, keeping the
-  // most-connected/active nodes and dropping dangling edges.
-  let nodeList = [...nodes.values()];
+  // Headline stats reflect the WHOLE network — computed over every node
+  // and edge, before any render cap. This is what must match the friends
+  // directory's `total`; clamping it to MAX_NODES is the bug that pinned
+  // "people" at 220.
+  const allNodes = [...nodes.values()];
+  const fullSummary = {
+    people: allNodes.length,
+    providers: allNodes.filter((n) => n.isProvider).length,
+    machines: allNodes.reduce((s, n) => s + n.machines, 0),
+    totalRamGB: allNodes.reduce((s, n) => s + n.ramGB, 0),
+    totalCpuCores: allNodes.reduce((s, n) => s + n.cpuCores, 0),
+    trustEdges: edges.length,
+  };
+
+  // Cap only what we DRAW, for client-side sim performance: keep the
+  // most-connected/active nodes and drop now-dangling edges. The summary
+  // above is unaffected.
+  let nodeList = allNodes;
   let keptEdges = edges;
-  if (nodeList.length > MAX_NODES) {
-    nodeList = nodeList.sort((a, b) => nodeWeight(b) - nodeWeight(a)).slice(0, MAX_NODES);
+  const truncated = allNodes.length > MAX_NODES;
+  if (truncated) {
+    nodeList = [...allNodes].sort((a, b) => nodeWeight(b) - nodeWeight(a)).slice(0, MAX_NODES);
     const kept = new Set(nodeList.map((n) => n.did));
     keptEdges = edges.filter((e) => kept.has(e.source) && kept.has(e.target));
   }
@@ -296,12 +351,8 @@ async function buildExplorerGraph(): Promise<ExplorerGraph> {
   }
 
   const summary = {
-    people: nodeList.length,
-    providers: nodeList.filter((n) => n.isProvider).length,
-    machines: nodeList.reduce((s, n) => s + n.machines, 0),
-    totalRamGB: nodeList.reduce((s, n) => s + n.ramGB, 0),
-    totalCpuCores: nodeList.reduce((s, n) => s + n.cpuCores, 0),
-    trustEdges: keptEdges.length,
+    ...fullSummary,
+    rendered: { nodes: nodeList.length, edges: keptEdges.length, truncated },
   };
 
   return { generatedAt, nodes: nodeList, edges: keptEdges, summary };
