@@ -22,6 +22,7 @@ import LocalAuthentication
 import Security
 
 private let kKeychainTag = "dev.cocore.provider.enclave-identity.v1".data(using: .utf8)!
+private let kEncKeychainTag = "dev.cocore.provider.enclave-enc.v1".data(using: .utf8)!
 private let kAccessGroup = "dev.cocore.provider"
 
 @_cdecl("cocore_enclave_create_or_load")
@@ -87,6 +88,70 @@ public func cocore_enclave_release(handle: UnsafeMutableRawPointer?) {
     Unmanaged<SecureEnclaveIdentity>.fromOpaque(handle).release()
 }
 
+// MARK: - Encryption key (P-256 KeyAgreement / ECDH) FFI
+
+@_cdecl("cocore_enclave_enc_create_or_load")
+public func cocore_enclave_enc_create_or_load(outHandle: UnsafeMutablePointer<UnsafeMutableRawPointer?>) -> Int32 {
+    do {
+        let key = try SecureEnclaveEncKey.loadOrCreate()
+        let unmanaged = Unmanaged.passRetained(key)
+        outHandle.pointee = UnsafeMutableRawPointer(unmanaged.toOpaque())
+        return 0
+    } catch {
+        NSLog("cocore enclave enc create_or_load failed: \(error)")
+        return -1
+    }
+}
+
+@_cdecl("cocore_enclave_enc_public_key")
+public func cocore_enclave_enc_public_key(
+    handle: UnsafeMutableRawPointer?,
+    out: UnsafeMutablePointer<UInt8>?,
+    len: Int
+) -> Int32 {
+    guard let handle, let out, len >= 64 else { return -1 }
+    let key = Unmanaged<SecureEnclaveEncKey>.fromOpaque(handle).takeUnretainedValue()
+    let bytes = key.publicKeyRaw64()
+    bytes.withUnsafeBytes { src in
+        out.update(from: src.bindMemory(to: UInt8.self).baseAddress!, count: 64)
+    }
+    return 0
+}
+
+/// Raw ECDH: scalar-mult our SE-resident private key with `peerPub` (64-byte
+/// uncompressed `X || Y`) and write the 32-byte shared X-coordinate into
+/// `outShared`. The shared secret is NOT the final key — the Rust caller runs
+/// HKDF-SHA256 over it (see `crypto::ecies`) so the construction is reproducible
+/// cross-language. The private key never leaves the enclave.
+@_cdecl("cocore_enclave_enc_ecdh")
+public func cocore_enclave_enc_ecdh(
+    handle: UnsafeMutableRawPointer?,
+    peerPub64: UnsafePointer<UInt8>?,
+    peerLen: Int,
+    outShared: UnsafeMutablePointer<UInt8>?,
+    outLen: Int
+) -> Int32 {
+    guard let handle, let peerPub64, let outShared, peerLen == 64, outLen >= 32 else { return -1 }
+    let key = Unmanaged<SecureEnclaveEncKey>.fromOpaque(handle).takeUnretainedValue()
+    let peer = Data(bytes: peerPub64, count: peerLen)
+    do {
+        let shared = try key.ecdh(peerRaw64: peer)
+        shared.withUnsafeBytes { src in
+            outShared.update(from: src.bindMemory(to: UInt8.self).baseAddress!, count: 32)
+        }
+        return 0
+    } catch {
+        NSLog("cocore enclave enc ecdh failed: \(error)")
+        return -3
+    }
+}
+
+@_cdecl("cocore_enclave_enc_release")
+public func cocore_enclave_enc_release(handle: UnsafeMutableRawPointer?) {
+    guard let handle else { return }
+    Unmanaged<SecureEnclaveEncKey>.fromOpaque(handle).release()
+}
+
 // MARK: - Identity
 
 public final class SecureEnclaveIdentity {
@@ -135,6 +200,55 @@ public final class SecureEnclaveIdentity {
     }
 }
 
+// MARK: - Encryption key (P-256 ECDH, Secure Enclave)
+
+/// A separate SE-resident P-256 KeyAgreement key used to seal/open the APNs
+/// code-challenge nonce and confidential prompts (`p256-ecies-se`). Distinct
+/// keychain slot from the signing identity so key rotation is independent. The
+/// private half never leaves the enclave — we only ever ask it to compute an
+/// ECDH shared secret with a caller-supplied ephemeral peer key.
+public final class SecureEnclaveEncKey {
+    private let privateKey: SecureEnclave.P256.KeyAgreement.PrivateKey
+
+    private init(_ key: SecureEnclave.P256.KeyAgreement.PrivateKey) {
+        self.privateKey = key
+    }
+
+    public static func loadOrCreate() throws -> SecureEnclaveEncKey {
+        guard SecureEnclave.isAvailable else {
+            throw EnclaveError.unavailable
+        }
+        if let blob = try? loadDataRepresentation(service: kEncService, tag: kEncKeychainTag) {
+            let key = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: blob)
+            return SecureEnclaveEncKey(key)
+        }
+        let access = SecAccessControlCreateWithFlags(
+            nil,
+            kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            [.privateKeyUsage],
+            nil
+        )!
+        let key = try SecureEnclave.P256.KeyAgreement.PrivateKey(accessControl: access)
+        try saveDataRepresentation(key.dataRepresentation, service: kEncService, tag: kEncKeychainTag)
+        return SecureEnclaveEncKey(key)
+    }
+
+    /// 64-byte uncompressed public key (X || Y), matching the signing pubkey shape.
+    public func publicKeyRaw64() -> Data {
+        let raw = privateKey.publicKey.rawRepresentation
+        precondition(raw.count == 64, "expected 64-byte raw P-256 pubkey, got \(raw.count)")
+        return raw
+    }
+
+    /// Compute the ECDH shared secret with an ephemeral peer public key
+    /// (64-byte uncompressed `X || Y`). Returns the raw 32-byte X-coordinate.
+    public func ecdh(peerRaw64: Data) throws -> Data {
+        let peer = try P256.KeyAgreement.PublicKey(rawRepresentation: peerRaw64)
+        let shared = try privateKey.sharedSecretFromKeyAgreement(with: peer)
+        return shared.withUnsafeBytes { Data($0) }
+    }
+}
+
 public enum EnclaveError: Error {
     case unavailable
     case keychainStore(OSStatus)
@@ -143,12 +257,19 @@ public enum EnclaveError: Error {
 
 // MARK: - Keychain helpers
 
-private func saveDataRepresentation(_ data: Data) throws {
+private let kSigningService = "cocore.provider.enclave"
+private let kEncService = "cocore.provider.enclave.enc"
+
+private func saveDataRepresentation(
+    _ data: Data,
+    service: String = kSigningService,
+    tag: Data = kKeychainTag
+) throws {
     let attrs: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "cocore.provider.enclave",
+        kSecAttrService as String: service,
         kSecAttrAccount as String: "default",
-        kSecAttrGeneric as String: kKeychainTag,
+        kSecAttrGeneric as String: tag,
         kSecValueData as String: data,
     ]
     SecItemDelete(attrs as CFDictionary) // ignore error
@@ -158,12 +279,15 @@ private func saveDataRepresentation(_ data: Data) throws {
     }
 }
 
-private func loadDataRepresentation() throws -> Data {
+private func loadDataRepresentation(
+    service: String = kSigningService,
+    tag: Data = kKeychainTag
+) throws -> Data {
     let q: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "cocore.provider.enclave",
+        kSecAttrService as String: service,
         kSecAttrAccount as String: "default",
-        kSecAttrGeneric as String: kKeychainTag,
+        kSecAttrGeneric as String: tag,
         kSecReturnData as String: true,
         kSecMatchLimit as String: kSecMatchLimitOne,
     ]

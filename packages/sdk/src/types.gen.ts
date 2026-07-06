@@ -196,6 +196,7 @@ export interface ProviderRecord {
   priceList: ModelPrice[];
   encryptionPubKey: string;
   attestationPubKey: string;
+  machineFingerprint?: string;
   trustLevel: TrustLevel;
   tier?: Tier;
   desiredTier?: Tier;

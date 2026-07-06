@@ -132,6 +132,18 @@ export interface VerifyProviderOptions {
    *  while the provider fleet ships App Attest, explicitly re-accepting the
    *  portable-key risk. */
   requireHardwareBoundKey?: boolean;
+  /** ADR-0005: require the provider to advertise a Secure-Enclave-resident
+   *  signing key (`attestation.secureEnclaveAvailable === true`) for the
+   *  confidential tier. This is the workable macOS replacement for the retired
+   *  App Attest gate above — `secureEnclaveAvailable` is set truthfully from the
+   *  agent's `is_hardware_bound()` and authenticated by the selfSignature gate,
+   *  so a copied software `identity.pem` (which reports false) can't earn
+   *  confidential. **Default false** for backward-compat during the soft
+   *  cutover; flip to true once the fleet has adopted SE builds (observe the
+   *  advisor's `secureEnclaveAvailable` adoption first). Fail-closed when on: a
+   *  machine without the SE flag caps at best-effort. ADDITIVE to — not a
+   *  replacement for — the brokerage countersignature gate (ADR-0004). */
+  requireSecureEnclaveKey?: boolean;
   /** Clock seam for tests. */
   now?: () => Date;
   /** ADVANCED / TEST ONLY. Verify the MDA chain against this DER trust anchor
@@ -208,6 +220,9 @@ export async function verifyProviderForSeal(
   // is kept (opt-in) for a future confidential-compute backend where remote key
   // attestation IS possible.
   const requireHardwareBoundKey = opts.requireHardwareBoundKey ?? false;
+  // ADR-0005 soft cutover: default OFF so existing callers are unchanged until
+  // the fleet adopts SE builds; flip to true (or wire to an env/flag) at Phase 2.
+  const requireSecureEnclaveKey = opts.requireSecureEnclaveKey ?? false;
   const now = opts.now ? opts.now() : new Date();
   const knownGood = new Set<string>(
     [...(opts.knownGoodCdHashes ?? [])].map((h) => h.toLowerCase()),
@@ -560,6 +575,17 @@ export async function verifyProviderForSeal(
     block(
       "code-not-attested",
       "provider has not passed a live APNs code-identity challenge (advisor codeAttested is not true)",
+    );
+  }
+
+  // ADR-0005: the Secure-Enclave-resident-key gate. `secureEnclaveAvailable` is
+  // authenticated by the selfSignature gate (#0), so a copied software key
+  // (which reports false) can't clear this. Additive to the brokerage
+  // countersignature — both must hold for confidential.
+  if (requireSecureEnclaveKey && attestation.secureEnclaveAvailable !== true) {
+    block(
+      "se-key-not-available",
+      "provider does not advertise a Secure-Enclave-resident signing key (attestation.secureEnclaveAvailable is not true)",
     );
   }
 

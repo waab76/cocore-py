@@ -547,6 +547,7 @@ interface AdvisorProviderRow {
   confidentialEligible?: unknown;
   codeAttested?: unknown;
   registrationAuthenticated?: unknown;
+  secureEnclaveAvailable?: unknown;
 }
 
 /** Read live machine standing from the advisor's `/providers` and key it by
@@ -584,6 +585,9 @@ export async function fetchAdvisorStanding(did: string): Promise<AdvisorStanding
             typeof r.registrationAuthenticated === "boolean"
               ? r.registrationAuthenticated
               : undefined,
+          // ADR-0005: the advisor-advertised SE-resident-key flag. Only gates
+          // when COCORE_CONFIDENTIAL_REQUIRE_SE_KEY is enforced.
+          secureEnclaveAvailable: r.secureEnclaveAvailable === true,
         });
         byMachineId.set(r.machineId as string, {
           unhealthy: r.unhealthy === true,

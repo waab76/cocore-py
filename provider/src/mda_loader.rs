@@ -469,11 +469,25 @@ pub fn acquire_auto(console_base: &str, api_key: &str, public_key_b64: &str) -> 
         tracing::warn!("MDA auto: could not read Hardware UUID; cannot request attestation");
         return Vec::new();
     };
-    if auto_request_cooldown_elapsed() {
+    // A signing-key ROTATION bypasses the time cooldown: the stale chain will
+    // never bind the new key, so waiting out 6h just prolongs "self-attested".
+    // The coordinator must issue a fresh key-bound attestation for the new key,
+    // and it can't until we ask with the new pubkey. Same key + within cooldown
+    // → hold off (don't hammer Apple's per-device attestation rate limit).
+    let key_rotated = last_requested_pubkey().as_deref() != Some(public_key_b64);
+    if key_rotated || auto_request_cooldown_elapsed() {
         let request_url = format!("{base}/api/agent/mdm/request-attestation");
         if post_request_attestation(&request_url, api_key, &serial, &udid, public_key_b64) {
-            mark_auto_requested();
-            tracing::info!("MDA auto: requested attestation; chain will land on a later refresh");
+            mark_auto_requested(public_key_b64);
+            if key_rotated {
+                tracing::info!(
+                    "MDA auto: signing key rotated — requested a fresh key-bound attestation (bypassed cooldown); chain lands on a later refresh"
+                );
+            } else {
+                tracing::info!(
+                    "MDA auto: requested attestation; chain will land on a later refresh"
+                );
+            }
         }
     } else {
         tracing::debug!("MDA auto: within request cooldown; not re-requesting this boot");
@@ -581,12 +595,30 @@ fn auto_request_cooldown_elapsed() -> bool {
     }
 }
 
-fn mark_auto_requested() {
+/// Record that we requested an attestation for `public_key_b64`. The marker's
+/// mtime drives the time cooldown; its CONTENT (the requested pubkey) lets a
+/// later boot detect a signing-key rotation and re-request immediately rather
+/// than waiting out the cooldown against a key the coordinator's chain can never
+/// bind. A legacy empty marker reads as a different key, so the first post-fix
+/// boot re-requests once — the desired behavior.
+fn mark_auto_requested(public_key_b64: &str) {
     if let Some(path) = auto_request_marker_path() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&path, b"");
+        let _ = std::fs::write(&path, public_key_b64.as_bytes());
+    }
+}
+
+/// The signing key we last requested an MDA attestation for, if any.
+fn last_requested_pubkey() -> Option<String> {
+    let path = auto_request_marker_path()?;
+    let s = std::fs::read_to_string(path).ok()?;
+    let s = s.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
     }
 }
 

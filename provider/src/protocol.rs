@@ -212,6 +212,19 @@ pub struct Register {
     /// floor (fail-closed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary_version: Option<String>,
+    /// True when this agent's signing key is Secure-Enclave-resident
+    /// (`is_hardware_bound()`) — the ADR-0005 confidential-tier evidence. Echoed
+    /// from the attestation's `secureEnclaveAvailable`. Additive: pre-signal
+    /// advisors ignore it; an advisor enforcing the SE gate treats an omitted /
+    /// `false` value as not-SE (best-effort). Old software-key agents omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secure_enclave_available: Option<bool>,
+    /// The `encScheme` for this machine's encryption key: `"p256-ecies-se"`
+    /// (Secure-Enclave-resident) or absent/`"x25519"` (software). Tells the
+    /// advisor which codec to seal the APNs code-challenge nonce with, so an old
+    /// X25519 agent keeps working. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enc_scheme: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -63,18 +63,26 @@ interface AdvisorRow {
    *  doesn't mass-downgrade a healthy fleet. Only an explicit `false`
    *  downgrades. */
   registrationAuthenticated?: boolean;
+  /** ADR-0005: whether the machine's signing key is Secure-Enclave-resident,
+   *  echoed by the advisor from the Register frame. `false`/`undefined` = a
+   *  software key (or an older agent). Only downgrades when the SE gate is
+   *  enforced (see {@link confidentialRequiresSeKey}). */
+  secureEnclaveAvailable?: boolean;
 }
 
-/** Phase gate for the App Attest key-residency requirement on the confidential
- *  tier. Default OFF (Phase 1 — deploy the code dormant while the provider fleet
- *  ships App Attest). Ops flips `COCORE_CONFIDENTIAL_REQUIRE_APP_ATTEST=true`
- *  for Phase 2: a machine whose signing key isn't proven Secure-Enclave-bound
- *  then DOWNGRADES from confidential to hardware-attested (it keeps serving —
- *  nothing disconnects), and confidential requesters fail closed rather than
- *  route to a portable-key machine. The flip only affects machines that haven't
- *  upgraded, never healthy App-Attest ones — the soft cutover. */
-function confidentialRequiresAppAttest(): boolean {
-  return process.env["COCORE_CONFIDENTIAL_REQUIRE_APP_ATTEST"] === "true";
+/** ADR-0005 phase gate for the Secure-Enclave-resident-key requirement on the
+ *  confidential tier (the workable macOS replacement for the retired App Attest
+ *  gate — App Attest never functions on macOS, so its `keyHardwareBound` signal
+ *  was always false and could never be enforced without downgrading the whole
+ *  fleet). Default OFF (Phase 1 — deploy dormant while the fleet ships SE
+ *  builds). Ops flips `COCORE_CONFIDENTIAL_REQUIRE_SE_KEY=true` for Phase 2: a
+ *  machine that doesn't advertise `secureEnclaveAvailable` DOWNGRADES from
+ *  confidential to hardware-attested (it keeps serving — nothing disconnects),
+ *  and confidential requesters fail closed rather than route to a portable-key
+ *  machine. The flip only affects un-upgraded machines, never healthy SE ones —
+ *  the soft cutover. */
+function confidentialRequiresSeKey(): boolean {
+  return process.env["COCORE_CONFIDENTIAL_REQUIRE_SE_KEY"] === "true";
 }
 
 // Codes the SDK verifier emits when the OFFLINE hardware-attestation proof
@@ -216,16 +224,20 @@ export async function resolveVerifiedTier(row: AdvisorRow): Promise<ResolvedTier
 
   // Genuine Apple hardware bound to the signing key. Confidential additionally
   // needs the advisor's measured + code-attested standing (the un-forgeable
-  // leg) AND — once the App Attest rollout is enforced — proof the signing key
-  // is Secure-Enclave-resident (not a portable software key).
+  // leg) AND — once the SE-key rollout is enforced (ADR-0005) — proof the
+  // signing key is Secure-Enclave-resident (not a portable software key).
   if (row.confidentialEligible !== true) {
     return { tier: "hardware-attested" };
   }
-  if (confidentialRequiresAppAttest() && !offline.keyHardwareBound) {
+  // ADR-0005: gate on the advisor-advertised `secureEnclaveAvailable` (the
+  // truthful flag from the Register frame), NOT the dead App-Attest
+  // `keyHardwareBound` signal — App Attest never works on macOS, so that would
+  // downgrade the entire fleet. Per-machine downgrade with a calm upgrade nudge.
+  if (confidentialRequiresSeKey() && row.secureEnclaveAvailable !== true) {
     return {
       tier: "hardware-attested",
       reason:
-        "confidential requires a Secure-Enclave (App Attest) signing key — upgrade to an App-Attest build to regain confidential",
+        "running an older agent without a Secure-Enclave signing key — upgrade the agent to regain the confidential tier",
     };
   }
   return { tier: "attested-confidential" };

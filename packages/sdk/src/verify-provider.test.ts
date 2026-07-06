@@ -152,6 +152,34 @@ test("requireCodeAttested gates on the advisor's APNs code-identity standing", a
   assert.ok(!codes(off.findings).includes("code-not-attested"));
 });
 
+test("requireSecureEnclaveKey (ADR-0005) gates on attestation.secureEnclaveAvailable", async () => {
+  const { pubB64, signDerB64 } = makeSigner();
+  const base = {
+    knownGoodCdHashes: [CDHASH],
+    nonce: NONCE,
+    attestationCid: ATT_CID,
+    sessionKey: freshSessionKey(signDerB64),
+    now: NOW,
+  };
+  // Default OFF: an SE-less machine is NOT blocked on the SE code (soft cutover).
+  const swAtt = mkAtt(pubB64, signDerB64, { secureEnclaveAvailable: false });
+  const def = await verifyProviderForSeal(swAtt, undefined, base);
+  assert.ok(!codes(def.findings).includes("se-key-not-available"));
+  // Enforced + software key → the specific blocker appears (fail-closed).
+  const blocked = await verifyProviderForSeal(swAtt, undefined, {
+    ...base,
+    requireSecureEnclaveKey: true,
+  });
+  assert.ok(codes(blocked.findings).includes("se-key-not-available"));
+  // Enforced + SE key → no SE blocker.
+  const seAtt = mkAtt(pubB64, signDerB64, { secureEnclaveAvailable: true });
+  const ok = await verifyProviderForSeal(seAtt, undefined, {
+    ...base,
+    requireSecureEnclaveKey: true,
+  });
+  assert.ok(!codes(ok.findings).includes("se-key-not-available"));
+});
+
 test("requireConfidential fails closed when the chain is missing", async () => {
   const { pubB64, signDerB64 } = makeSigner();
   const r = await verifyProviderForSeal(mkAtt(pubB64, signDerB64), undefined, {

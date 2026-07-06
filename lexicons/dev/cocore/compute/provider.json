@@ -100,7 +100,12 @@
           "attestationPubKey": {
             "type": "string",
             "maxLength": 256,
-            "description": "P-256 public key (base64) bound to this machine's Secure Enclave. Used to verify attestation and receipt signatures. Doubles as the stable per-machine fingerprint: the SE keypair is generated once at first agent boot and survives reboots / re-pairs / OS updates, so two records with the same `attestationPubKey` describe the same physical machine. Agents reuse the rkey of any existing record with this same key (and delete duplicates) instead of creating a fresh provider record per `serve` invocation, so the on-PDS view stays one record per machine."
+            "description": "P-256 public key (base64) used to verify this machine's attestation and receipt signatures. HISTORICALLY doubled as the per-machine fingerprint, but the signing key can ROTATE — e.g. the 0.9.43 migration from a software key to a non-extractable Secure-Enclave key mints a new keypair, changing this value for the same physical machine. Record identity therefore keys on `machineFingerprint` (a stable hardware id) when present, falling back to `attestationPubKey` for pre-`machineFingerprint` records. Two records with the same `machineFingerprint` — or, legacy, the same `attestationPubKey` — describe the same machine; agents adopt its rkey (carrying the owner's intent fields) and delete duplicates so the on-PDS view stays one record per machine across key rotations."
+          },
+          "machineFingerprint": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Stable per-machine identity that survives signing-key rotation: a hash of the hardware serial number (salted by the owner DID, so it does not correlate the machine across DIDs). Unlike `attestationPubKey`, this does NOT change when the agent rotates its signing key (software key -> Secure Enclave key on the 0.9.43 upgrade, a chip-bound key regenerated after a keychain reset, etc.), so the agent can recognize an existing provider record as its own prior incarnation and adopt it — reusing the rkey and carrying the owner-intent fields (`desiredTier`, `active`, `desiredModels`, ...) forward — instead of orphaning it and minting a fresh record. Optional / additive; records written by agents before 0.9.44 omit it (matched by `attestationPubKey` + hardware profile instead)."
           },
           "trustLevel": {
             "type": "ref",
