@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cocore_provider.config import ConfigError, load_config
+from cocore_provider.config import ConfigError, load_config, resolve_provider_did
 
 
 def test_defaults_when_only_required_vars_set() -> None:
@@ -170,3 +170,103 @@ def test_config_file_wrong_type_falls_through_to_env() -> None:
 def test_no_config_file_argument_still_works() -> None:
     config = load_config({"COCORE_API_KEY": "key123", "COCORE_API_BASE": "https://console.example"})
     assert config.api_key == "key123"
+
+
+def test_log_level_defaults_to_info() -> None:
+    config = load_config({"COCORE_API_KEY": "key123", "COCORE_API_BASE": "https://console.example"})
+    assert config.log_level == "INFO"
+
+
+def test_log_level_from_env_is_normalized_to_uppercase() -> None:
+    config = load_config(
+        {
+            "COCORE_API_KEY": "key123",
+            "COCORE_API_BASE": "https://console.example",
+            "COCORE_LOG_LEVEL": "debug",
+        }
+    )
+    assert config.log_level == "DEBUG"
+
+
+def test_invalid_log_level_raises_config_error() -> None:
+    with pytest.raises(ConfigError, match="invalid log_level"):
+        load_config(
+            {
+                "COCORE_API_KEY": "key123",
+                "COCORE_API_BASE": "https://console.example",
+                "COCORE_LOG_LEVEL": "VERBOSE",
+            }
+        )
+
+
+def test_log_file_defaults_to_home_dir_path() -> None:
+    config = load_config({"COCORE_API_KEY": "key123", "COCORE_API_BASE": "https://console.example"})
+    assert config.log_file == Path.home() / ".cocore" / "provider-py" / "provider.log"
+
+
+def test_log_file_default_honors_monkeypatched_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same bug class as find_config_path's: a module-level constant built
+    # from Path.home() at import time would ignore this monkeypatch.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    config = load_config({"COCORE_API_KEY": "key123", "COCORE_API_BASE": "https://console.example"})
+    assert config.log_file == tmp_path / ".cocore" / "provider-py" / "provider.log"
+
+
+def test_log_file_from_config_file_wins_over_env() -> None:
+    config = load_config(
+        {
+            "COCORE_API_KEY": "key123",
+            "COCORE_API_BASE": "https://console.example",
+            "COCORE_LOG_FILE": "/env/provider.log",
+        },
+        config_file={"log_file": "/file/provider.log"},
+    )
+    assert config.log_file == Path("/file/provider.log")
+
+
+def test_log_file_none_sentinel_disables_file_logging() -> None:
+    config = load_config(
+        {
+            "COCORE_API_KEY": "key123",
+            "COCORE_API_BASE": "https://console.example",
+            "COCORE_LOG_FILE": "none",
+        }
+    )
+    assert config.log_file is None
+
+
+def test_resolve_provider_did_cli_arg_wins_over_everything() -> None:
+    provider_did = resolve_provider_did(
+        cli_arg="did:plc:cli",
+        file={"provider_did": "did:plc:file"},
+        env={"COCORE_PROVIDER_DID": "did:plc:env"},
+    )
+    assert provider_did == "did:plc:cli"
+
+
+def test_resolve_provider_did_file_wins_over_env_when_no_cli_arg() -> None:
+    provider_did = resolve_provider_did(
+        cli_arg=None,
+        file={"provider_did": "did:plc:file"},
+        env={"COCORE_PROVIDER_DID": "did:plc:env"},
+    )
+    assert provider_did == "did:plc:file"
+
+
+def test_resolve_provider_did_falls_back_to_env() -> None:
+    provider_did = resolve_provider_did(
+        cli_arg=None, file={}, env={"COCORE_PROVIDER_DID": "did:plc:env"}
+    )
+    assert provider_did == "did:plc:env"
+
+
+def test_resolve_provider_did_raises_when_missing_everywhere() -> None:
+    with pytest.raises(ConfigError, match="provider_did is required"):
+        resolve_provider_did(cli_arg=None, file={}, env={})
+
+
+def test_resolve_provider_did_empty_cli_arg_falls_through_to_file() -> None:
+    provider_did = resolve_provider_did(cli_arg="", file={"provider_did": "did:plc:file"}, env={})
+    assert provider_did == "did:plc:file"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping
@@ -10,21 +11,34 @@ import httpx
 
 from cocore_provider import __version__
 from cocore_provider.attestation import build_attestation_record
-from cocore_provider.config import REGISTER_LXM, AgentConfig, ConfigError, load_config
+from cocore_provider.config import (
+    REGISTER_LXM,
+    AgentConfig,
+    ConfigError,
+    load_config,
+    resolve_provider_did,
+)
 from cocore_provider.config_file import find_config_path, load_config_file
 from cocore_provider.identity import load_or_create
 from cocore_provider.lmstudio import LMStudioClient
+from cocore_provider.logging_setup import configure_logging
 from cocore_provider.pds_client import PdsClient
 from cocore_provider.protocol import InferenceRequestFrame
 from cocore_provider.session import SessionContext, run_session
 from cocore_provider.ws_client import AdvisorConnection
 
+logger = logging.getLogger(__name__)
 
-def _resolve_agent_config(args: argparse.Namespace, env: Mapping[str, str]) -> AgentConfig:
+
+def _resolve_agent_config(
+    args: argparse.Namespace, env: Mapping[str, str]
+) -> tuple[AgentConfig, str]:
     is_explicit = bool(args.config) or bool(env.get("COCORE_CONFIG_PATH"))
     config_path = find_config_path(cli_arg=args.config, env=env)
     config_file = load_config_file(config_path, is_explicit=is_explicit)
-    return load_config(env, config_file=config_file)
+    config = load_config(env, config_file=config_file)
+    provider_did = resolve_provider_did(cli_arg=args.provider_did, file=config_file, env=env)
+    return config, provider_did
 
 
 def _build_lmstudio_http() -> httpx.AsyncClient:
@@ -36,7 +50,9 @@ def _build_console_http() -> httpx.AsyncClient:
 
 
 async def serve(config: AgentConfig, *, provider_did: str) -> None:
+    logger.info("cocore-provider %s starting for provider_did=%s", __version__, provider_did)
     identity = load_or_create(config.identity_path)
+    logger.info("identity loaded from %s", config.identity_path)
     console_http = _build_console_http()
     pds = PdsClient(api_base=config.api_base, api_key=config.api_key, http=console_http)
 
@@ -45,9 +61,13 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
     supported_models = await lmstudio.list_models()
     if not supported_models:
         raise RuntimeError(f"no models loaded in LMStudio at {config.lmstudio_url}")
+    logger.info(
+        "LMStudio at %s reports models: %s", config.lmstudio_url, ", ".join(supported_models)
+    )
 
     attestation_record = build_attestation_record(identity, provider_did=provider_did)
     published_attestation = await pds.publish("dev.cocore.compute.attestation", attestation_record)
+    logger.info("published attestation record %s", published_attestation.uri)
 
     ctx = SessionContext(
         identity=identity,
@@ -77,6 +97,7 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         attestation_uri=published_attestation.uri,
         supported_models=supported_models,
     )
+    logger.info("connecting to advisor at %s", config.advisor_url)
     await conn.run(on_inference_request=on_inference_request)
 
 
@@ -85,7 +106,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="store_true", help="print version and exit")
     subparsers = parser.add_subparsers(dest="command")
     serve_parser = subparsers.add_parser("serve", help="connect to the advisor and serve jobs")
-    serve_parser.add_argument("--provider-did", required=True, help="this provider's DID")
+    serve_parser.add_argument(
+        "--provider-did",
+        default=None,
+        help=(
+            "this provider's DID (default: --provider-did flag > provider_did config file key "
+            "> COCORE_PROVIDER_DID env var)"
+        ),
+    )
     serve_parser.add_argument(
         "--config",
         default=None,
@@ -105,11 +133,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "serve":
         try:
-            config = _resolve_agent_config(args, os.environ)
+            config, provider_did = _resolve_agent_config(args, os.environ)
         except ConfigError as e:
             print(f"config error: {e}", file=sys.stderr)
             return 1
-        asyncio.run(serve(config, provider_did=args.provider_did))
+        configure_logging(config.log_level, config.log_file)
+        asyncio.run(serve(config, provider_did=provider_did))
         return 0
     parser.print_help()
     return 1

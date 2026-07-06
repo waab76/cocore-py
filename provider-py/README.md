@@ -42,6 +42,7 @@ there's no config file at all). Required:
 |---|---|---|
 | `COCORE_API_KEY` | `api_key` | Console API key, used as a bearer token against the console's PDS-proxy. |
 | `COCORE_API_BASE` | `api_base` | Console base URL (e.g. `https://console.cocore.dev`). |
+| `COCORE_PROVIDER_DID` | `provider_did` | This provider's DID. Unlike every other setting, `--provider-did` on the CLI takes precedence over *both* the config file and the env var (rather than losing to the config file) — see below. |
 
 Optional (defaults shown):
 
@@ -53,10 +54,18 @@ Optional (defaults shown):
 | `COCORE_IDENTITY_PATH` | `identity_path` | `~/.cocore/provider-py/identity.json` | Where the provider's P-256 signing key + X25519 encryption key are persisted (created on first run). |
 | `COCORE_MACHINE_LABEL` | `machine_label` | hostname | Human-readable label sent at registration. |
 | `COCORE_ALLOW_INSECURE_ADVISOR` | `allow_insecure_advisor` | unset / `false` | Allow a non-`wss://` advisor URL (local dev only). |
+| `COCORE_LOG_LEVEL` | `log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
+| `COCORE_LOG_FILE` | `log_file` | `~/.cocore/provider-py/provider.log` | Rotating log file path (5MB x 3 backups), in addition to the console. Set to `none` to disable file logging. |
 
 An empty value for any of these (in either source) is treated the same as
 unset (falls back to the next source) — a variable or key that's
 declared-but-blank won't silently produce a broken URL.
+
+`--provider-did` is the one setting also available as a CLI flag, and it's
+optional now: with `provider_did` set in `config.toml` or
+`COCORE_PROVIDER_DID`, you can drop `--provider-did` from the command line
+entirely for routine runs, or pass it explicitly to override whatever the
+config file/env say for that one invocation.
 
 ### Config file
 
@@ -110,6 +119,11 @@ underlying WebSocket actually drops -- including a dead link the
 `websockets` client's own keepalive ping (every 20s, by default) detects
 within about 40s. Long stretches of app-level silence with no job in
 flight are normal and do not by themselves trigger a reconnect.
+
+Logs go to the console and, by default, to a rotating file at
+`~/.cocore/provider-py/provider.log` (5MB x 3 backups) — see `COCORE_LOG_LEVEL`
+/ `COCORE_LOG_FILE` above to change the verbosity or location, or disable the
+file entirely.
 
 Pricing is uniform for every model — no per-model catalog in v1 — at
 1,000,000 minor units per MTok in each direction, currency `CC`

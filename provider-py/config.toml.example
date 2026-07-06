@@ -9,6 +9,10 @@
 # NOTE: this file may contain your console API key in plaintext. Never
 # commit config.toml (it's gitignored) -- only config.toml.example.
 
+# This provider's DID (required -- via this file, COCORE_PROVIDER_DID, or
+# the --provider-did flag, which overrides both of those if given).
+# provider_did = "did:plc:your-provider-did"
+
 # Console API key (required -- via this file or COCORE_API_KEY).
 # api_key = "your-console-api-key"
 
@@ -33,3 +37,10 @@
 
 # Allow a non-wss:// advisor_url (local dev only). Default: false
 # allow_insecure_advisor = false
+
+# Log verbosity: DEBUG, INFO, WARNING, ERROR, or CRITICAL. Default: INFO
+# log_level = "INFO"
+
+# Where to write a rotating log file, in addition to the console. Set to
+# "none" to disable file logging. Default: ~/.cocore/provider-py/provider.log
+# log_file = "/home/you/.cocore/provider-py/provider.log"

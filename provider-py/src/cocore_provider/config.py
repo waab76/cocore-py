@@ -17,6 +17,8 @@ from pathlib import Path
 DEFAULT_ADVISOR_URL = "wss://advisor.cocore.dev/v1/agent"
 DEFAULT_ADVISOR_DID = "did:web:advisor.cocore.dev"
 DEFAULT_LMSTUDIO_URL = "http://localhost:1234"
+DEFAULT_LOG_LEVEL = "INFO"
+VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 REGISTER_LXM = "dev.cocore.compute.register"
 
 HEARTBEAT_INTERVAL_SECS = 30.0
@@ -36,6 +38,8 @@ class AgentConfig:
     lmstudio_url: str
     identity_path: Path
     machine_label: str
+    log_level: str = DEFAULT_LOG_LEVEL
+    log_file: Path | None = None
 
 
 def _truthy(value: str | None) -> bool:
@@ -130,6 +134,27 @@ def load_config(
         "machine_label", file=file, env=env, env_key="COCORE_MACHINE_LABEL"
     ) or (socket.gethostname() or platform.node())
 
+    log_level_raw = _resolve(
+        "log_level", file=file, env=env, env_key="COCORE_LOG_LEVEL", default=DEFAULT_LOG_LEVEL
+    )
+    assert log_level_raw is not None  # `default` guarantees a value
+    log_level = log_level_raw.upper()
+    if log_level not in VALID_LOG_LEVELS:
+        raise ConfigError(
+            f"invalid log_level {log_level_raw!r}; must be one of {sorted(VALID_LOG_LEVELS)}"
+        )
+
+    log_file_raw = _resolve("log_file", file=file, env=env, env_key="COCORE_LOG_FILE")
+    if log_file_raw and log_file_raw.strip().lower() == "none":
+        log_file = None
+    elif log_file_raw:
+        log_file = Path(log_file_raw)
+    else:
+        # Computed fresh rather than a module-level constant: see
+        # find_config_path()'s identical fix for why a Path.home()-based
+        # default must not be frozen at import time.
+        log_file = Path.home() / ".cocore" / "provider-py" / "provider.log"
+
     return AgentConfig(
         advisor_url=advisor_url,
         advisor_did=advisor_did,
@@ -138,4 +163,27 @@ def load_config(
         lmstudio_url=lmstudio_url,
         identity_path=identity_path,
         machine_label=machine_label,
+        log_level=log_level,
+        log_file=log_file,
     )
+
+
+def resolve_provider_did(
+    *, cli_arg: str | None, file: Mapping[str, object], env: Mapping[str, str]
+) -> str:
+    """Resolve this provider's DID: an explicit `--provider-did` flag wins
+    outright (same override precedence `--config` has over
+    `COCORE_CONFIG_PATH`), else the config file's `provider_did` key, else
+    `COCORE_PROVIDER_DID`. Kept separate from `AgentConfig`/`load_config`
+    since it's a per-invocation identity value, not a connection setting,
+    and the CLI flag needs to short-circuit the config-file-wins-over-env
+    rule that governs everything else in `load_config`."""
+    provider_did = cli_arg or _resolve(
+        "provider_did", file=file, env=env, env_key="COCORE_PROVIDER_DID"
+    )
+    if not provider_did:
+        raise ConfigError(
+            "provider_did is required (--provider-did flag, provider_did config file key, "
+            "or COCORE_PROVIDER_DID env var)"
+        )
+    return provider_did

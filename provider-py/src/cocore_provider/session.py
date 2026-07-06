@@ -62,6 +62,7 @@ async def run_session(req: InferenceRequestFrame, send: Send, ctx: SessionContex
 
     input_commitment = hashlib.sha256(plaintext).hexdigest()
     prompt = plaintext.decode("utf-8", errors="replace")
+    logger.info("session %s started: model=%s", req.session_id, req.model)
 
     output_parts: list[str] = []
     tokens_in: int | None = None
@@ -143,6 +144,13 @@ async def run_session(req: InferenceRequestFrame, send: Send, ctx: SessionContex
         except PdsError:
             logger.warning("receipt publish failed for session %s", req.session_id, exc_info=True)
 
+    logger.info(
+        "session %s complete: tokens_in=%d tokens_out=%d receipt=%s",
+        req.session_id,
+        tokens_in,
+        tokens_out,
+        receipt_uri or "(none)",
+    )
     await send(
         build_inference_complete(
             session_id=req.session_id,
