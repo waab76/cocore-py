@@ -67,6 +67,49 @@ class PdsClient:
                 f"console proxy createRecord {collection} returned 200 but malformed: {e}"
             ) from e
 
+    async def put_record(
+        self, collection: str, rkey: str, record: dict[str, object]
+    ) -> PublishedRecord:
+        """Idempotent upsert at a stable rkey via the console's putRecord
+        proxy. Used to republish this machine's provider record under its
+        EXISTING rkey on every serve start instead of minting a fresh one
+        (see `provider_record.publish_provider_record`). Mirrors
+        `provider/src/pds.rs::put_record`, without its swap-guard/CAS-retry
+        loop -- provider-py is a single process, so the rare concurrent-write
+        race is accepted rather than built out."""
+        resp = await self._http.post(
+            f"{self._api_base}/api/pds/putRecord",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            json={"collection": collection, "rkey": rkey, "record": record},
+        )
+        if resp.status_code != 200:
+            raise PdsError(
+                f"console proxy putRecord {collection} returned {resp.status_code}: {resp.text}"
+            )
+        try:
+            body = resp.json()
+            return PublishedRecord(uri=body["uri"], cid=body["cid"])
+        except (KeyError, ValueError) as e:
+            raise PdsError(
+                f"console proxy putRecord {collection} returned 200 but malformed: {e}"
+            ) from e
+
+    async def delete_record(self, collection: str, rkey: str) -> None:
+        """Delete a record via the console's deleteRecord proxy. Used to trim
+        duplicate provider records found by
+        `provider_record.publish_provider_record`. An already-absent record
+        (the proxy's `alreadyGone` case) is treated as success, same as
+        `provider/src/pds.rs::delete_record`."""
+        resp = await self._http.post(
+            f"{self._api_base}/api/pds/deleteRecord",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            json={"collection": collection, "rkey": rkey},
+        )
+        if resp.status_code != 200:
+            raise PdsError(
+                f"console proxy deleteRecord {collection} returned {resp.status_code}: {resp.text}"
+            )
+
     async def resolve_pds_endpoint(self) -> str:
         """Resolve this agent's own DID to its PDS's HTTP base URL: the PLC
         directory for `did:plc`, the well-known doc for `did:web`. Both are

@@ -439,5 +439,219 @@ async def test_run_disconnects_when_owner_stops_mid_connection(
             await run_task
 
 
+@pytest.mark.asyncio
+async def test_control_changed_triggers_immediate_active_recheck() -> None:
+    """A `control_changed` nudge must disconnect promptly even though
+    ACTIVE_POLL_INTERVAL_SECS is left at its (long, un-monkeypatched) real
+    default -- the only way this test's short timeout can pass is via the
+    fast path (`_recheck_active`), not the periodic poll."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        calls += 1
+        active = calls <= 1  # active at register time, stopped by the time the nudge lands
+        return httpx.Response(
+            200,
+            json={
+                "records": [
+                    {
+                        "uri": "at://did:plc:abc/dev.cocore.compute.provider/m1",
+                        "cid": "bafy",
+                        "value": {"active": active},
+                    }
+                ]
+            },
+        )
+
+    pds = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+
+    disconnected = asyncio.Event()
+
+    async def fake_advisor(ws: websockets.ServerConnection) -> None:
+        first = json.loads(await ws.recv())
+        assert first["type"] == "register"
+        await ws.send(json.dumps({"type": "control_changed", "reason": "owner edit"}))
+        try:
+            await ws.wait_closed()
+        finally:
+            disconnected.set()
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = _config(f"ws://localhost:{port}/v1/agent")
+        conn = AdvisorConnection(
+            config=config,
+            identity=_identity(),
+            provider_did="did:plc:abc",
+            machine_id="m1",
+            pds=pds,
+            mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+        )
+
+        async def on_request(req: object, send: object) -> None:
+            return None
+
+        run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+        # Well under the real 30s ACTIVE_POLL_INTERVAL_SECS -- only the
+        # control_changed fast path can make this land in time.
+        await asyncio.wait_for(disconnected.wait(), timeout=5)
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+
+class _FakeLMStudio:
+    def __init__(self, *, models: list[str] | None = None, error: Exception | None = None) -> None:
+        self._models = models
+        self._error = error
+
+    async def list_models(self) -> list[str]:
+        if self._error is not None:
+            raise self._error
+        return self._models or []
+
+
+@pytest.mark.asyncio
+async def test_recover_request_replies_recovered_when_lmstudio_reachable() -> None:
+    recover_result_frames: list[dict[str, object]] = []
+    got_recover_result = asyncio.Event()
+
+    async def fake_advisor(ws: websockets.ServerConnection) -> None:
+        first = json.loads(await ws.recv())
+        assert first["type"] == "register"
+        await ws.send(json.dumps({"type": "recover_request", "reason": "job-idle-timeout"}))
+        while not got_recover_result.is_set():
+            frame = json.loads(await ws.recv())
+            if frame["type"] == "recover_result":
+                recover_result_frames.append(frame)
+                got_recover_result.set()
+        await ws.wait_closed()
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = _config(f"ws://localhost:{port}/v1/agent")
+        conn = AdvisorConnection(
+            config=config,
+            identity=_identity(),
+            provider_did="did:plc:abc",
+            machine_id="m1",
+            pds=_never_stopped_pds(),
+            mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+            lmstudio=_FakeLMStudio(models=["llama-3.1-8b"]),  # type: ignore[arg-type]
+        )
+
+        async def on_request(req: object, send: object) -> None:
+            return None
+
+        run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+        await asyncio.wait_for(got_recover_result.wait(), timeout=5)
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    assert recover_result_frames == [{"type": "recover_result", "recovered": True}]
+
+
+@pytest.mark.asyncio
+async def test_recover_request_replies_not_recovered_when_lmstudio_unreachable() -> None:
+    from cocore_provider.lmstudio import LMStudioError
+
+    recover_result_frames: list[dict[str, object]] = []
+    got_recover_result = asyncio.Event()
+
+    async def fake_advisor(ws: websockets.ServerConnection) -> None:
+        first = json.loads(await ws.recv())
+        assert first["type"] == "register"
+        await ws.send(json.dumps({"type": "recover_request", "reason": "job-idle-timeout"}))
+        while not got_recover_result.is_set():
+            frame = json.loads(await ws.recv())
+            if frame["type"] == "recover_result":
+                recover_result_frames.append(frame)
+                got_recover_result.set()
+        await ws.wait_closed()
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = _config(f"ws://localhost:{port}/v1/agent")
+        conn = AdvisorConnection(
+            config=config,
+            identity=_identity(),
+            provider_did="did:plc:abc",
+            machine_id="m1",
+            pds=_never_stopped_pds(),
+            mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+            lmstudio=_FakeLMStudio(error=LMStudioError("connection refused")),  # type: ignore[arg-type]
+        )
+
+        async def on_request(req: object, send: object) -> None:
+            return None
+
+        run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+        await asyncio.wait_for(got_recover_result.wait(), timeout=5)
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    assert len(recover_result_frames) == 1
+    assert recover_result_frames[0]["recovered"] is False
+    assert "connection refused" in str(recover_result_frames[0]["detail"])
+
+
+@pytest.mark.asyncio
+async def test_recover_request_ignored_when_no_lmstudio_configured() -> None:
+    got_extra_frame = asyncio.Event()
+
+    async def fake_advisor(ws: websockets.ServerConnection) -> None:
+        first = json.loads(await ws.recv())
+        assert first["type"] == "register"
+        await ws.send(json.dumps({"type": "recover_request", "reason": "job-idle-timeout"}))
+        try:
+            async with asyncio.timeout(0.3):
+                await ws.recv()
+            got_extra_frame.set()
+        except TimeoutError:
+            pass
+        await ws.wait_closed()
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = _config(f"ws://localhost:{port}/v1/agent")
+        conn = AdvisorConnection(
+            config=config,
+            identity=_identity(),
+            provider_did="did:plc:abc",
+            machine_id="m1",
+            pds=_never_stopped_pds(),
+            mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+        )
+
+        async def on_request(req: object, send: object) -> None:
+            return None
+
+        run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+        await asyncio.sleep(0.5)
+        assert not got_extra_frame.is_set()
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+
 async def _async_none() -> None:
     return None

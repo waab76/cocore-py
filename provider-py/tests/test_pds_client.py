@@ -386,3 +386,82 @@ async def test_get_provider_active_read_error_returns_none() -> None:
         did="did:plc:abc",
     )
     assert await client.get_provider_active("r1") is None
+
+
+@pytest.mark.asyncio
+async def test_put_record_success() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/pds/putRecord"
+        assert request.headers["authorization"] == "Bearer key123"
+        body = json.loads(request.content)
+        assert body == {
+            "collection": "dev.cocore.compute.provider",
+            "rkey": "r1",
+            "record": {"machineLabel": "m"},
+        }
+        return httpx.Response(
+            200, json={"uri": "at://did:plc:abc/dev.cocore.compute.provider/r1", "cid": "c1"}
+        )
+
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+    published = await client.put_record("dev.cocore.compute.provider", "r1", {"machineLabel": "m"})
+    assert published.uri == "at://did:plc:abc/dev.cocore.compute.provider/r1"
+    assert published.cid == "c1"
+
+
+@pytest.mark.asyncio
+async def test_put_record_failure_raises_pds_error() -> None:
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(lambda r: httpx.Response(500, text="boom"))),
+        did="did:plc:abc",
+    )
+    with pytest.raises(PdsError, match="500"):
+        await client.put_record("dev.cocore.compute.provider", "r1", {})
+
+
+@pytest.mark.asyncio
+async def test_put_record_malformed_response_raises_pds_error() -> None:
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(lambda r: httpx.Response(200, json={"uri": "x"}))),
+        did="did:plc:abc",
+    )
+    with pytest.raises(PdsError, match="malformed"):
+        await client.put_record("dev.cocore.compute.provider", "r1", {})
+
+
+@pytest.mark.asyncio
+async def test_delete_record_success() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/pds/deleteRecord"
+        body = json.loads(request.content)
+        assert body == {"collection": "dev.cocore.compute.provider", "rkey": "r1"}
+        return httpx.Response(200, json={"uri": "at://did:plc:abc/dev.cocore.compute.provider/r1"})
+
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+    await client.delete_record("dev.cocore.compute.provider", "r1")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_delete_record_failure_raises_pds_error() -> None:
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(lambda r: httpx.Response(500, text="boom"))),
+        did="did:plc:abc",
+    )
+    with pytest.raises(PdsError, match="500"):
+        await client.delete_record("dev.cocore.compute.provider", "r1")

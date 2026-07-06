@@ -26,7 +26,7 @@ from cocore_provider.lmstudio import LMStudioClient
 from cocore_provider.logging_setup import configure_logging
 from cocore_provider.pds_client import PdsClient
 from cocore_provider.protocol import InferenceRequestFrame
-from cocore_provider.provider_record import build_provider_record
+from cocore_provider.provider_record import build_provider_record, publish_provider_record
 from cocore_provider.session import SessionContext, run_session
 from cocore_provider.ws_client import AdvisorConnection
 
@@ -89,7 +89,9 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         attestation_pub_key=identity.signing_public_b64,
         binary_version=__version__,
     )
-    published_provider = await pds.publish("dev.cocore.compute.provider", provider_record)
+    published_provider = await publish_provider_record(
+        pds, identity.signing_public_b64, provider_record
+    )
     logger.info("published provider record %s", published_provider.uri)
 
     ctx = SessionContext(
@@ -122,6 +124,7 @@ async def serve(config: AgentConfig, *, provider_did: str) -> None:
         attestation_uri=published_attestation.uri,
         supported_models=supported_models,
         ram_gb=ram_gb,
+        lmstudio=lmstudio,
     )
     logger.info("connecting to advisor at %s", config.advisor_url)
     await conn.run(on_inference_request=on_inference_request)

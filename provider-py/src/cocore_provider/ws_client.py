@@ -20,16 +20,21 @@ from cocore_provider.config import (
     AgentConfig,
 )
 from cocore_provider.identity import Identity
+from cocore_provider.lmstudio import LMStudioClient, LMStudioError
 from cocore_provider.pds_client import PdsClient
 from cocore_provider.protocol import (
     InferenceRequestFrame,
     build_heartbeat,
     build_pong,
+    build_recover_result,
     build_register,
     frame_type,
     parse_attestation_challenge,
+    parse_control_changed,
+    parse_health_notice,
     parse_inference_request,
     parse_ping,
+    parse_recover_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,6 +59,7 @@ class AdvisorConnection:
         attestation_uri: str,
         supported_models: list[str] | None = None,
         ram_gb: int = 0,
+        lmstudio: LMStudioClient | None = None,
     ) -> None:
         self._config = config
         self._identity = identity
@@ -64,12 +70,20 @@ class AdvisorConnection:
         self._attestation_uri = attestation_uri
         self._supported_models = supported_models or []
         self._ram_gb = ram_gb
+        # Used only to answer a `recover_request` with a real reachability
+        # check. `None` (test callers, or a caller that doesn't care) means
+        # recover_request is simply ignored rather than answered with a
+        # guessed result.
+        self._lmstudio = lmstudio
         self._busy = False
         # The owner's start/stop switch, last read from our own PDS record.
         # Reported in every heartbeat and re-checked every
-        # ACTIVE_POLL_INTERVAL_SECS by `_active_poll_loop`. Absent/unreadable
-        # == serving (the lexicon default), so this starts True.
+        # ACTIVE_POLL_INTERVAL_SECS by `_active_poll_loop` -- or immediately,
+        # off-cycle, when a `control_changed` nudge sets `_recheck_active`.
+        # Absent/unreadable == serving (the lexicon default), so this starts
+        # True.
         self._active = True
+        self._recheck_active = asyncio.Event()
 
     async def _is_active(self) -> bool:
         active = await self._pds.get_provider_active(self._machine_id)
@@ -166,21 +180,47 @@ class AdvisorConnection:
 
     async def _active_poll_loop(self, ws: ClientConnection) -> None:
         """Re-reads the owner's PDS active switch every
-        ACTIVE_POLL_INTERVAL_SECS -- the fallback path for a missed nudge
-        (provider-py doesn't yet act on a `control_changed` fast-path frame;
-        see provider/src/advisor.rs's dual poll+nudge design). Closing our
-        own end of the socket -- rather than raising some bespoke signal --
-        lets an owner-stop reuse the exact same, already-tested
+        ACTIVE_POLL_INTERVAL_SECS -- or immediately when `_receive_loop` sets
+        `_recheck_active` on a `control_changed` nudge, the fast path mirroring
+        provider/src/advisor.rs's dual poll+nudge design. Closing our own end
+        of the socket -- rather than raising some bespoke signal -- lets an
+        owner-stop reuse the exact same, already-tested
         disconnect/backoff/reconnect path as an ordinary network drop;
         `run()`'s gate at the top of its loop is what actually holds us out
         of the registry afterward instead of immediately reconnecting."""
         while True:
-            await asyncio.sleep(ACTIVE_POLL_INTERVAL_SECS)
+            try:
+                await asyncio.wait_for(
+                    self._recheck_active.wait(), timeout=ACTIVE_POLL_INTERVAL_SECS
+                )
+            except TimeoutError:
+                pass
+            self._recheck_active.clear()
             self._active = await self._is_active()
             if not self._active:
                 logger.info("owner stopped this machine from the console; disconnecting")
                 await ws.close(code=1000, reason="owner-stopped")
                 return
+
+    async def _handle_recover_request(
+        self, send: Callable[[dict[str, object]], Awaitable[None]]
+    ) -> None:
+        """Answer a `recover_request` with a real LMStudio reachability check
+        (there's no supervised engine subprocess to restart here, unlike the
+        Rust agent's bounded-restart self-right). Reporting `recovered: True`
+        lets the advisor clear this machine's unhealthy standing immediately
+        (`connection.ts`'s `recover_result` handler) instead of waiting for
+        the next re-probe sweep."""
+        if self._lmstudio is None:
+            return
+        try:
+            models = await self._lmstudio.list_models()
+            recovered = len(models) > 0
+            detail = None if recovered else "LMStudio reported no loaded models"
+        except LMStudioError as e:
+            recovered = False
+            detail = f"LMStudio unreachable: {e}"
+        await send(build_recover_result(recovered=recovered, detail=detail))
 
     async def _receive_loop(
         self,
@@ -229,6 +269,26 @@ class AdvisorConnection:
                         self._busy = False
 
                 asyncio.create_task(run_job())
+            elif msg_type == "control_changed":
+                control = parse_control_changed(msg)
+                logger.info(
+                    "advisor nudged control_changed (reason=%s); re-checking active switch now",
+                    control.reason,
+                )
+                self._recheck_active.set()
+            elif msg_type == "recover_request":
+                recover = parse_recover_request(msg)
+                logger.info("advisor requested recovery (reason=%s)", recover.reason)
+                asyncio.create_task(self._handle_recover_request(send))
+            elif msg_type == "health_notice":
+                notice = parse_health_notice(msg)
+                if notice.standing == "bad":
+                    logger.warning(
+                        "advisor marked this machine unhealthy: %s",
+                        notice.reason or "(no reason given)",
+                    )
+                else:
+                    logger.info("advisor cleared this machine's unhealthy standing")
             else:
                 logger.debug("ignoring unhandled frame type %r", msg_type)
 

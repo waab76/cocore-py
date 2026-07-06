@@ -12,11 +12,15 @@ from cocore_provider.protocol import (
     build_inference_complete,
     build_inference_keepalive,
     build_pong,
+    build_recover_result,
     build_register,
     frame_type,
     parse_attestation_challenge,
+    parse_control_changed,
+    parse_health_notice,
     parse_inference_request,
     parse_ping,
+    parse_recover_request,
 )
 
 
@@ -229,3 +233,48 @@ def test_parse_inference_request_ciphertext_out_of_range_int_raises() -> None:
 
 def test_parse_ping() -> None:
     assert parse_ping({"type": "ping", "nonce": "n1"}).nonce == "n1"
+
+
+def test_build_recover_result_without_detail() -> None:
+    assert build_recover_result(recovered=True) == {"type": "recover_result", "recovered": True}
+
+
+def test_build_recover_result_with_detail() -> None:
+    frame = build_recover_result(recovered=False, detail="LMStudio unreachable")
+    assert frame == {
+        "type": "recover_result",
+        "recovered": False,
+        "detail": "LMStudio unreachable",
+    }
+
+
+def test_parse_control_changed() -> None:
+    assert parse_control_changed({"type": "control_changed"}).reason is None
+    assert (
+        parse_control_changed({"type": "control_changed", "reason": "owner edit"}).reason
+        == "owner edit"
+    )
+
+
+def test_parse_control_changed_bad_reason_raises() -> None:
+    with pytest.raises(ProtocolError, match="reason"):
+        parse_control_changed({"type": "control_changed", "reason": 5})
+
+
+def test_parse_recover_request() -> None:
+    assert parse_recover_request({"type": "recover_request"}).reason is None
+    assert (
+        parse_recover_request({"type": "recover_request", "reason": "idle-timeout"}).reason
+        == "idle-timeout"
+    )
+
+
+def test_parse_health_notice() -> None:
+    notice = parse_health_notice({"type": "health_notice", "standing": "bad", "reason": "x"})
+    assert notice.standing == "bad"
+    assert notice.reason == "x"
+
+
+def test_parse_health_notice_requires_standing() -> None:
+    with pytest.raises(ProtocolError, match="standing"):
+        parse_health_notice({"type": "health_notice"})

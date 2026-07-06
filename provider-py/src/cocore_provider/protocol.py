@@ -153,6 +153,13 @@ def build_pong(*, nonce: str) -> dict[str, object]:
     return {"type": "pong", "nonce": nonce}
 
 
+def build_recover_result(*, recovered: bool, detail: str | None = None) -> dict[str, object]:
+    frame: dict[str, object] = {"type": "recover_result", "recovered": recovered}
+    if detail is not None:
+        frame["detail"] = detail
+    return frame
+
+
 # --- Inbound (advisor -> provider) ------------------------------------
 
 
@@ -203,3 +210,40 @@ class PingFrame:
 
 def parse_ping(raw: Mapping[str, Any]) -> PingFrame:
     return PingFrame(nonce=_require_str(raw, "nonce"))
+
+
+def _optional_str(raw: Mapping[str, Any], key: str) -> str | None:
+    value = raw.get(key)
+    if value is not None and not isinstance(value, str):
+        raise ProtocolError(f"{key!r} must be a string when present")
+    return value
+
+
+@dataclass
+class ControlChangedFrame:
+    reason: str | None
+
+
+def parse_control_changed(raw: Mapping[str, Any]) -> ControlChangedFrame:
+    return ControlChangedFrame(reason=_optional_str(raw, "reason"))
+
+
+@dataclass
+class RecoverRequestFrame:
+    reason: str | None
+
+
+def parse_recover_request(raw: Mapping[str, Any]) -> RecoverRequestFrame:
+    return RecoverRequestFrame(reason=_optional_str(raw, "reason"))
+
+
+@dataclass
+class HealthNoticeFrame:
+    standing: str
+    reason: str | None
+
+
+def parse_health_notice(raw: Mapping[str, Any]) -> HealthNoticeFrame:
+    return HealthNoticeFrame(
+        standing=_require_str(raw, "standing"), reason=_optional_str(raw, "reason")
+    )
