@@ -167,19 +167,25 @@ public final class SecureEnclaveIdentity {
         guard SecureEnclave.isAvailable else {
             throw EnclaveError.unavailable
         }
-        // 1. The stable case: load the persisted blob from the data-protection
-        //    keychain. Reachable by every process of this signed app.
-        if let blob = try? loadDataRepresentation() {
-            let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob)
+        // 1. Stable case: the blob FILE, read byte-identically by every process
+        //    regardless of launch context. This is the fix for the keychain's
+        //    context-dependent split — a GUI-launched `serve` and a one-shot CLI
+        //    were observed reading DIFFERENT items from the same keychain query,
+        //    so the signing key the serve used never matched the one the wizard
+        //    requested MDM attestation for, and Secure Mode could never bind. The
+        //    blob is device-bound (a reference the SEP resolves; the private key
+        //    never leaves the enclave), so a plain 0600 file is safe — same as the
+        //    existing software identity.pem.
+        if let blob = loadBlobFile(tag: kKeychainTag),
+           let key = try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob) {
             return SecureEnclaveIdentity(key)
         }
-        // 2. Pick the blob to persist: migrate an existing key from the legacy
-        //    file-based login keychain if one is readable (so the machine keeps
-        //    its signing key + MDM attestation), else mint a fresh SE key.
+        // 2. Pick a blob to persist: migrate a key from either keychain that a
+        //    prior build stored (so an upgrading machine keeps its key), else mint
+        //    a fresh SE key.
         let candidate: Data
-        if let legacy = try? loadLegacyDataRepresentation(),
-           (try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: legacy)) != nil {
-            candidate = legacy
+        if let migrated = migratedSigningBlob() {
+            candidate = migrated
         } else {
             let access = SecAccessControlCreateWithFlags(
                 nil,
@@ -190,12 +196,23 @@ public final class SecureEnclaveIdentity {
             candidate = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access)
                 .dataRepresentation
         }
-        // 3. Persist — but if a concurrent process stored first, ADOPT the winner
-        //    so every process converges on exactly ONE key (never clobber).
-        let stored = (try? storeIfAbsent(candidate)) ?? false
-        let winner = stored ? candidate : try loadDataRepresentation()
+        // 3. Write the file if absent; if a concurrent process wrote first, ADOPT
+        //    the winner so every process converges on exactly ONE key.
+        let winner = try persistBlobIfAbsent(candidate, tag: kKeychainTag)
         return SecureEnclaveIdentity(
             try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: winner))
+    }
+
+    /// A signing-key blob migrated from either keychain (data-protection first,
+    /// then the legacy login keychain), validated as reconstructible. nil if
+    /// neither is readable in this process context.
+    private static func migratedSigningBlob() -> Data? {
+        for blob in [try? loadDataRepresentation(), try? loadLegacyDataRepresentation()] {
+            if let b = blob, (try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: b)) != nil {
+                return b
+            }
+        }
+        return nil
     }
 
     /// Raw uncompressed P-256 public key bytes: 0x04 || X || Y, sliced
@@ -234,19 +251,16 @@ public final class SecureEnclaveEncKey {
         guard SecureEnclave.isAvailable else {
             throw EnclaveError.unavailable
         }
-        // Same stable-load → migrate → create-and-adopt sequence as the signing
-        // key (see SecureEnclaveIdentity.loadOrCreate). A rotating encryption key
-        // is less visible than the signing one (confidential re-seals per request
-        // against the currently-advertised key), but the fix is identical and
-        // keeps the key stable across restarts.
-        if let blob = try? loadDataRepresentation(service: kEncService, tag: kEncKeychainTag),
+        // File-first, byte-identical across process contexts — same fix as the
+        // signing key (see SecureEnclaveIdentity.loadOrCreate); keychain reads are
+        // migration-only.
+        if let blob = loadBlobFile(tag: kEncKeychainTag),
            let key = try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: blob) {
             return SecureEnclaveEncKey(key)
         }
         let candidate: Data
-        if let legacy = try? loadLegacyDataRepresentation(service: kEncService, tag: kEncKeychainTag),
-           (try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: legacy)) != nil {
-            candidate = legacy
+        if let migrated = migratedEncBlob() {
+            candidate = migrated
         } else {
             let access = SecAccessControlCreateWithFlags(
                 nil,
@@ -257,11 +271,20 @@ public final class SecureEnclaveEncKey {
             candidate = try SecureEnclave.P256.KeyAgreement.PrivateKey(accessControl: access)
                 .dataRepresentation
         }
-        let stored = (try? storeIfAbsent(candidate, service: kEncService, tag: kEncKeychainTag)) ?? false
-        let winner =
-            stored ? candidate : try loadDataRepresentation(service: kEncService, tag: kEncKeychainTag)
+        let winner = try persistBlobIfAbsent(candidate, tag: kEncKeychainTag)
         return SecureEnclaveEncKey(
             try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: winner))
+    }
+
+    private static func migratedEncBlob() -> Data? {
+        let a = try? loadDataRepresentation(service: kEncService, tag: kEncKeychainTag)
+        let b = try? loadLegacyDataRepresentation(service: kEncService, tag: kEncKeychainTag)
+        for blob in [a, b] {
+            if let x = blob, (try? SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: x)) != nil {
+                return x
+            }
+        }
+        return nil
     }
 
     /// 64-byte uncompressed public key (X || Y), matching the signing pubkey shape.
@@ -286,32 +309,63 @@ public enum EnclaveError: Error {
     case keychainLoad(OSStatus)
 }
 
-// MARK: - Keychain helpers
+// MARK: - Blob persistence
+//
+// SE key BLOBS (the enclave-wrapped `dataRepresentation` — a reference the SEP
+// resolves; the private key never leaves the enclave and the blob is useless on
+// any other machine) are persisted as plain 0600 FILES under ~/.cocore, exactly
+// like the existing software `identity.pem`.
+//
+// Why NOT the keychain — the load-bearing lesson from the field:
+//   Both the file-based login keychain AND the data-protection keychain read
+//   INCONSISTENTLY across this app's process contexts. A GUI-launched `serve`
+//   (spawned by the tray) and a one-shot CLI (`agent pubkey`, which backs the
+//   Secure Mode wizard) were observed reading DIFFERENT items from the SAME
+//   keychain query on the same machine — so the signing key `serve` used never
+//   matched the key the wizard requested MDM attestation for, and Secure Mode
+//   could never bind. Deleting items didn't help; the split is structural to how
+//   keychain access-groups resolve per launch context. A plain file is read
+//   byte-identically by every process, which is the whole requirement here.
+//
+// The keychain readers below are retained ONLY as one-time migration sources, so
+// an upgrading machine can adopt a key a prior build stored before writing it to
+// the file. They require the `keychain-access-groups` entitlement (release build
+// only); dev `swift build` binaries simply fall through to minting a fresh key.
 
 private let kSigningService = "cocore.provider.enclave"
 private let kEncService = "cocore.provider.enclave.enc"
 
-// SE key BLOBS (the enclave-wrapped `dataRepresentation` — a reference to the
-// SEP-resident private key, never the key itself) are persisted in the
-// DATA-PROTECTION keychain, keyed by this signed app's keychain-access-group.
-// This is load-bearing for a STABLE signing key across processes:
-//
-//   • The legacy file-based login keychain reads inconsistently across the app's
-//     process contexts — a tray-launched `serve`, a one-shot CLI, or a
-//     login-item start before GUI unlock can get errSecInteractionNotAllowed on
-//     SecItemCopyMatching even though the item exists. Each such miss drove the
-//     `loadOrCreate` CREATE branch, which (with the old destructive save) DELETED
-//     the shared key and stored a fresh one — rotating the signing key out from
-//     under the MDM attestation chain, so Secure Mode could never bind. The
-//     data-protection keychain is reachable by every process of the same signed
-//     app regardless of login session, so the read no longer flakes.
-//   • Writes are ADD-OR-ADOPT, never delete-then-add: a transient reader can
-//     never destroy the shared key. First writer wins; everyone else adopts it.
-//
-// Requires the `keychain-access-groups` entitlement (present on the release
-// build). Ad-hoc `swift build` dev binaries lack it, so these calls fail there
-// and the caller falls back to a software identity — which is the intended,
-// harmless behavior for a dev build (it self-caps at best-effort).
+/// `~/.cocore/<tag>.blob` — the durable, context-independent home for a key blob.
+/// Matches the home resolution the Rust side uses (`$HOME` first) so `serve` and
+/// any CLI resolve the identical path.
+private func blobFileURL(tag: Data) -> URL {
+    let home = ProcessInfo.processInfo.environment["HOME"].map { URL(fileURLWithPath: $0) }
+        ?? FileManager.default.homeDirectoryForCurrentUser
+    let name = (String(data: tag, encoding: .utf8) ?? "enclave-key")
+        .replacingOccurrences(of: ".", with: "-")
+    return home.appendingPathComponent(".cocore").appendingPathComponent("\(name).blob")
+}
+
+private func loadBlobFile(tag: Data) -> Data? {
+    try? Data(contentsOf: blobFileURL(tag: tag))
+}
+
+/// Write the blob only if the file does not already exist (atomic add-if-absent
+/// via `.withoutOverwriting`). If a concurrent process wrote it first, ADOPT the
+/// on-disk content so every process converges on exactly one key — never clobber.
+private func persistBlobIfAbsent(_ data: Data, tag: Data) throws -> Data {
+    let url = blobFileURL(tag: tag)
+    try? FileManager.default.createDirectory(
+        at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    do {
+        try data.write(to: url, options: [.withoutOverwriting])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return data
+    } catch {
+        if let existing = try? Data(contentsOf: url), !existing.isEmpty { return existing }
+        throw error
+    }
+}
 
 private func dataProtectionQuery(service: String, tag: Data) -> [String: Any] {
     [
@@ -321,27 +375,6 @@ private func dataProtectionQuery(service: String, tag: Data) -> [String: Any] {
         kSecAttrAccount as String: "default",
         kSecAttrGeneric as String: tag,
     ]
-}
-
-/// Store `data` only if no item exists yet. On a pre-existing item (another
-/// process won the create race, or we're re-homing a migrated blob) LEAVE it and
-/// return `false` so the caller ADOPTS the existing key instead of clobbering it.
-/// Never deletes — a destructive save is exactly what rotated the key before.
-@discardableResult
-private func storeIfAbsent(
-    _ data: Data,
-    service: String = kSigningService,
-    tag: Data = kKeychainTag
-) throws -> Bool {
-    var attrs = dataProtectionQuery(service: service, tag: tag)
-    attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-    attrs[kSecValueData as String] = data
-    let status = SecItemAdd(attrs as CFDictionary, nil)
-    switch status {
-    case errSecSuccess: return true
-    case errSecDuplicateItem: return false
-    default: throw EnclaveError.keychainStore(status)
-    }
 }
 
 private func loadDataRepresentation(
