@@ -41,3 +41,30 @@ export function getAttestationChain(
   }
   return null;
 }
+
+/** Record the signing key we just requested an MDA attestation for. Read at
+ *  capture time so we only store a chain whose freshness binds THIS key. */
+export function putExpectedAttestationKey(
+  serial: string,
+  pubkeyB64: string,
+  requestedAt: string,
+): void {
+  consoleDb()
+    .prepare(
+      `INSERT INTO mdm_attestation_expected (serial, pubkey, requested_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(serial) DO UPDATE SET
+         pubkey = excluded.pubkey,
+         requested_at = excluded.requested_at`,
+    )
+    .run(serial, pubkeyB64, requestedAt);
+}
+
+/** The signing key most recently requested for this device's attestation, or
+ *  null when none has been recorded (legacy captures — validation is skipped). */
+export function getExpectedAttestationKey(serial: string): string | null {
+  const row = consoleDb()
+    .prepare(`SELECT pubkey FROM mdm_attestation_expected WHERE serial = ?`)
+    .get(serial) as { pubkey: string } | undefined;
+  return row?.pubkey ?? null;
+}
