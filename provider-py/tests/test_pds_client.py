@@ -465,3 +465,88 @@ async def test_delete_record_failure_raises_pds_error() -> None:
     )
     with pytest.raises(PdsError, match="500"):
         await client.delete_record("dev.cocore.compute.provider", "r1")
+
+
+@pytest.mark.asyncio
+async def test_get_provider_desired_models_present() -> None:
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(
+            _plc_and_records_handler(
+                [
+                    {
+                        "uri": "at://did:plc:abc/dev.cocore.compute.provider/r1",
+                        "cid": "c1",
+                        "value": {"desiredModels": ["qwen2.5-coder", "llama-3.1-8b"]},
+                    }
+                ]
+            )
+        ),
+        did="did:plc:abc",
+    )
+    assert await client.get_provider_desired_models("r1") == ["qwen2.5-coder", "llama-3.1-8b"]
+
+
+@pytest.mark.asyncio
+async def test_get_provider_desired_models_absent_returns_none() -> None:
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(
+            _plc_and_records_handler(
+                [
+                    {
+                        "uri": "at://did:plc:abc/dev.cocore.compute.provider/r1",
+                        "cid": "c1",
+                        "value": {},
+                    }
+                ]
+            )
+        ),
+        did="did:plc:abc",
+    )
+    assert await client.get_provider_desired_models("r1") is None
+
+
+@pytest.mark.asyncio
+async def test_get_provider_desired_models_malformed_returns_none() -> None:
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(
+            _plc_and_records_handler(
+                [
+                    {
+                        "uri": "at://did:plc:abc/dev.cocore.compute.provider/r1",
+                        "cid": "c1",
+                        "value": {"desiredModels": [1, 2, 3]},
+                    }
+                ]
+            )
+        ),
+        did="did:plc:abc",
+    )
+    assert await client.get_provider_desired_models("r1") is None
+
+
+@pytest.mark.asyncio
+async def test_get_provider_desired_models_rkey_not_found_returns_none() -> None:
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(_plc_and_records_handler([])),
+        did="did:plc:abc",
+    )
+    assert await client.get_provider_desired_models("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_get_provider_desired_models_read_error_returns_none() -> None:
+    client = PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=_client(httpx.MockTransport(lambda r: httpx.Response(500))),
+        did="did:plc:abc",
+    )
+    assert await client.get_provider_desired_models("r1") is None

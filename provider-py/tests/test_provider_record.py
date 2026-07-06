@@ -10,6 +10,7 @@ from cocore_provider.provider_record import (
     build_engine_fault,
     build_provider_record,
     merge_agent_fields,
+    models_changed,
     patch_provider_fault,
     publish_provider_record,
 )
@@ -443,3 +444,13 @@ async def test_patch_provider_fault_no_matching_record_returns_false() -> None:
     )
     ok = await patch_provider_fault(pds, "apk==", "advisorFault", {"code": "dns-failure"})
     assert ok is False
+
+
+def test_models_changed_ignores_order_and_dupes_but_catches_edits() -> None:
+    assert not models_changed(["x", "y"], ["y", "x"])
+    assert not models_changed(["x", "x", "y"], ["y", "x"])
+    assert not models_changed([], [])
+    assert models_changed(["x"], ["x", "y"])  # added
+    assert models_changed(["x", "y"], ["x"])  # removed
+    assert models_changed(["x"], [])  # cleared
+    assert models_changed([], ["x"])  # newly pinned

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 
 import httpx
 import pytest
@@ -826,6 +827,109 @@ async def test_run_publishes_advisor_fault_after_threshold_consecutive_connect_f
         run_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await run_task
+
+
+def _desired_models_pds(get_desired: Callable[[], list[str] | None]) -> PdsClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "plc.directory":
+            return httpx.Response(
+                200,
+                json={
+                    "service": [{"id": "#atproto_pds", "serviceEndpoint": "https://pds.example"}]
+                },
+            )
+        if request.url.path == "/xrpc/com.atproto.repo.listRecords":
+            desired = get_desired()
+            value: dict[str, object] = {}
+            if desired is not None:
+                value["desiredModels"] = desired
+            return httpx.Response(
+                200,
+                json={
+                    "records": [
+                        {
+                            "uri": "at://did:plc:abc/dev.cocore.compute.provider/m1",
+                            "cid": "c1",
+                            "value": value,
+                        }
+                    ]
+                },
+            )
+        raise AssertionError(f"unexpected call: {request.url}")
+
+    return PdsClient(
+        api_base="https://console.example",
+        api_key="key123",
+        http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        did="did:plc:abc",
+    )
+
+
+def _conn_for_desired_models_test(pds: PdsClient, supported_models: list[str]) -> AdvisorConnection:
+    return AdvisorConnection(
+        config=_config("ws://localhost:1/v1/agent"),
+        identity=_identity(),
+        provider_did="did:plc:abc",
+        machine_id="m1",
+        pds=pds,
+        mint_auth_jwt=lambda: _async_none(),
+        attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+        supported_models=supported_models,
+    )
+
+
+@pytest.mark.asyncio
+async def test_check_desired_models_logs_on_mismatch(caplog: pytest.LogCaptureFixture) -> None:
+    pds = _desired_models_pds(lambda: ["qwen2.5-coder"])
+    conn = _conn_for_desired_models_test(pds, ["llama-3.1-8b"])
+
+    with caplog.at_level("WARNING", logger="cocore_provider.ws_client"):
+        await conn._check_desired_models()
+
+    assert any("desiredModels" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_check_desired_models_no_log_when_matching(caplog: pytest.LogCaptureFixture) -> None:
+    pds = _desired_models_pds(lambda: ["llama-3.1-8b"])
+    conn = _conn_for_desired_models_test(pds, ["llama-3.1-8b"])
+
+    with caplog.at_level("WARNING", logger="cocore_provider.ws_client"):
+        await conn._check_desired_models()
+
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_check_desired_models_no_desired_field_is_noop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pds = _desired_models_pds(lambda: None)
+    conn = _conn_for_desired_models_test(pds, ["llama-3.1-8b"])
+
+    with caplog.at_level("WARNING", logger="cocore_provider.ws_client"):
+        await conn._check_desired_models()
+
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_check_desired_models_logs_once_per_change_not_every_tick(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    current = ["qwen2.5-coder"]
+    pds = _desired_models_pds(lambda: current)
+    conn = _conn_for_desired_models_test(pds, ["llama-3.1-8b"])
+
+    with caplog.at_level("WARNING", logger="cocore_provider.ws_client"):
+        await conn._check_desired_models()
+        await conn._check_desired_models()
+        await conn._check_desired_models()
+        assert len(caplog.records) == 1  # throttled while nothing changes
+
+        current = ["gemma-4-12b"]  # owner edits the pick again
+        await conn._check_desired_models()
+        assert len(caplog.records) == 2
 
 
 async def _async_none() -> None:

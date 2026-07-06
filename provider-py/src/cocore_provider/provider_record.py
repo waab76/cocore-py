@@ -45,6 +45,15 @@ def _rfc3339(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def models_changed(a: list[str], b: list[str]) -> bool:
+    """Order/dupe-insensitive model-set comparison. Mirrors
+    `provider/src/advisor.rs::models_changed`, used there to decide whether
+    an owner's `desiredModels` edit warrants a reload restart; provider-py
+    has nothing to reload (see `ws_client.AdvisorConnection._check_desired_models`),
+    so this only gates a diagnostic log line."""
+    return set(a) != set(b)
+
+
 def build_provider_record(
     *,
     machine_label: str,

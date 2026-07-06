@@ -18,6 +18,17 @@ class PdsError(RuntimeError):
     pass
 
 
+def _record_value_at_rkey(records: list[dict[str, object]], rkey: str) -> dict[str, object] | None:
+    """Find the `value` body of the record in `records` (a `list_records`
+    result) whose rkey matches, or `None` if there's no such record."""
+    for record in records:
+        uri = record.get("uri")
+        if isinstance(uri, str) and uri.rsplit("/", 1)[-1] == rkey:
+            value = record.get("value")
+            return value if isinstance(value, dict) else None
+    return None
+
+
 @dataclass
 class PublishedRecord:
     uri: str
@@ -173,10 +184,25 @@ class PdsClient:
             records = await self.list_records("dev.cocore.compute.provider")
         except PdsError:
             return None
-        for record in records:
-            uri = record.get("uri")
-            if isinstance(uri, str) and uri.rsplit("/", 1)[-1] == rkey:
-                value = record.get("value")
-                active = value.get("active") if isinstance(value, dict) else None
-                return active if isinstance(active, bool) else None
+        value = _record_value_at_rkey(records, rkey)
+        active = value.get("active") if value is not None else None
+        return active if isinstance(active, bool) else None
+
+    async def get_provider_desired_models(self, rkey: str) -> list[str] | None:
+        """Read the owner's `desiredModels` pick off this DID's own
+        `dev.cocore.compute.provider` record at `rkey`. `None` means absent
+        or the read failed -- callers should treat that as "no owner
+        preference to diagnose against", never as an instruction to serve
+        nothing. Diagnostic-only: unlike the Rust agent, provider-py cannot
+        load/unload LMStudio models, so this is read for comparison/logging
+        only (see `ws_client.AdvisorConnection._check_desired_models`), never
+        to change what's actually served."""
+        try:
+            records = await self.list_records("dev.cocore.compute.provider")
+        except PdsError:
+            return None
+        value = _record_value_at_rkey(records, rkey)
+        desired = value.get("desiredModels") if value is not None else None
+        if isinstance(desired, list) and all(isinstance(m, str) for m in desired):
+            return desired
         return None

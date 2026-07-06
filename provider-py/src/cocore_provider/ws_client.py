@@ -39,7 +39,11 @@ from cocore_provider.protocol import (
     parse_ping,
     parse_recover_request,
 )
-from cocore_provider.provider_record import build_advisor_fault, patch_provider_fault
+from cocore_provider.provider_record import (
+    build_advisor_fault,
+    models_changed,
+    patch_provider_fault,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +135,36 @@ class AdvisorConnection:
         # so a successful reconnect only bothers clearing it when there's
         # something to clear.
         self._advisor_fault_published = False
+        # Last `desiredModels` seen from the PDS record, so
+        # `_check_desired_models` logs on a CHANGE (the owner editing their
+        # pick) rather than once per poll tick for as long as it stays
+        # mismatched. `None` means "never read one yet".
+        self._last_desired_models: list[str] | None = None
 
     async def _is_active(self) -> bool:
         active = await self._pds.get_provider_active(self._machine_id)
         return True if active is None else active
+
+    async def _check_desired_models(self) -> None:
+        """Diagnostic-only counterpart to the Rust agent's `desiredModels`
+        reconciliation (`provider/src/advisor.rs`'s `models_changed` check):
+        Rust actually reloads its engines to match the owner's console pick.
+        provider-py has no lever to load/unload a model in LMStudio, so this
+        only logs when the console's pick changes and doesn't match what
+        LMStudio is actually serving -- visibility instead of a silent
+        no-op, not a fix."""
+        desired = await self._pds.get_provider_desired_models(self._machine_id)
+        if desired is None or desired == self._last_desired_models:
+            return
+        self._last_desired_models = desired
+        if models_changed(desired, self._supported_models):
+            logger.warning(
+                "console desiredModels %s does not match what LMStudio is actually "
+                "serving %s -- provider-py cannot load/unload LMStudio models; "
+                "load the requested model(s) in LMStudio manually",
+                desired,
+                self._supported_models,
+            )
 
     async def run(self, *, on_inference_request: OnInferenceRequest) -> None:
         backoff_idx = 0
@@ -308,6 +338,7 @@ class AdvisorConnection:
                 logger.info("owner stopped this machine from the console; disconnecting")
                 await ws.close(code=1000, reason="owner-stopped")
                 return
+            await self._check_desired_models()
 
     async def _handle_recover_request(
         self, send: Callable[[dict[str, object]], Awaitable[None]]
