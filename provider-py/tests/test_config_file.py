@@ -23,6 +23,22 @@ def test_find_config_path_falls_back_to_default() -> None:
     assert path == DEFAULT_CONFIG_PATH
 
 
+def test_find_config_path_default_honors_monkeypatched_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test: the default path used to be pinned to the
+    DEFAULT_CONFIG_PATH module constant, which is computed once at import
+    time -- before any test gets a chance to monkeypatch Path.home. That
+    silently defeated every test's attempt to keep the default-path case
+    out of the real ~/.cocore directory (it would still read/write there
+    even with Path.home patched), until this machine happened to grow a
+    real ~/.cocore/provider-py/config.toml and a supposedly-isolated test
+    started reading the real API key out of it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    path = find_config_path(cli_arg=None, env={})
+    assert path == tmp_path / ".cocore" / "provider-py" / "config.toml"
+
+
 def test_load_config_file_returns_empty_dict_when_missing_and_not_explicit(
     tmp_path: Path,
 ) -> None:

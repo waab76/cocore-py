@@ -105,8 +105,11 @@ by chunk, and — on success — settled with a signed
 `dev.cocore.compute.receipt` record published to your PDS via the console
 proxy. A recoverable LMStudio failure sends one sealed error chunk and a
 zero-token completion (no receipt); a hard decrypt failure drops the
-session silently. The connection reconnects with backoff on disconnect or
-a 70s receive-idle timeout.
+session silently. The connection reconnects with backoff whenever the
+underlying WebSocket actually drops -- including a dead link the
+`websockets` client's own keepalive ping (every 20s, by default) detects
+within about 40s. Long stretches of app-level silence with no job in
+flight are normal and do not by themselves trigger a reconnect.
 
 Pricing is uniform for every model — no per-model catalog in v1 — at
 1,000,000 minor units per MTok in each direction, currency `CC`

@@ -23,7 +23,12 @@ def find_config_path(*, cli_arg: str | None, env: Mapping[str, str]) -> Path:
     env_path = env.get("COCORE_CONFIG_PATH")
     if env_path:
         return Path(env_path)
-    return DEFAULT_CONFIG_PATH
+    # Computed fresh rather than returning the DEFAULT_CONFIG_PATH module
+    # constant above: that constant is fixed at import time, before a test
+    # can monkeypatch Path.home, so returning it here would silently read
+    # the real ~/.cocore even from a test that patched Path.home
+    # specifically to avoid that.
+    return Path.home() / ".cocore" / "provider-py" / "config.toml"
 
 
 def load_config_file(path: Path, *, is_explicit: bool) -> dict[str, Any]:

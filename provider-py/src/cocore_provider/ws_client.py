@@ -15,7 +15,6 @@ from websockets.asyncio.client import ClientConnection
 from cocore_provider.attestation import build_challenge_response
 from cocore_provider.config import (
     HEARTBEAT_INTERVAL_SECS,
-    RECV_IDLE_TIMEOUT_SECS,
     AgentConfig,
 )
 from cocore_provider.identity import Identity
@@ -72,23 +71,35 @@ class AdvisorConnection:
                 # asyncio.TaskGroup.__aexit__ gives an ordinary child-task
                 # error priority over a bare CancelledError: if an external
                 # cancel() on *this* task races with an ordinary failure in
-                # _heartbeat_loop/_receive_loop (ConnectionClosed, the
-                # wait_for idle-timeout, ...), __aexit__ can raise the
-                # child's real exception -- bare, or wrapped in an
+                # _heartbeat_loop/_receive_loop (e.g. ConnectionClosed),
+                # __aexit__ can raise the child's real exception -- bare, or
+                # wrapped in an
                 # ExceptionGroup/BaseExceptionGroup -- instead of surfacing a
                 # plain CancelledError, even though this task's own
-                # cancellation request is still outstanding. See
-                # cpython Lib/asyncio/taskgroups.py:_aexit: TaskGroup always
-                # rebalances (uncancel()) its *own* internal cancel-to-wake
-                # -the-parent call, so Task.cancelling() only remains > 0
-                # here when an external cancellation genuinely has not been
-                # acknowledged yet. Treat that as "stop", not "reconnect".
+                # cancellation request may still be outstanding. See cpython
+                # Lib/asyncio/taskgroups.py:_on_task_done/_aexit: whenever a
+                # child ends with an ordinary exception, TaskGroup
+                # unconditionally calls .cancel() on *this* (parent) task
+                # once, purely to interrupt its internal wait -- and that
+                # call is only ever rebalanced by the `_parent_cancel_requested`
+                # check at the very top of `_aexit`, which runs once,
+                # synchronously, before any child could plausibly have
+                # failed yet. So that internal cancel is never rebalanced on
+                # this path, and Task.cancelling() reads > 0 after *every*
+                # single-child TaskGroup failure -- not just a genuine
+                # external cancellation. Rebalance that one expected internal
+                # cancel ourselves; whatever remains is a real external
+                # cancel() our caller issued, which we treat as "stop", not
+                # "reconnect".
                 current_task = asyncio.current_task()
-                if current_task is not None and current_task.cancelling() > 0:
-                    raise asyncio.CancelledError() from exc
+                if current_task is not None:
+                    current_task.uncancel()
+                    if current_task.cancelling() > 0:
+                        raise asyncio.CancelledError() from exc
                 logger.exception("advisor connection dropped; reconnecting")
             delay = RECONNECT_BACKOFFS[min(backoff_idx, len(RECONNECT_BACKOFFS) - 1)]
             backoff_idx += 1
+            logger.info("reconnecting to advisor in %.0fs", delay)
             await asyncio.sleep(delay)
 
     async def _run_once(self, on_inference_request: OnInferenceRequest) -> None:
@@ -108,6 +119,7 @@ class AdvisorConnection:
                 auth_jwt=auth_jwt,
             )
             await ws.send(_dumps(register))
+            logger.info("registered with advisor at %s", self._config.advisor_url)
 
             async def send(frame: dict[str, object]) -> None:
                 await ws.send(_dumps(frame))
@@ -119,6 +131,7 @@ class AdvisorConnection:
     async def _heartbeat_loop(self, send: Callable[[dict[str, object]], Awaitable[None]]) -> None:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL_SECS)
+            logger.debug("sending heartbeat (busy=%s)", self._busy)
             await send(
                 build_heartbeat(load=1.0 if self._busy else 0.0, queue_depth=int(self._busy))
             )
@@ -130,11 +143,21 @@ class AdvisorConnection:
         on_inference_request: OnInferenceRequest,
     ) -> None:
         while True:
-            raw = await asyncio.wait_for(ws.recv(), timeout=RECV_IDLE_TIMEOUT_SECS)
+            # No app-level idle timeout here: `websockets.connect()`'s default
+            # ping_interval=20/ping_timeout=20 already probes the actual
+            # connection and raises ConnectionClosedError within ~40s if the
+            # link is genuinely dead (handled below via the ordinary
+            # reconnect-on-Exception path). The advisor otherwise stays quiet
+            # for extended periods with no job in flight (its own WS-level
+            # keepalive ping isn't visible here -- `recv()` only yields data
+            # frames, not control frames -- but it doesn't need to be: the
+            # client's own keepalive already proves the link is alive).
+            raw = await ws.recv()
             msg: dict[str, Any] = _loads(raw)
             msg_type = frame_type(msg)
 
             if msg_type == "attestation_challenge":
+                logger.debug("responding to attestation_challenge")
                 challenge = parse_attestation_challenge(msg)
                 response = build_challenge_response(self._identity, challenge)
                 await send(
@@ -148,6 +171,9 @@ class AdvisorConnection:
                     logger.warning("dropping inference_request while a job is already in flight")
                     continue
                 req = parse_inference_request(msg)
+                logger.info(
+                    "dispatching inference_request session=%s model=%s", req.session_id, req.model
+                )
                 self._busy = True
 
                 async def run_job(req: InferenceRequestFrame = req) -> None:

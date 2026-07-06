@@ -9,6 +9,7 @@ import websockets
 from cryptography.hazmat.primitives.asymmetric import ec
 from nacl.public import PrivateKey
 
+import cocore_provider.ws_client as ws_client_module
 from cocore_provider.config import AgentConfig
 from cocore_provider.identity import Identity
 from cocore_provider.ws_client import AdvisorConnection
@@ -196,6 +197,79 @@ async def test_run_propagates_cancellation_when_connection_drop_races_with_cance
 
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(run_task, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_run_reconnects_after_ordinary_failure_without_external_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test for a false positive in the external-cancel check added
+    by 611e416: `asyncio.TaskGroup` unconditionally issues one `.cancel()`
+    against its parent task to interrupt the wait whenever a child task ends
+    with an ordinary (non-cancelled) exception -- e.g. `_receive_loop`
+    getting an ordinary `ConnectionClosedError` while `_heartbeat_loop` is
+    still asleep -- and, in that path, never rebalances it with `uncancel()`
+    because `_parent_cancel_requested` is only inspected once, synchronously,
+    at the very start of `TaskGroup._aexit` (before any child could
+    plausibly have failed). So `Task.cancelling() > 0` is true after *every*
+    single-child TaskGroup failure, not just genuine external cancellation,
+    and `run()` misread that as "an external cancel is racing this failure,
+    propagate CancelledError and stop" for a perfectly ordinary,
+    reconnect-worthy connection drop -- crashing the whole provider instead
+    of reconnecting.
+
+    No task's `.cancel()` is ever called here by the test itself, so if
+    `run()` still exits instead of looping back into `_run_once`, the bug
+    has regressed.
+    """
+    monkeypatch.setattr(ws_client_module, "HEARTBEAT_INTERVAL_SECS", 10.0)
+
+    connect_count = 0
+    reconnected = asyncio.Event()
+    server_conns: list[websockets.ServerConnection] = []
+
+    async def fake_advisor(ws: websockets.ServerConnection) -> None:
+        nonlocal connect_count
+        first = json.loads(await ws.recv())
+        assert first["type"] == "register"
+        connect_count += 1
+        if connect_count == 1:
+            # Kill the transport synchronously (no clean close handshake) so
+            # _receive_loop's next `ws.recv()` fails with an ordinary
+            # ConnectionClosedError -- the case this test is about -- rather
+            # than the loop just idling.
+            server_conns.append(ws)
+            ws.transport.abort()
+            return
+        reconnected.set()
+        await ws.wait_closed()
+
+    async with websockets.serve(fake_advisor, "localhost", 0) as server:
+        port = server.sockets[0].getsockname()[1]  # type: ignore[union-attr,index]
+        config = _config(f"ws://localhost:{port}/v1/agent")
+        conn = AdvisorConnection(
+            config=config,
+            identity=_identity(),
+            provider_did="did:plc:abc",
+            mint_auth_jwt=lambda: _async_none(),
+            attestation_uri="at://did:plc:abc/dev.cocore.compute.attestation/1",
+        )
+
+        async def on_request(req: object, send: object) -> None:
+            return None
+
+        run_task = asyncio.create_task(conn.run(on_inference_request=on_request))
+        try:
+            # Generous timeout: establishing a fresh loopback connection on
+            # this platform is occasionally slow (~2s) for reasons unrelated
+            # to what this test is checking; the assertion is that it
+            # reconnects at all, not how fast.
+            await asyncio.wait_for(reconnected.wait(), timeout=15)
+            assert not run_task.done()
+        finally:
+            run_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run_task
 
 
 async def _async_none() -> None:
