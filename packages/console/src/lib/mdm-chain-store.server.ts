@@ -68,3 +68,15 @@ export function getExpectedAttestationKey(serial: string): string | null {
     .get(serial) as { pubkey: string } | undefined;
   return row?.pubkey ?? null;
 }
+
+/** The key AND when it was requested — used to make DeviceInformation enqueue
+ *  idempotent (don't pile a second command for the same key onto NanoMDM's FIFO
+ *  queue while the first is still pending). Null when none recorded. */
+export function getExpectedAttestation(
+  serial: string,
+): { pubkey: string; requestedAt: string } | null {
+  const row = consoleDb()
+    .prepare(`SELECT pubkey, requested_at FROM mdm_attestation_expected WHERE serial = ?`)
+    .get(serial) as { pubkey: string; requested_at: string } | undefined;
+  return row ? { pubkey: row.pubkey, requestedAt: row.requested_at } : null;
+}
