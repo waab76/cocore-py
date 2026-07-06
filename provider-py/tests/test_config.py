@@ -99,3 +99,74 @@ def test_empty_string_machine_label_falls_back_to_default() -> None:
     config = load_config(env)
     # Should fall back to socket.gethostname() or platform.node()
     assert config.machine_label != ""
+
+
+def test_config_file_value_wins_over_env() -> None:
+    config = load_config(
+        {
+            "COCORE_API_KEY": "key123",
+            "COCORE_API_BASE": "https://console.example",
+            "COCORE_ADVISOR": "wss://from-env.example/v1/agent",
+        },
+        config_file={"advisor_url": "wss://from-file.example/v1/agent"},
+    )
+    assert config.advisor_url == "wss://from-file.example/v1/agent"
+
+
+def test_config_file_supplies_required_fields_with_no_env() -> None:
+    config = load_config({}, config_file={"api_key": "filekey", "api_base": "https://file.example"})
+    assert config.api_key == "filekey"
+    assert config.api_base == "https://file.example"
+
+
+def test_env_fills_gap_left_by_config_file() -> None:
+    config = load_config(
+        {
+            "COCORE_API_KEY": "key123",
+            "COCORE_API_BASE": "https://console.example",
+            "COCORE_MACHINE_LABEL": "from-env",
+        },
+        config_file={"advisor_url": "wss://from-file.example/v1/agent"},
+    )
+    assert config.advisor_url == "wss://from-file.example/v1/agent"
+    assert config.machine_label == "from-env"
+
+
+def test_empty_string_in_config_file_treated_as_unset() -> None:
+    config = load_config(
+        {
+            "COCORE_API_KEY": "key123",
+            "COCORE_API_BASE": "https://console.example",
+            "COCORE_ADVISOR": "wss://from-env.example/v1/agent",
+        },
+        config_file={"advisor_url": ""},
+    )
+    assert config.advisor_url == "wss://from-env.example/v1/agent"
+
+
+def test_config_file_allow_insecure_advisor_bool() -> None:
+    config = load_config(
+        {"COCORE_API_KEY": "key123", "COCORE_API_BASE": "https://console.example"},
+        config_file={
+            "advisor_url": "ws://localhost:8080/v1/agent",
+            "allow_insecure_advisor": True,
+        },
+    )
+    assert config.advisor_url == "ws://localhost:8080/v1/agent"
+
+
+def test_config_file_wrong_type_falls_through_to_env() -> None:
+    config = load_config(
+        {
+            "COCORE_API_KEY": "key123",
+            "COCORE_API_BASE": "https://console.example",
+            "COCORE_MACHINE_LABEL": "from-env",
+        },
+        config_file={"machine_label": 12345},  # wrong type: int, not str
+    )
+    assert config.machine_label == "from-env"
+
+
+def test_no_config_file_argument_still_works() -> None:
+    config = load_config({"COCORE_API_KEY": "key123", "COCORE_API_BASE": "https://console.example"})
+    assert config.api_key == "key123"
